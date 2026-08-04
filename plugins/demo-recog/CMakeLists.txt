@@ -80,4 +80,10 @@ if(BUILD_DEMORECOG_TESTS)
 		${APR_LIBRARIES})
 	set_target_properties(test_funasr_ws_transport PROPERTIES FOLDER "tests")
 	add_test(NAME demorecog_funasr_ws_transport COMMAND test_funasr_ws_transport)
+
+	add_executable(test_funasr_control
+		tests/test_funasr_control.c
+		src/funasr_control.c)
+	set_target_properties(test_funasr_control PROPERTIES FOLDER "tests")
+	add_test(NAME demorecog_funasr_control COMMAND test_funasr_control)
 endif()
