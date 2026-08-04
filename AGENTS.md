@@ -293,6 +293,20 @@ rtk cmake -S . -B /tmp/tte-mrcp-cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
 代码、配置或目录变更的验收记录包含 codebase-memory-mcp `index_repository` 结果、`search_graph` 的 canonical 节点和关键调用链，以及各命令的结果和未通过原因。
 
+### 5.4 Issue → 分支 → PR 交付流程（强制）
+
+所有需要提交到远程仓库的代码、配置、测试和工程文档变更，必须严格遵循以下流程：
+
+1. **Issue**：先有可追踪的 Issue 或任务编号；没有编号时先创建或获取 Issue，不得直接以临时分支替代需求记录。
+2. **分支**：从最新 `main` 创建专用分支，命名为 `<type>/issue-<number>-<short-slug>`，例如 `fix/issue-943-terminal-cleanup`、`docs/issue-120-root-layout`。禁止在 `main`、`master` 或其他默认保护分支上提交变更。
+3. **提交**：只暂存当前 Issue 范围内的文件；提交信息使用 Conventional Commits，并在提交正文或 footer 中关联 Issue。
+4. **验证**：提交前运行与变更范围匹配的验证门禁，并检查 `rtk git diff --check`、暂存区内容和敏感文件。
+5. **推送分支**：只能推送 Issue 分支，例如 `rtk git push -u origin <issue-branch>`；严禁执行 `git push origin main`、`git push origin master` 或向默认分支直接推送。
+6. **PR**：从 Issue 分支创建 PR，目标为 `main`，PR 必须包含变更范围、验证结果、已知阻断和 Issue 关联（例如 `Closes #123`）。代码通过审核和保护规则后，才能由合并流程进入 `main`。
+7. **清理**：PR 合并并确认远程 `main` 包含目标提交后，才删除本地和远程 Issue 分支；未合并分支不得清理。
+
+该流程不因“改动很小”“只改文档”“需要尽快发布”或“用户要求 push all”而豁免。紧急修复也必须使用 Issue 分支和 PR；本项目不允许直接 push `main`/`master`。如果缺少 Issue 编号、目标分支、远程权限或 PR 审核条件，停止发布并报告阻断，不得自行绕过。
+
 ## 6. 测试与证据门禁
 
 ### 最低门禁
