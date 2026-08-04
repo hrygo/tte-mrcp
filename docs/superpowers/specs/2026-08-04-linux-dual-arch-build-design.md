@@ -41,7 +41,7 @@
 作业内步骤按以下顺序执行：
 
 1. 在原生 Ubuntu runner 检出源码，并确认 Docker 可用。
-2. 用 `docker run` 将工作区挂载到 ABI 基线镜像内，配置固定、可用的系统依赖来源并安装编译工具、APR、APR-util、OpenSSL、`pkg-config`；从 `freeswitch/sofia-sip` 的固定 `v1.13.17` tag 构建 Sofia-SIP，并断言其提交为 `6198851a610b7889c17e2d98fb84617bc1dd7aec`。Sofia-SIP 安装到 `/opt/tte-mrcp`，使其 RPATH 与最终部署路径一致；RHEL 7 条目不得升级 GCC/G++。
+2. 用 `docker run` 将工作区挂载到 ABI 基线镜像内，配置固定、可用的系统依赖来源并安装编译工具、APR、APR-util、OpenSSL、`pkg-config`；随后执行项目的 `./bootstrap`，使生成的 Autotools 输入匹配容器中的 Automake 版本，避免已提交 `Makefile.in` 的版本化 Automake 引用被 Git 检出时间戳触发。从 `freeswitch/sofia-sip` 的固定 `v1.13.17` tag 构建 Sofia-SIP，并断言其提交为 `6198851a610b7889c17e2d98fb84617bc1dd7aec`。Sofia-SIP 安装到 `/opt/tte-mrcp`，使其 RPATH 与最终部署路径一致；RHEL 7 条目不得升级 GCC/G++。
 3. 输出并断言编译器版本；x86_64 必须匹配 GCC/G++ 4.8.5，aarch64 记录实际编译器版本。
 4. 在 Sofia-SIP 构建完成后切回工作区；在干净构建目录执行 `./configure --prefix=/opt/tte-mrcp`、`make` 和 `make install DESTDIR="$GITHUB_WORKSPACE/package-root"`；aarch64 条目额外传入 `--build=aarch64-unknown-linux-gnu`，以绕开项目内 2009 年版 `config.guess` 对该架构的识别缺口。Sofia-SIP 通过受控安装前缀或 `pkg-config` 提供给 `configure`。
 5. 检查安装树中四个可执行文件、共享库和插件；用 `file` 验证 ELF 架构，用 `readelf --version-info` 验证所有打包 ELF 文件不引用高于矩阵基线的 `GLIBC_*` 符号。

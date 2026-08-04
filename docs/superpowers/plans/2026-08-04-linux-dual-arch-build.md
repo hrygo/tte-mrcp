@@ -83,6 +83,11 @@ git clone --depth 1 --branch v1.13.17 https://github.com/freeswitch/sofia-sip.gi
 test "$(cd /tmp/sofia-sip && git rev-parse HEAD)" = 6198851a610b7889c17e2d98fb84617bc1dd7aec
 cd /tmp/sofia-sip && ./bootstrap.sh && ./configure --prefix=/opt/tte-mrcp && make && make install
 export PKG_CONFIG_PATH=/opt/tte-mrcp/lib/pkgconfig
+
+# Regenerate the project's tracked Autotools outputs with the container's
+# installed Automake before configuring the out-of-tree build.
+cd "$GITHUB_WORKSPACE"
+./bootstrap
 ```
 
 - [x] **Step 3: Assert the compiler and configure the installation staging tree**
