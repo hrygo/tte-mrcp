@@ -14,5 +14,25 @@
     <ClCompile Include="src\tts_websocket_engine.c">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="src\tts_websocket_pcm.c">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\tts_websocket_lifecycle.c">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\tts_websocket_ws.c">
+      <Filter>src</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\tts_websocket_pcm.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\tts_websocket_lifecycle.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\tts_websocket_ws.h">
+      <Filter>src</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
