@@ -90,6 +90,13 @@ jobs:
             esac
           }
 
+          refresh_autotools_inputs() {
+            cd "$GITHUB_WORKSPACE"
+            ./bootstrap
+            automake --version
+            autoconf --version
+          }
+
           install_sofia_sip() {
             local version=1.13.17
             local commit=6198851a610b7889c17e2d98fb84617bc1dd7aec
@@ -157,6 +164,7 @@ jobs:
           }
 
           install_dependencies
+          refresh_autotools_inputs
           install_sofia_sip
           cd "$GITHUB_WORKSPACE"
           gcc --version
