@@ -521,9 +521,6 @@ static apr_size_t tts_websocket_stream_read_audio(tts_websocket_channel_t *synth
 	/* 诊断：累计从环形缓冲区读出的字节数（仅 MPF reader 线程更新） */
 	synth_channel->stream_ring_bytes_read += to_read;
 
-	/* 每次读取后无条件通知写入线程有空间了 */
-	apr_thread_cond_signal(synth_channel->stream_buffer_cond);
-
 	/* ========== 修复：在 mutex 内部判断 EOF，消除 TOCTOU 竞态 ==========
 	 * 之前的实现在释放 mutex 后检查 stream_complete（无锁），
 	 * 而 writer 线程也在 mutex 之外设置 stream_complete=1（第1013行）。
@@ -543,6 +540,10 @@ static apr_size_t tts_websocket_stream_read_audio(tts_websocket_channel_t *synth
 		apr_size_t remaining = (synth_channel->stream_write_pos + buffer_size
 			- synth_channel->stream_read_pos) % buffer_size;
 		*eof = (remaining == 0);
+	}
+
+	if(synth_channel->stream_buffer_cond) {
+		apr_thread_cond_signal(synth_channel->stream_buffer_cond);
 	}
 
 	return to_read;
@@ -1151,7 +1152,6 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Failed to create SPEAK stream pool");
 		return FALSE;
 	}
-	tts_websocket_stream_lifecycle_reopen(&synth_channel->stream_lifecycle);
 	pool = synth_channel->stream_pool;
 
 	/* 初始化流式接收状态 */
@@ -1226,6 +1226,11 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Step 2: Before ring buffer log");
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Step 3: Ring buffer initialized");
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Step 4: After all logs");
+
+	/* MPF read 回调的入口屏障：仅在 ring buffer 与 mutex/cond 全部就绪后才
+	 * 放行回调，避免 setup 窗口内回调看到 NULL buffer/mutex（trylock(NULL)）
+	 * 或落入遗留分支提前触发 finish_begin（过早 SPEAK-COMPLETE + 丢音）。 */
+	tts_websocket_stream_lifecycle_reopen(&synth_channel->stream_lifecycle);
 
 	/* 转换编码 */
 	{
@@ -2676,7 +2681,8 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 		}
 		} else if(!completed && synth_channel->stream_buffer &&
 		          synth_channel->stream_buffer_size > 1) {
-			if(apr_thread_mutex_trylock(synth_channel->stream_buffer_mutex) != APR_SUCCESS) {
+			if(!synth_channel->stream_buffer_mutex ||
+			   apr_thread_mutex_trylock(synth_channel->stream_buffer_mutex) != APR_SUCCESS) {
 				/* MPF 回调不得等待 producer。锁竞争时跳过本次回调，
 				 * 不向 RTP 注入一整帧伪静音，避免把合法音频时间轴改写成静音。 */
 				synth_channel->stream_trylock_fail_count++;
