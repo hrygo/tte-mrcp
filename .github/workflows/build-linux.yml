@@ -1,0 +1,217 @@
+name: Build Linux Packages
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: rhel7-x86_64
+            runner: ubuntu-24.04
+            build_image: quay.io/centos/centos:7
+            elf_machine: Advanced Micro Devices X86-64
+            glibc_max: '2.17'
+            require_gcc_485: 'true'
+            artifact_name: tte-mrcp-rhel7-x86_64
+            zip_name: tte-mrcp-rhel7-x86_64.zip
+          - target: kylinv10-aarch64
+            runner: ubuntu-24.04-arm
+            build_image: rockylinux:8
+            elf_machine: AArch64
+            glibc_max: '2.28'
+            require_gcc_485: 'false'
+            artifact_name: tte-mrcp-kylinv10-aarch64
+            zip_name: tte-mrcp-kylinv10-aarch64.zip
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build and package in the target ABI baseline
+        shell: bash
+        env:
+          BUILD_IMAGE: ${{ matrix.build_image }}
+          ELF_MACHINE: ${{ matrix.elf_machine }}
+          GLIBC_MAX: ${{ matrix.glibc_max }}
+          REQUIRE_GCC_485: ${{ matrix.require_gcc_485 }}
+          TARGET: ${{ matrix.target }}
+          ZIP_NAME: ${{ matrix.zip_name }}
+        run: |
+          set -euo pipefail
+          docker version
+          docker run --interactive --rm \
+            --volume "$GITHUB_WORKSPACE:/work" \
+            --workdir /work \
+            --env ELF_MACHINE \
+            --env GITHUB_WORKSPACE=/work \
+            --env GLIBC_MAX \
+            --env REQUIRE_GCC_485 \
+            --env TARGET \
+            --env ZIP_NAME \
+            "$BUILD_IMAGE" \
+            bash -seu <<'CONTAINER_SCRIPT'
+          set -o pipefail
+
+          configure_rhel7_repositories() {
+            sed -i \
+              -e 's|^mirrorlist=|#mirrorlist=|g' \
+              -e 's|^#baseurl=http://mirror.centos.org|baseurl=https://vault.centos.org|g' \
+              /etc/yum.repos.d/CentOS-*.repo
+            yum clean all
+          }
+
+          install_dependencies() {
+            case "$TARGET" in
+              rhel7-x86_64)
+                configure_rhel7_repositories
+                yum -y install apr-devel apr-util-devel binutils file gcc gcc-c++ make \
+                  openssl-devel pkgconfig autoconf automake diffutils git libtool unzip zip
+                ;;
+              kylinv10-aarch64)
+                dnf -y install apr-devel apr-util-devel binutils file gcc gcc-c++ make \
+                  openssl-devel pkgconf-pkg-config autoconf automake diffutils git libtool unzip zip
+                ;;
+              *)
+                echo "Unsupported target: $TARGET" >&2
+                exit 1
+                ;;
+            esac
+          }
+
+          install_sofia_sip() {
+            local version=1.13.17
+            local commit=6198851a610b7889c17e2d98fb84617bc1dd7aec
+            export SOFIA_PREFIX=/opt/tte-mrcp
+
+            git clone --depth 1 --branch "v$version" \
+              https://github.com/freeswitch/sofia-sip.git /tmp/sofia-sip
+            test "$(cd /tmp/sofia-sip && git rev-parse HEAD)" = "$commit"
+            cd /tmp/sofia-sip
+            ./bootstrap.sh
+            ./configure --prefix="$SOFIA_PREFIX"
+            make -j"$(getconf _NPROCESSORS_ONLN)"
+            make install
+            export PKG_CONFIG_PATH="$SOFIA_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+            pkg-config --exists sofia-sip-ua
+            pkg-config --modversion sofia-sip-ua
+          }
+
+          elf_files() {
+            find "$package_dir" -type f -print0 | while IFS= read -r -d '' candidate; do
+              if file "$candidate" | grep -q ELF; then
+                printf '%s\n' "$candidate"
+              fi
+            done
+          }
+
+          audit_elf() {
+            local candidate machine version maximum
+            while IFS= read -r candidate; do
+              machine="$(readelf -h "$candidate" | awk -F: '/Machine:/ {gsub(/^[[:space:]]+/, "", $2); print $2}')"
+              if [ "$machine" != "$ELF_MACHINE" ]; then
+                echo "Unexpected ELF machine for $candidate: $machine" >&2
+                exit 1
+              fi
+              while IFS= read -r version; do
+                [ -n "$version" ] || continue
+                maximum="$(printf '%s\n%s\n' "$version" "$GLIBC_MAX" | sort -V | tail -n 1)"
+                if [ "$maximum" != "$GLIBC_MAX" ]; then
+                  echo "$candidate requires GLIBC_$version, above GLIBC_$GLIBC_MAX" >&2
+                  exit 1
+                fi
+              done < <(readelf --version-info "$candidate" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -Vu || true)
+            done < <(elf_files)
+          }
+
+          bundle_non_system_libraries() {
+            local candidate library real_library
+            : > /tmp/tte-mrcp-libraries
+            while IFS= read -r candidate; do
+              ldd "$candidate" | awk '/=> \// {print $3} /^\// {print $1}' >> /tmp/tte-mrcp-libraries
+            done < <(elf_files)
+            sort -u /tmp/tte-mrcp-libraries | while IFS= read -r library; do
+              [ -n "$library" ] || continue
+              case "$library" in
+                "$package_dir"/lib/*|/lib*/ld-linux*|/usr/lib*/ld-linux*|/lib*/libc.so.*|/usr/lib*/libc.so.*|/lib*/libdl.so.*|/usr/lib*/libdl.so.*|/lib*/libm.so.*|/usr/lib*/libm.so.*|/lib*/libpthread.so.*|/usr/lib*/libpthread.so.*|/lib*/librt.so.*|/usr/lib*/librt.so.*)
+                  continue
+                  ;;
+              esac
+              real_library="$(readlink -f "$library")"
+              cp -a "$real_library" "$package_dir/lib/"
+              if [ "$library" != "$real_library" ]; then
+                ln -sfn "$(basename "$real_library")" "$package_dir/lib/$(basename "$library")"
+              fi
+            done
+          }
+
+          install_dependencies
+          install_sofia_sip
+          cd "$GITHUB_WORKSPACE"
+          gcc --version
+          g++ --version
+          if [ "$REQUIRE_GCC_485" = true ]; then
+            test "$(gcc -dumpfullversion -dumpversion)" = 4.8.5
+            test "$(g++ -dumpfullversion -dumpversion)" = 4.8.5
+          fi
+
+          rm -rf build/ci package-root "$ZIP_NAME"
+          mkdir -p build/ci
+          cd build/ci
+          configure_args=(--prefix=/opt/tte-mrcp --with-sofia-sip="$SOFIA_PREFIX")
+          if [ "$TARGET" = kylinv10-aarch64 ]; then
+            configure_args+=(--build=aarch64-unknown-linux-gnu)
+          fi
+          ../../configure "${configure_args[@]}"
+          make -j"$(getconf _NPROCESSORS_ONLN)"
+          make install DESTDIR="$GITHUB_WORKSPACE/package-root"
+
+          package_dir="$GITHUB_WORKSPACE/package-root/opt/tte-mrcp"
+          test -x "$package_dir/bin/unimrcpserver"
+          test -x "$package_dir/bin/umc"
+          test -x "$package_dir/bin/unimrcpclient"
+          test -x "$package_dir/bin/asrclient"
+          test -d "$package_dir/lib"
+          test -d "$package_dir/plugin"
+          test -d "$package_dir/conf"
+          test -d "$package_dir/data"
+
+          export LD_LIBRARY_PATH="$package_dir/lib:$SOFIA_PREFIX/lib"
+          bundle_non_system_libraries
+          audit_elf
+
+          cd "$GITHUB_WORKSPACE/package-root"
+          zip -r "$GITHUB_WORKSPACE/$ZIP_NAME" opt/tte-mrcp
+          unzip -l "$GITHUB_WORKSPACE/$ZIP_NAME"
+          CONTAINER_SCRIPT
+
+      - name: Publish package summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "${{ matrix.zip_name }}"
+          {
+            echo "## ${{ matrix.target }} package"
+            echo
+            echo "- ZIP: \`${{ matrix.zip_name }}\`"
+            echo "- Artifact: \`${{ matrix.artifact_name }}\`"
+            echo "- Build image: \`${{ matrix.build_image }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.zip_name }}
+          if-no-files-found: error
