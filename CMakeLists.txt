@@ -1,5 +1,6 @@
 cmake_minimum_required (VERSION 2.8)
 project (UniMRCP C)
+enable_testing()
 
 # CMake options
 option (ENABLE_CLIENT_LIB          "Enable UniMRCP client library"                  ON)

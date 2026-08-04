@@ -1,174 +1,246 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include "funasr_audio.h"
+
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
-/* A minimal local implementation of the resample logic (copied/adapted)
-   This file is a unit test harness and does not depend on APR. */
+static int failures = 0;
 
-char* funasr_resample_8k_to_16k(void *pool, const char *in_buf, size_t in_size, size_t *out_size, int channels)
+#define CHECK_TRUE(label, expression) \
+    do { \
+        if (!(expression)) { \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, label); \
+            failures++; \
+        } \
+    } while (0)
+
+#define CHECK_SIZE(label, actual, expected) \
+    do { \
+        apr_size_t actual_value = (actual); \
+        apr_size_t expected_value = (expected); \
+        if (actual_value != expected_value) { \
+            fprintf(stderr, "FAIL %s:%d: %s actual=%lu expected=%lu\n", \
+                    __FILE__, __LINE__, label, \
+                    (unsigned long)actual_value, (unsigned long)expected_value); \
+            failures++; \
+        } \
+    } while (0)
+
+static void check_samples(
+    const char *label,
+    const int16_t *actual,
+    const int16_t *expected,
+    apr_size_t count)
 {
-    if (!in_buf || in_size == 0 || channels <= 0) {
-        *out_size = 0;
-        return NULL;
-    }
+    apr_size_t i;
 
-    const char *data_ptr = in_buf;
-    size_t data_size = in_size;
-    int used_channels = channels;
-
-    if (in_size >= 12 && memcmp(in_buf, "RIFF", 4) == 0 && memcmp(in_buf + 8, "WAVE", 4) == 0) {
-        size_t offset = 12;
-        while (offset + 8 <= in_size) {
-            const char *chunk = in_buf + offset;
-            uint32_t chunk_size = (uint32_t)((unsigned char)chunk[4] | ((unsigned char)chunk[5] << 8) | ((unsigned char)chunk[6] << 16) | ((unsigned char)chunk[7] << 24));
-            if (offset + 8 + chunk_size > in_size) break;
-
-            if (memcmp(chunk, "fmt ", 4) == 0 && chunk_size >= 16) {
-                const unsigned char *fmt = (const unsigned char*)(chunk + 8);
-                uint16_t audio_format = (uint16_t)(fmt[0] | (fmt[1] << 8));
-                uint16_t wav_channels = (uint16_t)(fmt[2] | (fmt[3] << 8));
-                uint16_t bits_per_sample = (uint16_t)(fmt[14] | (fmt[15] << 8));
-                if (audio_format != 1 || bits_per_sample != 16) {
-                    *out_size = 0;
-                    return NULL;
-                }
-                used_channels = (int)wav_channels;
-            } else if (memcmp(chunk, "data", 4) == 0) {
-                data_ptr = chunk + 8;
-                data_size = (size_t)chunk_size;
-                break;
-            }
-
-            offset += 8 + chunk_size;
-            if (chunk_size & 1) offset++; /* pad */
+    for (i = 0; i < count; ++i) {
+        if (actual[i] != expected[i]) {
+            fprintf(stderr,
+                    "FAIL %s sample[%lu] actual=%d expected=%d\n",
+                    label,
+                    (unsigned long)i,
+                    actual[i],
+                    expected[i]);
+            failures++;
         }
     }
-
-    if (data_size == 0) {
-        *out_size = 0;
-        return NULL;
-    }
-
-    const int16_t *in_samples = (const int16_t*)data_ptr;
-    size_t bytes_per_sample = sizeof(int16_t);
-    size_t frame_samples = data_size / (bytes_per_sample * used_channels);
-    size_t out_frame_samples = frame_samples * 2;
-    size_t total_out_samples = out_frame_samples * used_channels;
-    size_t buf_size = total_out_samples * bytes_per_sample;
-
-    char *out = (char*)malloc(buf_size);
-    if (!out) {
-        *out_size = 0;
-        return NULL;
-    }
-    int16_t *out_samples = (int16_t*)out;
-
-    for (size_t n = 0; n < frame_samples; n++) {
-        for (int ch = 0; ch < used_channels; ch++) {
-            size_t in_idx = n * used_channels + ch;
-            size_t out_idx1 = (n * 2) * used_channels + ch;
-            size_t out_idx2 = (n * 2 + 1) * used_channels + ch;
-            int16_t s = in_samples[in_idx];
-            int16_t s_next = s;
-            if (n + 1 < frame_samples) {
-                s_next = in_samples[(n + 1) * used_channels + ch];
-            }
-            out_samples[out_idx1] = s;
-            out_samples[out_idx2] = (int16_t)(((int)s + (int)s_next) / 2);
-        }
-    }
-
-    *out_size = buf_size;
-    return out;
 }
 
-/* Build a tiny 8kHz mono 16-bit WAV in memory with 4 samples and test resampling */
+static void test_pcm_duration_formulas(void)
+{
+    CHECK_SIZE("mono one-second ring",
+               funasr_pcm_bytes_for_ms(16000, 1, 2, 1000),
+               32000);
+    CHECK_SIZE("stereo one-second ring",
+               funasr_pcm_bytes_for_ms(16000, 2, 2, 1000),
+               64000);
+    CHECK_SIZE("mono 200ms chunk",
+               funasr_pcm_bytes_for_ms(16000, 1, 2, 200),
+               6400);
+    CHECK_SIZE("stereo 200ms chunk",
+               funasr_pcm_bytes_for_ms(16000, 2, 2, 200),
+               12800);
+    CHECK_SIZE("invalid format returns zero",
+               funasr_pcm_bytes_for_ms(16000, 0, 2, 1000),
+               0);
+}
+
+static void test_mono_interpolation_and_continuity(void)
+{
+    const int16_t first_input[] = {1000};
+    const int16_t second_input[] = {3000};
+    const int16_t first_expected[] = {1000, 1000};
+    const int16_t second_expected[] = {2000, 3000};
+    int16_t output[4];
+    apr_size_t output_bytes = 0;
+    funasr_resample_state_t state;
+
+    memset(&state, 0, sizeof(state));
+    CHECK_TRUE("first mono frame resamples",
+               funasr_resample_8k_to_16k_into(
+                   &state,
+                   first_input,
+                   sizeof(first_input),
+                   1,
+                   output,
+                   sizeof(output),
+                   &output_bytes) == TRUE);
+    CHECK_SIZE("first mono frame size", output_bytes, sizeof(first_expected));
+    check_samples("first mono frame", output, first_expected, 2);
+
+    CHECK_TRUE("second mono frame resamples",
+               funasr_resample_8k_to_16k_into(
+                   &state,
+                   second_input,
+                   sizeof(second_input),
+                   1,
+                   output,
+                   sizeof(output),
+                   &output_bytes) == TRUE);
+    CHECK_SIZE("second mono frame size", output_bytes, sizeof(second_expected));
+    check_samples("second mono frame", output, second_expected, 2);
+}
+
+static void test_odd_byte_is_carried(void)
+{
+    const int16_t input[] = {1000, 2000};
+    const int16_t expected[] = {1000, 1500, 2000, 2000};
+    const unsigned char *bytes = (const unsigned char *)input;
+    int16_t output[4];
+    apr_size_t output_bytes = 99;
+    funasr_resample_state_t state;
+
+    memset(&state, 0, sizeof(state));
+    CHECK_TRUE("odd prefix accepted",
+               funasr_resample_8k_to_16k_into(
+                   &state,
+                   bytes,
+                   1,
+                   1,
+                   output,
+                   sizeof(output),
+                   &output_bytes) == TRUE);
+    CHECK_SIZE("odd prefix produces no partial sample", output_bytes, 0);
+
+    CHECK_TRUE("remaining bytes complete samples",
+               funasr_resample_8k_to_16k_into(
+                   &state,
+                   bytes + 1,
+                   sizeof(input) - 1,
+                   1,
+                   output,
+                   sizeof(output),
+                   &output_bytes) == TRUE);
+    CHECK_SIZE("completed mono bytes", output_bytes, sizeof(expected));
+    check_samples("odd byte carry", output, expected, 4);
+}
+
+static void test_split_stereo_frame_preserves_layout(void)
+{
+    const int16_t input[] = {100, -100, 300, -300};
+    const int16_t expected[] = {100, -100, 200, -200, 300, -300, 300, -300};
+    const unsigned char *bytes = (const unsigned char *)input;
+    int16_t output[8];
+    apr_size_t output_bytes = 0;
+    funasr_resample_state_t state;
+
+    memset(&state, 0, sizeof(state));
+    CHECK_TRUE("partial stereo frame accepted",
+               funasr_resample_8k_to_16k_into(
+                   &state,
+                   bytes,
+                   3,
+                   2,
+                   output,
+                   sizeof(output),
+                   &output_bytes) == TRUE);
+    CHECK_SIZE("partial stereo frame is carried", output_bytes, 0);
+
+    CHECK_TRUE("stereo remainder resamples",
+               funasr_resample_8k_to_16k_into(
+                   &state,
+                   bytes + 3,
+                   sizeof(input) - 3,
+                   2,
+                   output,
+                   sizeof(output),
+                   &output_bytes) == TRUE);
+    CHECK_SIZE("stereo output size", output_bytes, sizeof(expected));
+    check_samples("stereo channel layout", output, expected, 8);
+}
+
+static void test_validation_and_capacity_failure_preserve_state(void)
+{
+    const int16_t input[] = {1000, 2000};
+    int16_t output[4];
+    apr_size_t output_bytes = 99;
+    funasr_resample_state_t state;
+    funasr_resample_state_t before;
+
+    memset(&state, 0, sizeof(state));
+    before = state;
+    CHECK_TRUE("zero channels rejected",
+               funasr_resample_8k_to_16k_into(
+                   &state,
+                   input,
+                   sizeof(input),
+                   0,
+                   output,
+                   sizeof(output),
+                   &output_bytes) == FALSE);
+    CHECK_SIZE("zero channels output", output_bytes, 0);
+    CHECK_TRUE("invalid channel does not mutate state",
+               memcmp(&state, &before, sizeof(state)) == 0);
+
+    output_bytes = 99;
+    CHECK_TRUE("three channels rejected",
+               funasr_resample_8k_to_16k_into(
+                   &state,
+                   input,
+                   sizeof(input),
+                   3,
+                   output,
+                   sizeof(output),
+                   &output_bytes) == FALSE);
+    CHECK_SIZE("three channels output", output_bytes, 0);
+
+    output_bytes = 99;
+    before = state;
+    CHECK_TRUE("small output buffer rejected",
+               funasr_resample_8k_to_16k_into(
+                   &state,
+                   input,
+                   sizeof(input),
+                   1,
+                   output,
+                   sizeof(input),
+                   &output_bytes) == FALSE);
+    CHECK_SIZE("small output output", output_bytes, 0);
+    CHECK_TRUE("capacity failure does not mutate state",
+               memcmp(&state, &before, sizeof(state)) == 0);
+
+    CHECK_SIZE("capacity includes a partial mono sample",
+               funasr_resample_output_capacity(1, 1),
+               4);
+    CHECK_SIZE("capacity includes a partial stereo frame",
+               funasr_resample_output_capacity(3, 2),
+               8);
+}
+
 int main(void)
 {
-    /* Prepare 4 samples: 1000, 2000, -1000, -2000 */
-    int16_t samples[4] = {1000, 2000, -1000, -2000};
-    uint16_t num_channels = 1;
-    uint32_t sample_rate = 8000;
-    uint16_t bits_per_sample = 16;
-    uint32_t byte_rate = sample_rate * num_channels * bits_per_sample / 8;
-    uint16_t block_align = num_channels * bits_per_sample / 8;
+    test_pcm_duration_formulas();
+    test_mono_interpolation_and_continuity();
+    test_odd_byte_is_carried();
+    test_split_stereo_frame_preserves_layout();
+    test_validation_and_capacity_failure_preserve_state();
 
-    uint32_t data_bytes = sizeof(samples);
-    uint32_t fmt_chunk_size = 16;
-    uint32_t riff_size = 4 + (8 + fmt_chunk_size) + (8 + data_bytes);
-
-    size_t wav_size = 12 + (8 + fmt_chunk_size) + (8 + data_bytes);
-    unsigned char *wav = (unsigned char*)malloc(wav_size);
-    if (!wav) return 2;
-    unsigned char *p = wav;
-
-    memcpy(p, "RIFF", 4); p += 4;
-    /* RIFF size */ memcpy(p, &riff_size, 4); p += 4;
-    memcpy(p, "WAVE", 4); p += 4;
-
-    /* fmt chunk */ memcpy(p, "fmt ", 4); p += 4;
-    memcpy(p, &fmt_chunk_size, 4); p += 4;
-    uint16_t audio_format = 1;
-    memcpy(p, &audio_format, 2); p += 2;
-    memcpy(p, &num_channels, 2); p += 2;
-    memcpy(p, &sample_rate, 4); p += 4;
-    memcpy(p, &byte_rate, 4); p += 4;
-    memcpy(p, &block_align, 2); p += 2;
-    memcpy(p, &bits_per_sample, 2); p += 2;
-
-    /* data chunk */ memcpy(p, "data", 4); p += 4;
-    memcpy(p, &data_bytes, 4); p += 4;
-    memcpy(p, samples, data_bytes); p += data_bytes;
-
-    /* call resample */
-    size_t out_size = 0;
-    char *out = funasr_resample_8k_to_16k(NULL, (const char*)wav, wav_size, &out_size, 1);
-    if (!out) {
-        printf("FAIL: resample returned NULL\n");
-        free(wav);
+    if (failures != 0) {
+        fprintf(stderr, "%d resample assertion(s) failed\n", failures);
         return 1;
     }
 
-    /* Expect out_size == data_bytes * 2 */
-    if (out_size != data_bytes * 2) {
-        printf("FAIL: unexpected out_size %zu (expected %u)\n", out_size, (unsigned) (data_bytes * 2));
-        free(out);
-        free(wav);
-        return 1;
-    }
-
-    int16_t *out_samples = (int16_t*)out;
-    size_t out_frames = out_size / (sizeof(int16_t) * num_channels);
-    if (out_frames != 8) {
-        printf("FAIL: unexpected out_frames %zu\n", out_frames);
-        free(out);
-        free(wav);
-        return 1;
-    }
-
-    /* Expected sequence: s0, avg(s0,s1), s1, avg(s1,s2), s2, avg(s2,s3), s3, avg(s3,s3) */
-    int16_t expected[8];
-    expected[0] = samples[0];
-    expected[1] = (samples[0] + samples[1]) / 2;
-    expected[2] = samples[1];
-    expected[3] = (samples[1] + samples[2]) / 2;
-    expected[4] = samples[2];
-    expected[5] = (samples[2] + samples[3]) / 2;
-    expected[6] = samples[3];
-    expected[7] = (samples[3] + samples[3]) / 2;
-
-    int ok = 1;
-    for (size_t i = 0; i < 8; i++) {
-        if (out_samples[i] != expected[i]) {
-            printf("FAIL: sample[%zu] = %d (expected %d)\n", i, out_samples[i], expected[i]);
-            ok = 0;
-        }
-    }
-
-    if (ok) printf("PASS\n");
-
-    free(out);
-    free(wav);
-    return ok ? 0 : 1;
+    printf("PASS test_resample\n");
+    return 0;
 }

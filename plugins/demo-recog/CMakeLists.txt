@@ -40,6 +40,7 @@ add_definitions (
 # Include directories
 include_directories (
 	${PROJECT_SOURCE_DIR}/include
+	${PROJECT_SOURCE_DIR}/src
 	${MRCP_ENGINE_INCLUDE_DIRS}
 	${MRCP_INCLUDE_DIRS}
 	${MPF_INCLUDE_DIRS}
@@ -58,8 +59,11 @@ endif (MSVC)
 # -- Unit tests for the plugin (optional) ---------------------------------
 option(BUILD_DEMORECOG_TESTS "Build demorecog tests" ON)
 if(BUILD_DEMORECOG_TESTS)
-	enable_testing()
-	add_executable(test_resample tests/test_resample.c)
+	add_executable(test_resample tests/test_resample.c src/funasr_audio.c)
 	set_target_properties(test_resample PROPERTIES FOLDER "tests")
 	add_test(NAME demorecog_resample COMMAND test_resample)
+
+	add_executable(test_json_unescape tests/test_json_unescape.c src/funasr_json.c)
+	set_target_properties(test_json_unescape PROPERTIES FOLDER "tests")
+	add_test(NAME demorecog_json_unescape COMMAND test_json_unescape)
 endif()
