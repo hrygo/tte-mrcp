@@ -26,7 +26,7 @@
 - Verify: `build/local/`
 - Verify: `.archive/repo-cleanup-20260804/`
 
-- [ ] **Step 1: 确认待归档对象存在**
+- [x] **Step 1: 确认待归档对象存在**
 
 Run:
 
@@ -37,7 +37,7 @@ rtk ls -ld build/local
 
 Expected: 两个路径均存在；如果任一路径不存在，停止并报告实际状态，不创建替代文件。
 
-- [ ] **Step 2: 确认归档目标没有同名冲突**
+- [x] **Step 2: 确认归档目标没有同名冲突**
 
 Run:
 
@@ -54,7 +54,7 @@ Expected: 目标不存在；若已存在，停止并先比较内容，避免覆�
 - Move: `configure~` → `.archive/repo-cleanup-20260804/legacy/root/configure~`
 - Move: `build/local/` → `.archive/repo-cleanup-20260804/generated/build/local/`
 
-- [ ] **Step 1: 创建精确归档父目录**
+- [x] **Step 1: 创建精确归档父目录**
 
 Run:
 
@@ -62,7 +62,7 @@ Run:
 rtk mkdir -p .archive/repo-cleanup-20260804/legacy/root .archive/repo-cleanup-20260804/generated/build
 ```
 
-- [ ] **Step 2: 移动备份文件**
+- [x] **Step 2: 移动备份文件**
 
 Run:
 
@@ -70,7 +70,7 @@ Run:
 rtk mv configure~ .archive/repo-cleanup-20260804/legacy/root/configure~
 ```
 
-- [ ] **Step 3: 移动本机生成目录**
+- [x] **Step 3: 移动本机生成目录**
 
 Run:
 
@@ -86,7 +86,7 @@ Expected: 文件内容和执行权限随移动保留；`build/` 根目录的源�
 - Modify: `.gitignore`
 - Modify: `.archive/repo-cleanup-20260804/归档清单.md`
 
-- [ ] **Step 1: 添加备份文件忽略规则**
+- [x] **Step 1: 添加备份文件忽略规则**
 
 在 `.gitignore` 的生成物/备份规则区域加入：
 
@@ -96,7 +96,7 @@ configure~
 
 不要把 `Makefile.in`、`configure`、`configure.ac` 或 `build/` 加入忽略规则。
 
-- [ ] **Step 2: 追加本次归档记录**
+- [x] **Step 2: 追加本次归档记录**
 
 记录以下两项：
 
@@ -114,7 +114,7 @@ configure~
 **Files:**
 - Verify: `build/`, `tools/`, `shell/`, `tests/`, `README.md`, `AGENTS.md`
 
-- [ ] **Step 1: 检查归档结果和保留边界**
+- [x] **Step 1: 检查归档结果和保留边界**
 
 Run:
 
@@ -128,7 +128,7 @@ rtk ls -l build/Makefile.am build/Makefile.in build/acmacros build/rules build/p
 
 Expected: 前两个活动路径不存在，后两个归档路径存在，`build/` 源码输入仍存在。
 
-- [ ] **Step 2: 扫描旧路径和无意引用**
+- [x] **Step 2: 扫描旧路径和无意引用**
 
 Run:
 
@@ -138,7 +138,7 @@ rtk rg -n -I -g '!.archive/**' 'configure~|build/local' README.md AGENTS.md Make
 
 Expected: 只保留文档中描述本地构建目录的有效说明，不出现指向已归档文件的执行依赖。
 
-- [ ] **Step 3: 运行脚本静态检查**
+- [x] **Step 3: 运行脚本静态检查**
 
 Run:
 
@@ -154,7 +154,7 @@ PY
 
 Expected: all commands exit 0.
 
-- [ ] **Step 4: 确认归档清单覆盖两项移动**
+- [x] **Step 4: 确认归档清单覆盖两项移动**
 
 Run:
 
