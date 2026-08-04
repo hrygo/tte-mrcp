@@ -83,7 +83,7 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "mrcpengine", "libs\mrcp-eng
 		{1C320193-46A6-4B34-9C56-8AB584FC1B56} = {1C320193-46A6-4B34-9C56-8AB584FC1B56}
 	EndProjectSection
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "tts_websocket", "plugins\tts-websocket\tts_websocket.vcproj", "{92BFA534-C419-4EB2-AAA3-510653F38F08}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "demosynth", "plugins\demo-synth\demosynth.vcproj", "{92BFA534-C419-4EB2-AAA3-510653F38F08}"
 	ProjectSection(ProjectDependencies) = postProject
 		{843425BE-9A9A-44F4-A4E3-4B57D6ABD53C} = {843425BE-9A9A-44F4-A4E3-4B57D6ABD53C}
 	EndProjectSection

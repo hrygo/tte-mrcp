@@ -430,7 +430,7 @@ static apt_bool_t mpf_suite_task_msg_process(apt_task_t *task, apt_task_msg_t *m
 /** Create file reader descriptor */
 static mpf_audio_file_descriptor_t* mpf_file_reader_descriptor_create(const mpf_suite_agent_t *agent, const mpf_suite_session_t *session)
 {
-	const char *file_path = apt_datadir_filepath_get(agent->dir_layout,"demo-8kHz.pcm",session->pool);
+	const char *file_path = apt_datadir_filepath_get(agent->dir_layout,"tts_websocket-8kHz.pcm",session->pool);
 	mpf_audio_file_descriptor_t *descriptor = apr_palloc(session->pool,sizeof(mpf_audio_file_descriptor_t));
 	descriptor->mask = FILE_READER;
 	descriptor->read_handle = NULL;
