@@ -1,0 +1,46 @@
+# Local build outputs; Autotools support files under build/ are source inputs.
+/build/local/
+/build/CMakeFiles/
+/build/cmake-build-*/
+/build/config.log
+/build/config.status
+/build/config.nice
+/build/libtool
+/build/*.log
+
+# Local recovery archive (not part of the source distribution)
+/.archive/
+
+# Autotools and Libtool generated files
+Makefile
+config.log
+config.status
+config.nice
+libtool
+*.o
+*.lo
+*.la
+*.lai
+*.a
+*.so
+*.dylib
+*.dSYM/
+**/.deps/
+**/.libs/
+*.dirstamp
+
+# Runtime/deployment outputs
+/bin/*.log
+/plugin/
+/var/
+/stress_results/
+*.py[cod]
+__pycache__/
+.pytest_cache/
+
+# Generated documentation configuration
+/docs/doxygen.conf
+
+# Operating-system metadata
+.DS_Store
+.vscode

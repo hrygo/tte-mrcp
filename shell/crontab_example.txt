@@ -1,0 +1,19 @@
+# Crontab configuration for unimrcp server monitoring
+# Edit crontab: crontab -e
+# View crontab: crontab -l
+
+# ============================================
+# 生产环境配置
+# ============================================
+# Check unimrcpserver status every minute
+# If process is down, it will be auto-started
+* * * * * ${HOME}/shell/check_once.sh >/dev/null 2>&1
+
+# Clean logs older than 7 days, run daily at 2:00 AM
+0 2 * * * ${HOME}/shell/clean_logs.sh >/dev/null 2>&1
+
+# ============================================
+# 本地环境配置（如需要）
+# ============================================
+# 将路径替换为实际的项目路径，例如：
+# * * * * * /path/to/tte-mrcp/shell/check_once.sh >/dev/null 2>&1
