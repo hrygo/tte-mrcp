@@ -28,6 +28,9 @@
  */
 
 #include "mrcp_synth_engine.h"
+#include "tts_websocket_pcm.h"
+#include "tts_websocket_lifecycle.h"
+#include "tts_websocket_ws.h"
 #include "apt_consumer_task.h"
 #include "apt_log.h"
 #include <apr_network_io.h>
@@ -47,6 +50,7 @@
 typedef struct tts_websocket_engine_t tts_websocket_engine_t;
 typedef struct tts_websocket_channel_t tts_websocket_channel_t;
 typedef struct tts_websocket_msg_t tts_websocket_msg_t;
+typedef struct websocket_connection_t websocket_connection_t;
 
 typedef enum {
 	TTS_WEBSOCKET_OUTPUT_IDLE = 0,
@@ -115,6 +119,11 @@ struct tts_websocket_engine_t {
 	apr_uint32_t           rtp_ptime_ms;
 };
 
+struct websocket_connection_t {
+	apr_socket_t *sock;
+	tts_websocket_ws_decoder_t decoder;
+};
+
 /** Declaration of TTS WebSocket channel */
 struct tts_websocket_channel_t {
 	/** Back pointer to engine */
@@ -140,6 +149,12 @@ struct tts_websocket_channel_t {
 	volatile apr_uint32_t  stream_stop_requested;
 	/** 流式接收socket */
 	apr_socket_t          *stream_socket;
+	/** WebSocket 有状态解码上下文（握手 surplus、分片消息状态） */
+	websocket_connection_t *stream_ws;
+	/** 当前 SPEAK 的可销毁内存池 */
+	apr_pool_t             *stream_pool;
+	/** MPF read callback 与 SPEAK 清理之间的生命周期屏障 */
+	tts_websocket_stream_lifecycle_t stream_lifecycle;
 	/** 流式环形缓冲区 */
 	char                  *stream_buffer;
 	/** 环形缓冲区大小（必须是2的幂） */
@@ -250,14 +265,17 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_channel, const char *text, apr_size_t text_size, const char *voice_name);
 static apr_size_t tts_websocket_stream_read_audio(tts_websocket_channel_t *synth_channel, char *buffer, apr_size_t size, apt_bool_t *eof);
 static apt_bool_t tts_websocket_stream_write_audio(tts_websocket_channel_t *synth_channel, const char *data, apr_size_t size);
+static void tts_websocket_stream_pool_destroy(tts_websocket_channel_t *synth_channel);
 static char* json_escape(const char *str, apr_size_t len, apr_pool_t *pool);
 static const char* json_get_type(const char *json, apr_size_t len, char *type_buf, apr_size_t type_buf_size);
 
 /* ========== WebSocket 相关函数声明 ========== */
-static apt_bool_t websocket_handshake(apr_socket_t *sock, const char *host, apr_port_t port, const char *path, apr_pool_t *pool);
+static apt_bool_t websocket_handshake(websocket_connection_t *connection, const char *host, apr_port_t port, const char *path, apr_pool_t *pool);
 static apt_bool_t websocket_send_text(apr_socket_t *sock, const char *text, apr_size_t len, apr_pool_t *pool);
 static apt_bool_t websocket_send_close(apr_socket_t *sock, apr_pool_t *pool);
-static apr_ssize_t websocket_recv_frame(apr_socket_t *sock, char *buffer, apr_size_t buffer_size, apt_bool_t *is_text_frame);
+static apr_ssize_t websocket_recv_message(websocket_connection_t *connection, char *buffer, apr_size_t buffer_size, apt_bool_t *is_text_frame);
+static apr_status_t websocket_socket_read(void *context, char *buffer, apr_size_t *size);
+static apt_bool_t websocket_socket_send_control(void *context, unsigned char opcode, const unsigned char *payload, apr_size_t payload_len);
 static char* base64_encode(const unsigned char *input, apr_size_t len, apr_pool_t *pool);
 static char* generate_websocket_key(apr_pool_t *pool);
 
@@ -445,7 +463,9 @@ static apt_bool_t tts_websocket_stream_write_audio(tts_websocket_channel_t *synt
  * 修复说明：
  * 1. "数据不足等待"的检查和 stream_complete 检查现在统一在 mutex 保护下完成，
  *    消除了之前 tts_websocket_stream_read 中无锁预检与实际读取之间的竞态窗口。
- * 2. 条件变量信号改为每次读取后无条件发送，避免低水位场景下写线程只能靠100ms超时轮询。
+ * 2. 调用方在进入本函数前已经持有 stream_buffer_mutex；本函数不再二次 trylock，
+ *    由调用方在整个“状态检查+读取+推进索引”临界区结束后统一解锁。
+ * 3. 条件变量信号改为每次读取后无条件发送，避免低水位场景下写线程只能靠100ms超时轮询。
  */
 static apr_size_t tts_websocket_stream_read_audio(tts_websocket_channel_t *synth_channel, char *buffer, apr_size_t size, apt_bool_t *eof)
 {
@@ -458,13 +478,6 @@ static apr_size_t tts_websocket_stream_read_audio(tts_websocket_channel_t *synth
 
 	*eof = FALSE;
 
-	/* MPF scheduler 串行服务所有通道，本回调不能等待 producer 或互斥锁。 */
-	if(apr_thread_mutex_trylock(synth_channel->stream_buffer_mutex) != APR_SUCCESS) {
-		/* 诊断：高并发下 writer 持锁时 reader 被迫放弃本帧（调用方发静音） */
-		synth_channel->stream_trylock_fail_count++;
-		return 0;
-	}
-
 	write_pos = synth_channel->stream_write_pos;
 	read_pos = synth_channel->stream_read_pos;
 
@@ -476,7 +489,6 @@ static apr_size_t tts_websocket_stream_read_audio(tts_websocket_channel_t *synth
 		if(synth_channel->stream_complete) {
 			*eof = TRUE;
 		}
-		apr_thread_mutex_unlock(synth_channel->stream_buffer_mutex);
 		return 0;
 	}
 
@@ -485,7 +497,6 @@ static apr_size_t tts_websocket_stream_read_audio(tts_websocket_channel_t *synth
 	if(available < size && !synth_channel->stream_complete) {
 		/* 诊断：缓冲区有数据但不足一帧，保留等待凑整（调用方本帧发静音） */
 		synth_channel->stream_partial_wait_count++;
-		apr_thread_mutex_unlock(synth_channel->stream_buffer_mutex);
 		return 0;
 	}
 	to_read = available < size ? available : size;
@@ -510,9 +521,6 @@ static apr_size_t tts_websocket_stream_read_audio(tts_websocket_channel_t *synth
 	/* 诊断：累计从环形缓冲区读出的字节数（仅 MPF reader 线程更新） */
 	synth_channel->stream_ring_bytes_read += to_read;
 
-	/* 每次读取后无条件通知写入线程有空间了 */
-	apr_thread_cond_signal(synth_channel->stream_buffer_cond);
-
 	/* ========== 修复：在 mutex 内部判断 EOF，消除 TOCTOU 竞态 ==========
 	 * 之前的实现在释放 mutex 后检查 stream_complete（无锁），
 	 * 而 writer 线程也在 mutex 之外设置 stream_complete=1（第1013行）。
@@ -534,8 +542,9 @@ static apr_size_t tts_websocket_stream_read_audio(tts_websocket_channel_t *synth
 		*eof = (remaining == 0);
 	}
 
-	/* 释放锁 */
-	apr_thread_mutex_unlock(synth_channel->stream_buffer_mutex);
+	if(synth_channel->stream_buffer_cond) {
+		apr_thread_cond_signal(synth_channel->stream_buffer_cond);
+	}
 
 	return to_read;
 }
@@ -583,7 +592,8 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 	}
 
 	/* 保存 pool 指针，避免后续访问时出现问题 */
-	pool = synth_channel->channel->pool;
+	pool = synth_channel->stream_pool
+		? synth_channel->stream_pool : synth_channel->channel->pool;
 
 	/* ========== 修复：从堆上分配2MB缓冲区，避免线程栈溢出和帧数据截断 ========== */
 	buffer = (char*)apr_palloc(pool, 2097152);
@@ -635,13 +645,16 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 			break;
 		}
 
-		LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Calling websocket_recv_frame...");
-		len = websocket_recv_frame(sock, buffer, 2097152, &is_text_frame);
-		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] websocket_recv_frame returned: len=%d, is_text_frame=%d", (int)len, is_text_frame);
+		LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Calling websocket_recv_message...");
+		len = websocket_recv_message(synth_channel->stream_ws, buffer, 2097152, &is_text_frame);
+		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] websocket_recv_message returned: len=%d, is_text_frame=%d", (int)len, is_text_frame);
 
 		if(len < 0) {
 			/* 连接关闭或出错 */
 			LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Connection closed or error detected, len=%d, actively closing connection", (int)len);
+			if(!synth_channel->stream_stop_requested) {
+				synth_channel->stream_error = 1;
+			}
 			break;
 		}
 
@@ -867,17 +880,8 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 
 				LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Received binary audio frame: %d bytes", (int)len);
 
-				/* ========== 修复：防御奇数字节长度二进制帧 ==========
-				 * 16-bit PCM 每帧必须为偶数字节。如遇奇数长度（网络异常
-				 * 或服务端偶发bug），截断最后一字节保持16位采样对齐。
-				 * 否则 pcm_accum 中出现奇数字节残留，后续所有采样高低
-				 * 字节全部错乱，产生持续整句的严重杂音。 */
-				if((len & 1) != 0) {
-					LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
-						"[WS] Odd-length binary frame (%d bytes), trimming last byte to preserve 16-bit sample alignment",
-						(int)len);
-					len--;
-				}
+				/* 网络分块边界不等于 PCM 采样边界。保留所有奇数字节，
+				 * 由 pcm_accum 跨帧拼接，禁止在这里截断最后一个字节。 */
 				if(len <= 0) {
 					continue;
 				}
@@ -890,59 +894,39 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 				 * 不再使用启发式字节序检测（该检测在LSB接近0时会误判为big-endian导致偶发噪声）
 				 * 直接按 little-endian 处理 */
 
-				/* 重采样：24kHz -> 8kHz（跨帧累积到3采样对齐后调用原始重采样） */
+				/* 重采样：24kHz -> 8kHz。网络块可在任意字节处分割，
+				 * accumulate 会把未达到 6 字节（3 个 16-bit 采样）的尾部
+				 * 保留到下一块，保证输入字节流不丢失、不重排。 */
 				{
-					/* 将新数据追加到累积缓冲区 */
-					int accum_total = synth_channel->pcm_accum_len + (int)len;
-					char *combined = NULL;
-					int combined_len = 0;
-					const char *process_data = NULL;
-					int process_len = 0;
+					apr_size_t combined_capacity = (apr_size_t)synth_channel->pcm_accum_len + (apr_size_t)len;
+					char *combined = apr_palloc(frame_pool, combined_capacity > 0 ? combined_capacity : 1);
+					apr_size_t aligned_len;
+					size_t carry_len = (size_t)synth_channel->pcm_accum_len;
 
-					if(synth_channel->pcm_accum_len > 0) {
-						/* 有累积数据：合并后处理 */
-						combined = apr_palloc(frame_pool, accum_total);
-						if(combined) {
-							memcpy(combined, synth_channel->pcm_accum, synth_channel->pcm_accum_len);
-							memcpy(combined + synth_channel->pcm_accum_len, buffer, len);
-							process_data = combined;
-							process_len = accum_total;
-						} else {
-							/* apr_palloc 失败：丢弃累积字节（最多4字节=<0.1ms），
-							 * 直接丢弃避免补零flush造成的波形跳变/爆音。 */
-							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
-								"[WS] apr_palloc failed, discarding %d accum bytes (inaudible)",
-								synth_channel->pcm_accum_len);
-							synth_channel->pcm_accum_len = 0;
-							process_data = buffer;
-							process_len = (int)len;
-						}
-					} else {
-						/* 无累积数据：直接处理 */
-						process_data = buffer;
-						process_len = (int)len;
+					if(!combined) {
+						LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+							"[WS] Failed to allocate PCM accumulation buffer, terminating stream without dropping bytes");
+						synth_channel->stream_error = 1;
+						break;
 					}
 
-					/* 只处理3采样(6字节)对齐的部分，剩余0-4字节留到下次 */
-					int aligned_len = process_len - (process_len % 6);
-					int remaining = process_len - aligned_len;
-
-					/* 保存剩余字节 */
-					if(remaining > 0) {
-						memcpy(synth_channel->pcm_accum, process_data + aligned_len, remaining);
-					}
-					synth_channel->pcm_accum_len = remaining;
+					aligned_len = tts_websocket_pcm_accumulate(
+						(unsigned char *)synth_channel->pcm_accum,
+						&carry_len,
+						(const unsigned char *)buffer, (apr_size_t)len,
+						(unsigned char *)combined, combined_capacity, 6);
+					synth_channel->pcm_accum_len = (int)carry_len;
 
 					/* 处理对齐部分 */
 					if(aligned_len >= 6) {
 						apr_size_t resampled_size = 0;
-						char *resampled_data = resample_pcm_to_8k(process_data, aligned_len, &resampled_size, frame_pool);
+						char *resampled_data = resample_pcm_to_8k(combined, aligned_len, &resampled_size, frame_pool);
 						if(!resampled_data) {
 							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Resampling failed, dropping frame");
 							continue;
 						}
-						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Resampled: %d bytes -> %d bytes (accum=%d, remaining=%d)",
-							aligned_len, (int)resampled_size, synth_channel->pcm_accum_len, remaining);
+						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Resampled: %"APR_SIZE_T_FMT" bytes -> %"APR_SIZE_T_FMT" bytes (accum=%d)",
+							aligned_len, resampled_size, synth_channel->pcm_accum_len);
 
 						/* 2. 格式转换：16-bit PCM -> 8-bit μ-law (PCMU) */
 						apr_size_t ulaw_size = 0;
@@ -1061,8 +1045,11 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 		/* 短暂延迟，让关闭帧发送出去 */
 		apr_sleep(10000);  /* 10ms */
 
-		apr_socket_close(sock);
-		synth_channel->stream_socket = NULL;
+			apr_socket_close(sock);
+			synth_channel->stream_socket = NULL;
+			if(synth_channel->stream_ws) {
+				synth_channel->stream_ws->sock = NULL;
+			}
 		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] WebSocket connection closed by stream thread");
 	} else if(sock) {
 		/* cleanup 已抢先关闭 socket，无需重复操作 */
@@ -1090,6 +1077,24 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 	return NULL;
 }
 
+/* The MPF read callback can outlive the WebSocket worker.  The worker join
+ * therefore is not sufficient to make stream_pool safe to destroy: the
+ * callback must first leave its lifecycle section. */
+static void tts_websocket_stream_pool_destroy(tts_websocket_channel_t *synth_channel)
+{
+	if(!synth_channel) {
+		return;
+	}
+	tts_websocket_stream_lifecycle_begin_close(&synth_channel->stream_lifecycle);
+	if(!synth_channel->stream_pool) {
+		return;
+	}
+	tts_websocket_stream_lifecycle_wait(&synth_channel->stream_lifecycle);
+	apr_pool_destroy(synth_channel->stream_pool);
+	synth_channel->stream_pool = NULL;
+	synth_channel->stream_ws = NULL;
+}
+
 /**
  * @brief 启动流式TTS接收（WebSocket模式）
  * @param synth_channel synthesizer channel
@@ -1100,6 +1105,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_channel, const char *text, apr_size_t text_size, const char *voice_name)
 {
 	tts_websocket_engine_t *tts_engine;
+	apr_pool_t *channel_pool;
 	apr_pool_t *pool;
 	apr_socket_t *sock;
 	apr_status_t rv;
@@ -1115,7 +1121,8 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 	}
 
 	tts_engine = synth_channel->tts_engine;
-	pool = synth_channel->channel->pool;
+	channel_pool = synth_channel->channel->pool;
+	pool = channel_pool;
 
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Pointers initialized OK");
 
@@ -1140,6 +1147,12 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 		apr_socket_close(synth_channel->stream_socket);
 		synth_channel->stream_socket = NULL;
 	}
+	tts_websocket_stream_pool_destroy(synth_channel);
+	if(apr_pool_create(&synth_channel->stream_pool, channel_pool) != APR_SUCCESS) {
+		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Failed to create SPEAK stream pool");
+		return FALSE;
+	}
+	pool = synth_channel->stream_pool;
 
 	/* 初始化流式接收状态 */
 	synth_channel->stream_stop_requested = 0;
@@ -1188,7 +1201,7 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Before mutex/cond creation");
 	if(!synth_channel->stream_buffer_mutex) {
 		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Creating mutex...");
-		if(apr_thread_mutex_create(&synth_channel->stream_buffer_mutex, APR_THREAD_MUTEX_DEFAULT, pool) != APR_SUCCESS) {
+		if(apr_thread_mutex_create(&synth_channel->stream_buffer_mutex, APR_THREAD_MUTEX_DEFAULT, channel_pool) != APR_SUCCESS) {
 			LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Failed to create buffer mutex");
 			return FALSE;
 		}
@@ -1197,7 +1210,7 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 	}
 	if(!synth_channel->stream_buffer_cond) {
 		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Creating cond...");
-		if(apr_thread_cond_create(&synth_channel->stream_buffer_cond, pool) != APR_SUCCESS) {
+			if(apr_thread_cond_create(&synth_channel->stream_buffer_cond, channel_pool) != APR_SUCCESS) {
 			LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Failed to create buffer condition");
 			/* ========== 修复：销毁已创建的互斥锁，避免资源泄漏 ========== */
 			if(mutex_created) {
@@ -1213,6 +1226,11 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Step 2: Before ring buffer log");
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Step 3: Ring buffer initialized");
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Step 4: After all logs");
+
+	/* MPF read 回调的入口屏障：仅在 ring buffer 与 mutex/cond 全部就绪后才
+	 * 放行回调，避免 setup 窗口内回调看到 NULL buffer/mutex（trylock(NULL)）
+	 * 或落入遗留分支提前触发 finish_begin（过早 SPEAK-COMPLETE + 丢音）。 */
+	tts_websocket_stream_lifecycle_reopen(&synth_channel->stream_lifecycle);
 
 	/* 转换编码 */
 	{
@@ -1270,8 +1288,21 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 		return FALSE;
 	}
 
-	/* 执行 WebSocket 握手 */
-	if(!websocket_handshake(sock, tts_engine->tts_server_host, tts_engine->tts_server_port, "/v1/audio/speech/stream", pool)) {
+	/* 执行 WebSocket 握手。连接上下文保留 HTTP 101 之后同一次 recv
+	 * 读到的首个 WebSocket 字节，避免首帧被握手逻辑吞掉。 */
+	synth_channel->stream_ws = apr_pcalloc(pool, sizeof(*synth_channel->stream_ws));
+	if(!synth_channel->stream_ws) {
+		apr_socket_close(sock);
+		return FALSE;
+	}
+	synth_channel->stream_ws->sock = sock;
+	tts_websocket_ws_decoder_init(
+		&synth_channel->stream_ws->decoder,
+		websocket_socket_read,
+		websocket_socket_send_control,
+		synth_channel->stream_ws,
+		2097152);
+	if(!websocket_handshake(synth_channel->stream_ws, tts_engine->tts_server_host, tts_engine->tts_server_port, "/v1/audio/speech/stream", pool)) {
 		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] WebSocket handshake failed");
 		apr_socket_close(sock);
 		return FALSE;
@@ -1574,6 +1605,9 @@ static mrcp_engine_channel_t* tts_websocket_engine_channel_create(mrcp_engine_t 
 	synth_channel->stream_thread = NULL;
 	synth_channel->stream_stop_requested = 0;
 	synth_channel->stream_socket = NULL;
+	synth_channel->stream_ws = NULL;
+	synth_channel->stream_pool = NULL;
+	tts_websocket_stream_lifecycle_init(&synth_channel->stream_lifecycle);
 	synth_channel->stream_buffer = NULL;
 	synth_channel->stream_buffer_size = 0;
 	synth_channel->stream_write_pos = 0;
@@ -1789,6 +1823,7 @@ static void tts_websocket_recording_close(tts_websocket_channel_t *synth_channel
  */
 static void tts_websocket_channel_cleanup_audio(tts_websocket_channel_t *synth_channel)
 {
+	tts_websocket_stream_lifecycle_begin_close(&synth_channel->stream_lifecycle);
 	if(synth_channel->audio_file) {
 		fclose(synth_channel->audio_file);
 		synth_channel->audio_file = NULL;
@@ -1822,6 +1857,9 @@ static void tts_websocket_channel_cleanup_audio(tts_websocket_channel_t *synth_c
 			}
 			apr_sleep(10000);  /* 10ms — 让关闭帧发送出去 */
 			apr_socket_close(synth_channel->stream_socket);
+			if(synth_channel->stream_ws) {
+				synth_channel->stream_ws->sock = NULL;
+			}
 			synth_channel->stream_socket = NULL;
 		}
 
@@ -1844,11 +1882,17 @@ static void tts_websocket_channel_cleanup_audio(tts_websocket_channel_t *synth_c
 		}
 		apr_sleep(10000);
 		apr_socket_close(synth_channel->stream_socket);
+		if(synth_channel->stream_ws) {
+			synth_channel->stream_ws->sock = NULL;
+		}
 		synth_channel->stream_socket = NULL;
 	}
 
 	/* worker 已退出，此处仅做失败路径的幂等兜底关闭。 */
 	tts_websocket_recording_close(synth_channel);
+	/* worker 已 join 且 socket 已关闭，当前 SPEAK 的大块缓冲、握手 surplus
+	 * 和临时 JSON 均可一次性回收，避免通道复用导致内存池线性增长。 */
+	tts_websocket_stream_pool_destroy(synth_channel);
 
 	/* ========== 修复：不销毁同步对象，因为它们是从channel pool分配的，可以重用 ==========
 	 * channel销毁时会自动清理这些对象
@@ -2206,6 +2250,9 @@ static apt_bool_t tts_websocket_channel_speak(mrcp_engine_channel_t *channel, mr
 		/* 打开录音文件（在启动流式接收之前，确保线程启动后即可写入） */
 		tts_websocket_recording_open(synth_channel, request->channel_id.session_id.buf);
 
+		/* 在建连/握手前发布本次不可变请求上下文，保证 session.config
+		 * 的 call_id 与日志使用当前 SPEAK，而不是上一次会话或空值。 */
+		synth_channel->speak_request = request;
 		apt_bool_t stream_started = tts_websocket_start_streaming(synth_channel, request->body.buf, request->body.length, voice_name);
 
 		if(stream_started) {
@@ -2213,18 +2260,17 @@ static apt_bool_t tts_websocket_channel_speak(mrcp_engine_channel_t *channel, mr
 			LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[STREAM] Streaming started successfully");
 
 			/* 发送SPEAK响应 */
-			response->start_line.status_code = MRCP_STATUS_CODE_SUCCESS;
-			response->start_line.request_state = MRCP_REQUEST_STATE_INPROGRESS;
-			mrcp_engine_channel_message_send(channel,response);
-			/* 网络/缓冲状态初始化完成后再向 MPF 发布 active request。 */
-			synth_channel->speak_request = request;
-
-			return TRUE;
+				response->start_line.status_code = MRCP_STATUS_CODE_SUCCESS;
+				response->start_line.request_state = MRCP_REQUEST_STATE_INPROGRESS;
+				mrcp_engine_channel_message_send(channel,response);
+				return TRUE;
 		} else {
 			/* 流式启动失败：直接返回错误给MRCP客户端，不回退到时间估算或本地文件 */
 			LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[STREAM] Failed to start streaming, returning error to MRCP client");
 			/* 关闭已打开的录音文件 */
 			tts_websocket_recording_close(synth_channel);
+			/* 启动失败也回收本次 SPEAK 子池和 socket 状态。 */
+			tts_websocket_channel_cleanup_audio(synth_channel);
 			/* 清空speak_request */
 			synth_channel->speak_request = NULL;
 			/* 发送错误响应 */
@@ -2540,11 +2586,19 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 	apt_bool_t emit_silence = FALSE;
 	apt_bool_t audio_started = FALSE;
 	apt_bool_t stream_complete = FALSE;
+	apt_bool_t lifecycle_entered = FALSE;
 
 	if(!synth_channel || !frame || !frame->codec_frame.buffer ||
 	   frame->codec_frame.size == 0) {
 		return TRUE;
 	}
+	/* MPF may reuse the frame object; a callback rejected during cleanup must
+	 * not leak a previous AUDIO flag into the current RTP tick. */
+	frame->type = MEDIA_FRAME_TYPE_NONE;
+	if(!tts_websocket_stream_lifecycle_enter(&synth_channel->stream_lifecycle)) {
+		return TRUE;
+	}
+	lifecycle_entered = TRUE;
 
 	/* MPF bridge reuses this frame. Never let a short EOF tail shrink it. */
 	if(synth_channel->stream_codec_frame_size == 0) {
@@ -2566,15 +2620,15 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 		if(synth_channel->stream_buffer_cond) {
 			apr_thread_cond_broadcast(synth_channel->stream_buffer_cond);
 		}
-		return TRUE;
+		goto stream_read_done;
 	}
 	if(synth_channel->paused) {
-		return TRUE;
+		goto stream_read_done;
 	}
 
 	active_request = synth_channel->speak_request;
 	if(!active_request) {
-		return TRUE;
+		goto stream_read_done;
 	}
 
 	/* Drain states must run before ordinary underrun handling. In RTP_DRAIN the
@@ -2596,7 +2650,7 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 				? TTS_WEBSOCKET_OUTPUT_RTP_DRAIN
 				: TTS_WEBSOCKET_OUTPUT_COMPLETE_READY;
 		}
-		return TRUE;
+		goto stream_read_done;
 	}
 	if(synth_channel->stream_output_state == TTS_WEBSOCKET_OUTPUT_RTP_DRAIN) {
 		if(synth_channel->stream_drain_ticks_left > 0) {
@@ -2605,7 +2659,7 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 		if(synth_channel->stream_drain_ticks_left == 0) {
 			synth_channel->stream_output_state = TTS_WEBSOCKET_OUTPUT_COMPLETE_READY;
 		}
-		return TRUE;
+		goto stream_read_done;
 	}
 	if(synth_channel->stream_output_state == TTS_WEBSOCKET_OUTPUT_COMPLETE_READY) {
 		completed = TRUE;
@@ -2625,13 +2679,15 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 		} else {
 			tts_websocket_output_finish_begin(synth_channel, stream, FALSE);
 		}
-	} else if(!completed && synth_channel->stream_buffer &&
-	          synth_channel->stream_buffer_size > 1) {
-		if(apr_thread_mutex_trylock(synth_channel->stream_buffer_mutex) != APR_SUCCESS) {
-			/* 诊断：高并发下 writer 持锁，reader 本帧只能发静音 */
-			synth_channel->stream_trylock_fail_count++;
-			emit_silence = TRUE;
-		} else {
+		} else if(!completed && synth_channel->stream_buffer &&
+		          synth_channel->stream_buffer_size > 1) {
+			if(!synth_channel->stream_buffer_mutex ||
+			   apr_thread_mutex_trylock(synth_channel->stream_buffer_mutex) != APR_SUCCESS) {
+				/* MPF 回调不得等待 producer。锁竞争时跳过本次回调，
+				 * 不向 RTP 注入一整帧伪静音，避免把合法音频时间轴改写成静音。 */
+				synth_channel->stream_trylock_fail_count++;
+				goto stream_read_done;
+			} else {
 			audio_started = synth_channel->stream_audio_started ? TRUE : FALSE;
 			stream_complete = synth_channel->stream_complete ? TRUE : FALSE;
 			terminal_error = synth_channel->stream_error ? TRUE : FALSE;
@@ -2654,12 +2710,13 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 					emit_silence = TRUE;
 				}
 			}
-			apr_thread_mutex_unlock(synth_channel->stream_buffer_mutex);
-		}
+				if(!completed && !emit_silence) {
+					bytes_read = tts_websocket_stream_read_audio(
+						synth_channel, frame->codec_frame.buffer, frame_size, &eof);
+				}
+				apr_thread_mutex_unlock(synth_channel->stream_buffer_mutex);
 
-		if(!completed && !emit_silence) {
-			bytes_read = tts_websocket_stream_read_audio(
-				synth_channel, frame->codec_frame.buffer, frame_size, &eof);
+			if(!completed && !emit_silence) {
 			if(bytes_read > 0) {
 				if(bytes_read < frame_size) {
 					memset((char*)frame->codec_frame.buffer + bytes_read, 0xFF,
@@ -2675,18 +2732,15 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 				 * COMPLETE is deliberately deferred to a later state/tick. */
 				tts_websocket_output_finish_begin(
 					synth_channel, stream, terminal_error);
-			} else {
-				/* Preserve any partial producer chunk and rebuild the reserve. */
-				if(apr_thread_mutex_trylock(synth_channel->stream_buffer_mutex) == APR_SUCCESS) {
+				} else {
+					/* Preserve any partial producer chunk and rebuild the reserve. */
 					synth_channel->stream_prebuffered = 0;
-					terminal_error = synth_channel->stream_error ? TRUE : FALSE;
-					apr_thread_mutex_unlock(synth_channel->stream_buffer_mutex);
+					emit_silence = TRUE;
+					synth_channel->stream_buffer_empty_count++;
 				}
-				emit_silence = TRUE;
-				synth_channel->stream_buffer_empty_count++;
 			}
 		}
-	} else if(!completed) {
+		} else if(!completed) {
 		if(stream->rx_descriptor &&
 		   synth_channel->time_to_complete >= stream->rx_descriptor->frame_duration) {
 			memset(frame->codec_frame.buffer, 0xFF, frame_size);
@@ -2764,6 +2818,10 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 		/* 播放完成（含 post-roll 最后一帧），此处关闭诊断录音文件。
 		 * 录音文件的唯一 writer 是本 MPF 回调线程。 */
 		tts_websocket_recording_close(synth_channel);
+	}
+stream_read_done:
+	if(lifecycle_entered) {
+		tts_websocket_stream_lifecycle_leave(&synth_channel->stream_lifecycle);
 	}
 	return TRUE;
 }
@@ -3574,110 +3632,191 @@ static char* ws_strcasestr(const char *haystack, const char *needle)
 	return NULL;
 }
 
-/**
- * @brief 执行 WebSocket 握手
- * @param sock 已连接的 socket
- * @param host 主机名
- * @param port 端口
- * @param path WebSocket 路径
- * @param pool 内存池
- * @return 成功返回 TRUE
- */
-static apt_bool_t websocket_handshake(apr_socket_t *sock, const char *host, apr_port_t port, const char *path, apr_pool_t *pool)
+static apt_bool_t websocket_send_all(
+	apr_socket_t *sock, const unsigned char *data, apr_size_t size)
+{
+	apr_size_t offset = 0;
+
+	while(offset < size) {
+		apr_size_t sent = size - offset;
+		apr_status_t rv = apr_socket_send(sock, (const char *)data + offset, &sent);
+		if(sent > 0) {
+			offset += sent;
+		}
+		if(rv != APR_SUCCESS) {
+			if(APR_STATUS_IS_EINTR(rv)) {
+				continue;
+			}
+			return FALSE;
+		}
+		if(sent == 0) {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+static apt_bool_t websocket_send_masked_frame(
+	apr_socket_t *sock, unsigned char opcode, const unsigned char *payload,
+	apr_size_t payload_len)
+{
+	unsigned char header[14];
+	unsigned char mask[4];
+	unsigned char stack_masked[125];
+	unsigned char *masked = stack_masked;
+	apr_size_t header_len = 2;
+	apr_size_t i;
+	apt_bool_t ok;
+
+	if(!sock || (!payload && payload_len > 0) || payload_len > 125) {
+		return FALSE;
+	}
+	if(apr_generate_random_bytes(mask, sizeof(mask)) != APR_SUCCESS) {
+		return FALSE;
+	}
+	header[0] = (unsigned char)(0x80 | (opcode & 0x0F));
+	if(payload_len < 126) {
+		header[1] = (unsigned char)(0x80 | payload_len);
+	} else {
+		return FALSE;
+	}
+	memcpy(header + header_len, mask, sizeof(mask));
+	header_len += sizeof(mask);
+	for(i = 0; i < payload_len; ++i) {
+		masked[i] = payload[i] ^ mask[i % 4];
+	}
+	ok = websocket_send_all(sock, header, header_len);
+	if(ok && payload_len > 0) {
+		ok = websocket_send_all(sock, masked, payload_len);
+	}
+	return ok;
+}
+
+static apr_status_t websocket_socket_read(void *context, char *buffer, apr_size_t *size)
+{
+	websocket_connection_t *connection = (websocket_connection_t*)context;
+	if(!connection || !connection->sock) {
+		if(size) {
+			*size = 0;
+		}
+		return APR_EOF;
+	}
+	return apr_socket_recv(connection->sock, buffer, size);
+}
+
+static apt_bool_t websocket_socket_send_control(
+	void *context, unsigned char opcode, const unsigned char *payload,
+	apr_size_t payload_len)
+{
+	websocket_connection_t *connection = (websocket_connection_t*)context;
+	if(!connection || !connection->sock) {
+		return FALSE;
+	}
+	return websocket_send_masked_frame(
+		connection->sock, opcode, payload, payload_len);
+}
+
+static apt_bool_t websocket_handshake(
+	websocket_connection_t *connection, const char *host, apr_port_t port,
+	const char *path, apr_pool_t *pool)
 {
 	char *key;
 	char handshake[1024];
-	apr_size_t len;
-	char buffer[1024];
-	apr_status_t rv;
+	unsigned char response[8192];
+	apr_size_t used = 0;
+	apr_size_t header_end = 0;
 	char *accept_key_ptr;
+	char *expected;
 
-	if(!sock || !host) return FALSE;
-
-	/* 生成 WebSocket Key */
+	if(!connection || !connection->sock || !host || !pool) {
+		return FALSE;
+	}
 	key = generate_websocket_key(pool);
 	if(!key) {
-		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Failed to generate WebSocket key");
 		return FALSE;
 	}
-	apt_log(SYNTH_LOG_MARK, APT_PRIO_DEBUG, "zyTTS: [WS] Generated Sec-WebSocket-Key: %s", key);
-
-	/* 发送 WebSocket 握手请求 */
-	len = apr_snprintf(handshake, sizeof(handshake),
-		"GET %s HTTP/1.1\r\n"
-		"Host: %s:%d\r\n"
-		"Upgrade: websocket\r\n"
-		"Connection: Upgrade\r\n"
-		"Sec-WebSocket-Key: %s\r\n"
-		"Sec-WebSocket-Version: 13\r\n"
-		"\r\n",
-		path ? path : "/v1/audio/speech/stream", host, port, key);
-
-	rv = apr_socket_send(sock, handshake, &len);
-	if(rv != APR_SUCCESS || len != strlen(handshake)) {
-		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Failed to send handshake (rv=%d, sent=%"APR_SIZE_T_FMT"/%zu)",
-			rv, len, strlen(handshake));
-		return FALSE;
-	}
-
-	apt_log(SYNTH_LOG_MARK, APT_PRIO_INFO, "zyTTS: [WS] Handshake sent, waiting for response");
-	apt_log(SYNTH_LOG_MARK, APT_PRIO_INFO, "zyTTS: [WS] Request path: %s", path ? path : "/v1/audio/speech/stream");
-	apt_log(SYNTH_LOG_MARK, APT_PRIO_DEBUG, "zyTTS: [WS] Full handshake request:\n%.*s", (int)len, handshake);
-
-	/* 接收握手响应 */
-	len = sizeof(buffer) - 1;
-	rv = apr_socket_recv(sock, buffer, &len);
-	if(rv != APR_SUCCESS) {
-		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Failed to receive handshake response");
-		return FALSE;
-	}
-	buffer[len] = '\0';
-
-	apt_log(SYNTH_LOG_MARK, APT_PRIO_DEBUG, "zyTTS: [WS] Handshake response: %.*s", (int)len, buffer);
-
-	/* 检查响应状态码 */
-	if(strstr(buffer, "HTTP/1.1 101") == NULL && strstr(buffer, "HTTP/1.0 101") == NULL) {
-		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Invalid handshake response status");
-		return FALSE;
-	}
-
-	/* 检查 Upgrade 头 */
-	if(strstr(buffer, "Upgrade:") == NULL || strstr(buffer, "websocket") == NULL) {
-		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Missing or invalid Upgrade header");
-		return FALSE;
-	}
-
-	/* 检查 Sec-WebSocket-Accept */
-	accept_key_ptr = ws_strcasestr(buffer, "Sec-WebSocket-Accept:");
-	if(!accept_key_ptr) {
-		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Missing Sec-WebSocket-Accept header");
-		return FALSE;
-	}
-
-	/* extract the header value (trim spaces and CRLF) */
 	{
-		const char *p = accept_key_ptr + strlen("Sec-WebSocket-Accept:");
-		while(*p == ' ' || *p == '\t') p++;
-		/* copy until CR or LF */
-		char accept_val[256];
-		size_t ai = 0;
-		while(*p && *p != '\r' && *p != '\n' && ai + 1 < sizeof(accept_val)) {
-			accept_val[ai++] = *p++;
-		}
-		accept_val[ai] = '\0';
-
-		/* compute expected accept from the key we sent */
-		char *expected = websocket_compute_accept(pool, key);
-		apt_log(SYNTH_LOG_MARK, APT_PRIO_DEBUG, "zyTTS: [WS] Expected Sec-WebSocket-Accept: %s", expected ? expected : "(null)");
-		apt_log(SYNTH_LOG_MARK, APT_PRIO_DEBUG, "zyTTS: [WS] Received Sec-WebSocket-Accept: %s", accept_val);
-		if(!expected || strcmp(expected, accept_val) != 0) {
-			apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Sec-WebSocket-Accept mismatch (expected=%s got=%s)",
-				expected?expected:"(null)", accept_val);
+		apr_size_t handshake_len = apr_snprintf(handshake, sizeof(handshake),
+			"GET %s HTTP/1.1\r\n"
+			"Host: %s:%d\r\n"
+			"Upgrade: websocket\r\n"
+			"Connection: Upgrade\r\n"
+			"Sec-WebSocket-Key: %s\r\n"
+			"Sec-WebSocket-Version: 13\r\n\r\n",
+			path ? path : "/v1/audio/speech/stream", host, port, key);
+		if(!websocket_send_all(connection->sock,
+			(const unsigned char *)handshake, handshake_len)) {
 			return FALSE;
 		}
 	}
 
-	apt_log(SYNTH_LOG_MARK, APT_PRIO_INFO, "zyTTS: [WS] WebSocket handshake successful");
+	while(used + 1 < sizeof(response)) {
+		apr_size_t received = sizeof(response) - used - 1;
+		apr_status_t rv = apr_socket_recv(connection->sock,
+			(char *)response + used, &received);
+		if(received > 0) {
+			used += received;
+			response[used] = '\0';
+		}
+		if(rv != APR_SUCCESS) {
+			if(APR_STATUS_IS_EINTR(rv)) {
+				continue;
+			}
+			return FALSE;
+		}
+		if(received == 0) {
+			return FALSE;
+		}
+		{
+			char *marker = strstr((char *)response, "\r\n\r\n");
+			if(marker) {
+				header_end = (apr_size_t)(marker - (char *)response) + 4;
+				break;
+			}
+		}
+	}
+	if(header_end == 0 ||
+	   (strstr((char *)response, "HTTP/1.1 101") == NULL &&
+	    strstr((char *)response, "HTTP/1.0 101") == NULL)) {
+		return FALSE;
+	}
+	if(!ws_strcasestr((char *)response, "Upgrade:") ||
+	   !ws_strcasestr((char *)response, "websocket")) {
+		return FALSE;
+	}
+	accept_key_ptr = ws_strcasestr((char *)response, "Sec-WebSocket-Accept:");
+	if(!accept_key_ptr) {
+		return FALSE;
+	}
+	expected = websocket_compute_accept(pool, key);
+	if(!expected) {
+		return FALSE;
+	}
+	{
+		const char *value = accept_key_ptr + strlen("Sec-WebSocket-Accept:");
+		char accept_value[256];
+		size_t i = 0;
+		while(*value == ' ' || *value == '\t') {
+			value++;
+		}
+		while(value[i] && value[i] != '\r' && value[i] != '\n' && i + 1 < sizeof(accept_value)) {
+			accept_value[i] = value[i];
+			i++;
+		}
+		accept_value[i] = '\0';
+		if(strcmp(expected, accept_value) != 0) {
+			return FALSE;
+		}
+	}
+
+	if(used > header_end) {
+		if(!tts_websocket_ws_decoder_set_pending(
+			&connection->decoder,
+			response + header_end,
+			used - header_end)) {
+			return FALSE;
+		}
+	}
 	return TRUE;
 }
 
@@ -3750,18 +3889,14 @@ static apt_bool_t websocket_send_text(apr_socket_t *sock, const char *text, apr_
 	memcpy(frame_header + header_len, masking_key, 4);
 	header_len += 4;
 
-	/* 发送帧头 */
-	total_len = header_len;
-	rv = apr_socket_send(sock, frame_header, &total_len);
-	if(rv != APR_SUCCESS || total_len != header_len) {
+	/* 发送帧头，处理合法短写 */
+	if(!websocket_send_all(sock, (const unsigned char *)frame_header, header_len)) {
 		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Failed to send frame header");
 		return FALSE;
 	}
 
-	/* 发送掩码后的帧数据 */
-	total_len = len;
-	rv = apr_socket_send(sock, masked_data, &total_len);
-	if(rv != APR_SUCCESS || total_len != len) {
+	/* 发送掩码后的帧数据，处理合法短写 */
+	if(!websocket_send_all(sock, (const unsigned char *)masked_data, len)) {
 		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Failed to send frame data");
 		return FALSE;
 	}
@@ -3778,27 +3913,19 @@ static apt_bool_t websocket_send_text(apr_socket_t *sock, const char *text, apr_
  *
  * WebSocket 关闭帧格式：
  * - 字节0: FIN=1, Opcode=0x08 (关闭帧)
- * - 字节1: MASK=0, Payload length=2 (状态码)
- * - 字节2-3: 状态码 (1000 正常关闭)
+ * - 字节1: MASK=1, Payload length=2 (状态码)
+ * - 字节2-5: 掩码和状态码 (1000 正常关闭)
  */
 static apt_bool_t websocket_send_close(apr_socket_t *sock, apr_pool_t *pool)
 {
-	char frame_header[4];
-	apr_size_t total_len;
-	apr_status_t rv;
+	const unsigned char close_payload[2] = {0x03, 0xE8};
+	(void)pool;
 
 	if(!sock) return FALSE;
 
-	/* 构建 WebSocket 关闭帧（FIN=1, MASK=0, Opcode=0x08, 状态码=1000） */
-	frame_header[0] = 0x88;  /* FIN=1, Opcode=0x08 */
-	frame_header[1] = 0x02;  /* MASK=0, Payload length=2 */
-	frame_header[2] = 0x03;  /* 状态码高字节: 1000 = 0x03E8 */
-	frame_header[3] = 0xE8;  /* 状态码低字节 */
-
-	/* 发送关闭帧 */
-	total_len = 4;
-	rv = apr_socket_send(sock, frame_header, &total_len);
-	if(rv != APR_SUCCESS || total_len != 4) {
+	/* 客户端关闭帧必须带 MASK，并且必须完整发送。 */
+	if(!websocket_send_masked_frame(sock, 0x08, close_payload,
+		sizeof(close_payload))) {
 		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Failed to send close frame");
 		return FALSE;
 	}
@@ -3809,328 +3936,19 @@ static apt_bool_t websocket_send_close(apr_socket_t *sock, apr_pool_t *pool)
 
 /**
  * @brief 接收 WebSocket 帧
- * @param sock WebSocket socket
+ * @param connection WebSocket connection context
  * @param buffer 接收缓冲区
  * @param buffer_size 缓冲区大小
  * @param is_text_frame 输出参数，是否为文本帧
  * @return 接收到的数据长度，-1 表示错误
  */
-static apr_ssize_t websocket_recv_frame(apr_socket_t *sock, char *buffer, apr_size_t buffer_size, apt_bool_t *is_text_frame)
+static apr_ssize_t websocket_recv_message(
+	websocket_connection_t *connection, char *buffer, apr_size_t buffer_size,
+	apt_bool_t *is_text_frame)
 {
-	char frame_header[16];
-	apr_size_t len;
-	apr_size_t i;
-	apr_status_t rv;
-	apr_size_t payload_len;
-	apr_size_t header_len = 2;
-	apt_bool_t is_fin;
-	unsigned char opcode;
-
-	if(!sock || !buffer || !is_text_frame) return -1;
-	*is_text_frame = FALSE;
-
-	/* 接收帧头（至少2字节） */
-	len = 2;
-	rv = apr_socket_recv(sock, frame_header, &len);
-	if(rv != APR_SUCCESS || len < 2) {
-		if(len == 0) {
-			apt_log(SYNTH_LOG_MARK, APT_PRIO_INFO, "zyTTS: [WS] Connection closed by server (no data received)");
-		} else {
-			apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Failed to receive frame header, rv=%d, len=%d", rv, (int)len);
-		}
+	if(!connection) {
 		return -1;
 	}
-	apt_log(SYNTH_LOG_MARK, APT_PRIO_DEBUG, "zyTTS: [WS] Received frame header: %02X %02X", (unsigned char)frame_header[0], (unsigned char)frame_header[1]);
-
-	/* 解析字节0: FIN, RSV1-3, Opcode */
-	is_fin = (frame_header[0] & 0x80) != 0;
-	opcode = frame_header[0] & 0x0F;
-
-	/* 解析字节1: MASK, Payload Len */
-	payload_len = frame_header[1] & 0x7F;
-
-	/* 判断帧类型 */
-	if(opcode == 0x01) {
-		*is_text_frame = TRUE;
-	} else if(opcode == 0x02) {
-		*is_text_frame = FALSE;  /* 二进制帧 */
-	} else if(opcode == 0x08) {
-		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Received close frame from server (opcode=0x08)");
-		return -1;
-	} else if(opcode == 0x09) {
-		/* ========== 修复：正确处理 Ping 帧（RFC 6455） ========== */
-		/* Ping 帧：需要读取 payload 并发送 Pong 响应 */
-		apt_log(SYNTH_LOG_MARK, APT_PRIO_DEBUG, "zyTTS: [WS] Received Ping frame");
-
-		/* 读取并处理 payload（如果有）*/
-		if(payload_len > 0) {
-			apr_size_t ping_payload_len = payload_len;
-			char *ping_payload = NULL;
-			apt_bool_t is_masked = (frame_header[1] & 0x80) != 0;
-			unsigned char masking_key[4] = {0};
-
-			/* 处理扩展 payload length */
-			apr_size_t ext_len_read = 0;
-			if(payload_len == 126) {
-				len = 2;
-				rv = apr_socket_recv(sock, frame_header + 2, &len);
-				if(rv != APR_SUCCESS || len < 2) {
-					return -1;
-				}
-				ping_payload_len = ((apr_size_t)(unsigned char)frame_header[2] << 8) | (apr_size_t)(unsigned char)frame_header[3];
-				ext_len_read = 2;
-			} else if(payload_len == 127) {
-				len = 8;
-				rv = apr_socket_recv(sock, frame_header + 2, &len);
-				if(rv != APR_SUCCESS || len < 8) {
-					return -1;
-				}
-				ping_payload_len = (apr_size_t)(unsigned char)frame_header[9];
-				ping_payload_len |= (apr_size_t)(unsigned char)frame_header[8] << 8;
-				ping_payload_len |= (apr_size_t)(unsigned char)frame_header[7] << 16;
-				ping_payload_len |= (apr_size_t)(unsigned char)frame_header[6] << 24;
-				ext_len_read = 8;
-			}
-
-			/* 读取掩码（如果有） */
-			if(is_masked) {
-				len = 4;
-				rv = apr_socket_recv(sock, (char*)masking_key, &len);
-				if(rv != APR_SUCCESS || len < 4) {
-					return -1;
-				}
-				ext_len_read += 4;
-			}
-
-			/* 读取 payload */
-			if(ping_payload_len > 0 && ping_payload_len < buffer_size) {
-				ping_payload = buffer;
-				apr_size_t total_read = 0;
-				while(total_read < ping_payload_len) {
-					len = ping_payload_len - total_read;
-					rv = apr_socket_recv(sock, ping_payload + total_read, &len);
-					if(rv != APR_SUCCESS || len == 0) {
-						return -1;
-					}
-					total_read += len;
-				}
-
-				/* 解掩（如果需要） */
-				if(is_masked) {
-					for(i = 0; i < ping_payload_len; i++) {
-						ping_payload[i] ^= masking_key[i % 4];
-					}
-				}
-			}
-
-			/* 发送 Pong 响应（包含相同的 payload，不使用掩码） */
-			{
-				char pong_header[16];
-				apr_size_t pong_header_len = 2;
-				apr_size_t total_sent;
-
-				/* 构建 Pong 帧头 */
-				pong_header[0] = 0x8A;  /* FIN=1, Opcode=0x0A (Pong) */
-
-				if(ping_payload_len < 126) {
-					pong_header[1] = (unsigned char)ping_payload_len;
-				} else if(ping_payload_len < 65536) {
-					pong_header[1] = 126;
-					pong_header[2] = (ping_payload_len >> 8) & 0xFF;
-					pong_header[3] = ping_payload_len & 0xFF;
-					pong_header_len = 4;
-				} else {
-					/* Ping payload 太大，忽略 */
-					return 0;
-				}
-
-				/* 发送 Pong 帧头 */
-				total_sent = pong_header_len;
-				rv = apr_socket_send(sock, pong_header, &total_sent);
-				if(rv != APR_SUCCESS || total_sent != pong_header_len) {
-					apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Failed to send Pong frame header");
-					return 0;
-				}
-
-				/* 发送 Pong payload */
-				if(ping_payload && ping_payload_len > 0) {
-					total_sent = ping_payload_len;
-					rv = apr_socket_send(sock, ping_payload, &total_sent);
-					if(rv != APR_SUCCESS || total_sent != ping_payload_len) {
-						apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Failed to send Pong payload");
-					}
-				}
-			}
-		} else {
-			/* 空 Ping，发送空 Pong */
-			char pong_header[2] = {0x8A, 0x00};
-			apr_size_t pong_len = 2;
-			apr_socket_send(sock, pong_header, &pong_len);
-		}
-		return 0;
-	} else if(opcode == 0x0A) {
-		/* Pong 帧，忽略 */
-		apt_log(SYNTH_LOG_MARK, APT_PRIO_DEBUG, "zyTTS: [WS] Received Pong frame");
-		return 0;
-	}
-
-	/* 解析扩展 payload length */
-	if(payload_len == 126) {
-		len = 2;
-		rv = apr_socket_recv(sock, frame_header + 2, &len);
-		if(rv != APR_SUCCESS || len < 2) {
-			apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Failed to receive extended payload length");
-			return -1;
-		}
-		payload_len = ((apr_size_t)(unsigned char)frame_header[2] << 8) | (apr_size_t)(unsigned char)frame_header[3];
-		header_len = 4;
-	} else if(payload_len == 127) {
-		/* 64位长度编码：读取8字节 */
-		len = 8;
-		rv = apr_socket_recv(sock, frame_header + 2, &len);
-		if(rv != APR_SUCCESS || len < 8) {
-			apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Failed to receive 64-bit payload length");
-			return -1;
-		}
-		/* 将8字节长度转换为apr_size_t，只取低32位（对于音频数据来说足够了） */
-		payload_len = (apr_size_t)(unsigned char)frame_header[9];
-		payload_len |= (apr_size_t)(unsigned char)frame_header[8] << 8;
-		payload_len |= (apr_size_t)(unsigned char)frame_header[7] << 16;
-		payload_len |= (apr_size_t)(unsigned char)frame_header[6] << 24;
-		/* 检查高32位是否为0（如果不为0说明数据真的太大） */
-		if((unsigned char)frame_header[2] != 0 || (unsigned char)frame_header[3] != 0 ||
-		   (unsigned char)frame_header[4] != 0 || (unsigned char)frame_header[5] != 0) {
-			apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Payload extremely large (>4GB), not supported");
-			return -1;
-		}
-		header_len = 10;
-		apt_log(SYNTH_LOG_MARK, APT_PRIO_DEBUG, "zyTTS: [WS] 64-bit payload length: %"APR_SIZE_T_FMT, payload_len);
-	}
-
-	/* 检查是否有掩码 */
-	if(frame_header[1] & 0x80) {
-		unsigned char masking_key[4];
-		apt_log(SYNTH_LOG_MARK, APT_PRIO_DEBUG, "zyTTS: [WS] Received masked frame from server");
-		/* 读取掩码密钥（4字节） */
-		len = 4;
-		rv = apr_socket_recv(sock, (char*)masking_key, &len);
-		if(rv != APR_SUCCESS || len < 4) {
-			apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Failed to receive masking key");
-			return -1;
-		}
-		header_len += 4;
-
-		/* 掩码帧：处理payload，支持丢弃超大的数据 */
-		if(payload_len > 0) {
-			apr_size_t actual_payload_len = payload_len;  /* 保存实际的payload长度 */
-			apr_size_t to_read = (payload_len > buffer_size) ? buffer_size : payload_len;
-			apr_size_t total_read = 0;
-			char temp_buf[65536];  /* 用于丢弃超大的payload (64KB) */
-			
-			/* 读取到缓冲区的部分 */
-			while(total_read < to_read) {
-				len = to_read - total_read;
-				rv = apr_socket_recv(sock, buffer + total_read, &len);
-				if(rv != APR_SUCCESS) {
-					apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Failed to receive masked frame payload (read %"APR_SIZE_T_FMT"/%"APR_SIZE_T_FMT")",
-						total_read, to_read);
-					return -1;
-				}
-				if(len == 0) {
-					apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Connection closed while reading payload (read %"APR_SIZE_T_FMT"/%"APR_SIZE_T_FMT")",
-						total_read, to_read);
-					return -1;
-				}
-				total_read += len;
-			}
-
-			/* 对接收到的数据进行解掩（XOR 运算） */
-			for(i = 0; i < total_read; i++) {
-				buffer[i] ^= masking_key[i % 4];
-			}
-
-			/* 如果payload比缓冲区大，读取并丢弃剩余数据以保持同步 */
-			if(actual_payload_len > buffer_size) {
-				apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] DATA LOSS: Payload too large (%"APR_SIZE_T_FMT" > %"APR_SIZE_T_FMT"), discarding %"APR_SIZE_T_FMT" bytes of audio data",
-					actual_payload_len, buffer_size, actual_payload_len - buffer_size);
-				apr_size_t remaining = actual_payload_len - buffer_size;
-				while(remaining > 0) {
-					len = (remaining > sizeof(temp_buf)) ? sizeof(temp_buf) : remaining;
-					rv = apr_socket_recv(sock, temp_buf, &len);
-					if(rv != APR_SUCCESS || len == 0) {
-						apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Failed to discard excess masked payload");
-						return -1;
-					}
-					/* 解掩并丢弃 */
-					for(i = 0; i < len; i++) {
-						temp_buf[i] ^= masking_key[(total_read + i) % 4];
-					}
-					remaining -= len;
-				}
-			}
-
-			if(*is_text_frame) {
-				apt_log(SYNTH_LOG_MARK, APT_PRIO_DEBUG, "zyTTS: [WS] Received text frame: %.*s", (int)total_read, buffer);
-			} else {
-				apt_log(SYNTH_LOG_MARK, APT_PRIO_DEBUG, "zyTTS: [WS] Received binary frame: %"APR_SIZE_T_FMT" bytes", total_read);
-			}
-
-			return total_read;
-		}
-
-		return 0;
-	}
-
-	/* 非掩码帧：处理payload，支持丢弃超大的数据 */
-	if(payload_len > 0) {
-		apr_size_t actual_payload_len = payload_len;  /* 保存实际的payload长度 */
-		apr_size_t to_read = (payload_len > buffer_size) ? buffer_size : payload_len;
-		apr_size_t total_read = 0;
-		char *read_ptr = buffer;
-		char temp_buf[65536];  /* 用于丢弃超大的payload (64KB) */
-		
-		/* 读取到缓冲区的部分 */
-		while(total_read < to_read) {
-			len = to_read - total_read;
-			rv = apr_socket_recv(sock, read_ptr, &len);
-			if(rv != APR_SUCCESS) {
-				apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Failed to receive frame payload (read %"APR_SIZE_T_FMT"/%"APR_SIZE_T_FMT")",
-					total_read, to_read);
-				return -1;
-			}
-			if(len == 0) {
-				apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Connection closed while reading payload (read %"APR_SIZE_T_FMT"/%"APR_SIZE_T_FMT")",
-					total_read, to_read);
-				return -1;
-			}
-			total_read += len;
-			read_ptr += len;
-		}
-
-		/* 如果payload比缓冲区大，丢弃剩余数据以保持同步 */
-		if(actual_payload_len > buffer_size) {
-			apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] DATA LOSS: Payload too large (%"APR_SIZE_T_FMT" > %"APR_SIZE_T_FMT"), discarding %"APR_SIZE_T_FMT" bytes of audio data",
-				actual_payload_len, buffer_size, actual_payload_len - buffer_size);
-			apr_size_t remaining = actual_payload_len - buffer_size;
-			while(remaining > 0) {
-				len = (remaining > sizeof(temp_buf)) ? sizeof(temp_buf) : remaining;
-				rv = apr_socket_recv(sock, temp_buf, &len);
-				if(rv != APR_SUCCESS || len == 0) {
-					apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING, "zyTTS: [WS] Failed to discard excess payload");
-					return -1;
-				}
-				remaining -= len;
-			}
-		}
-
-		if(*is_text_frame) {
-			apt_log(SYNTH_LOG_MARK, APT_PRIO_DEBUG, "zyTTS: [WS] Received text frame: %.*s", (int)total_read, buffer);
-		} else {
-			apt_log(SYNTH_LOG_MARK, APT_PRIO_DEBUG, "zyTTS: [WS] Received binary frame: %"APR_SIZE_T_FMT" bytes", total_read);
-		}
-
-		return total_read;
-	}
-
-	return 0;
+	return tts_websocket_ws_decoder_recv_message(
+		&connection->decoder, buffer, buffer_size, is_text_frame);
 }

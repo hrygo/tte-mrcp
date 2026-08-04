@@ -4,6 +4,9 @@ project (tts_websocket)
 # Set source files
 set (TTS_WEBSOCKET_SOURCES
 	src/tts_websocket_engine.c
+	src/tts_websocket_pcm.c
+	src/tts_websocket_lifecycle.c
+	src/tts_websocket_ws.c
 )
 source_group ("src" FILES ${TTS_WEBSOCKET_SOURCES})
 
@@ -62,4 +65,29 @@ if(BUILD_TTS_WEBSOCKET_TESTS)
 	add_executable(test_tts_websocket_http_parse tests/test_tts_websocket_http_parse.c)
 	set_target_properties(test_tts_websocket_http_parse PROPERTIES FOLDER "tests")
 	add_test(NAME tts_websocket_http_parse COMMAND test_tts_websocket_http_parse)
+	add_executable(test_tts_websocket_pcm
+		tests/test_tts_websocket_pcm.c
+		src/tts_websocket_pcm.c)
+	set_target_properties(test_tts_websocket_pcm PROPERTIES FOLDER "tests")
+	add_test(NAME tts_websocket_pcm COMMAND test_tts_websocket_pcm)
+	add_executable(test_tts_websocket_lifecycle
+		tests/test_tts_websocket_lifecycle.c
+		src/tts_websocket_lifecycle.c)
+	target_include_directories(test_tts_websocket_lifecycle PRIVATE
+		${PROJECT_SOURCE_DIR}/src
+		${APR_TOOLKIT_INCLUDE_DIRS}
+		${APR_INCLUDE_DIRS})
+	target_link_libraries(test_tts_websocket_lifecycle ${APR_LIBRARIES})
+	set_target_properties(test_tts_websocket_lifecycle PROPERTIES FOLDER "tests")
+	add_test(NAME tts_websocket_lifecycle COMMAND test_tts_websocket_lifecycle)
+	add_executable(test_tts_websocket_ws
+		tests/test_tts_websocket_ws.c
+		src/tts_websocket_ws.c)
+	target_include_directories(test_tts_websocket_ws PRIVATE
+		${PROJECT_SOURCE_DIR}/src
+		${APR_TOOLKIT_INCLUDE_DIRS}
+		${APR_INCLUDE_DIRS})
+	target_link_libraries(test_tts_websocket_ws ${APR_LIBRARIES})
+	set_target_properties(test_tts_websocket_ws PROPERTIES FOLDER "tests")
+	add_test(NAME tts_websocket_ws COMMAND test_tts_websocket_ws)
 endif()

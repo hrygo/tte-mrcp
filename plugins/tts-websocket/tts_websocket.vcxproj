@@ -110,6 +110,14 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\tts_websocket_engine.c" />
+    <ClCompile Include="src\tts_websocket_pcm.c" />
+    <ClCompile Include="src\tts_websocket_lifecycle.c" />
+    <ClCompile Include="src\tts_websocket_ws.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\tts_websocket_pcm.h" />
+    <ClInclude Include="src\tts_websocket_lifecycle.h" />
+    <ClInclude Include="src\tts_websocket_ws.h" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\libs\mrcp-engine\mrcpengine.vcxproj">
