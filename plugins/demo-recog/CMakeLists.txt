@@ -66,4 +66,12 @@ if(BUILD_DEMORECOG_TESTS)
 	add_executable(test_json_unescape tests/test_json_unescape.c src/funasr_json.c)
 	set_target_properties(test_json_unescape PROPERTIES FOLDER "tests")
 	add_test(NAME demorecog_json_unescape COMMAND test_json_unescape)
+
+	add_executable(test_funasr_ws_transport
+		tests/test_funasr_ws_transport.c
+		src/funasr_clock.c
+		src/funasr_ws_transport.c)
+	target_link_libraries(test_funasr_ws_transport ${APR_LIBRARIES})
+	set_target_properties(test_funasr_ws_transport PROPERTIES FOLDER "tests")
+	add_test(NAME demorecog_funasr_ws_transport COMMAND test_funasr_ws_transport)
 endif()
