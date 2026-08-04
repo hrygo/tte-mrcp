@@ -15,6 +15,7 @@ typedef struct fake_sink_t {
     int cancels;
     int close_requests;
     int joins;
+    apt_bool_t reject_cancel;
     mrcp_recog_completion_cause_e last_cause;
     char last_text[64];
 } fake_sink_t;
@@ -73,7 +74,7 @@ static apt_bool_t fake_cancel(void *obj, funasr_generation_t generation)
     fake_sink_t *sink = obj;
     (void)generation;
     sink->cancels++;
-    return TRUE;
+    return sink->reject_cancel ? FALSE : TRUE;
 }
 
 static apt_bool_t fake_close(void *obj)
@@ -217,6 +218,29 @@ static void test_stop_wins_failure_race(void)
     CHECK_TRUE("new generation accepts media", control.accepting_media);
 }
 
+static void test_stop_during_terminal_commit_responds(void)
+{
+    funasr_control_t control;
+    fake_sink_t sink;
+    funasr_transport_event_t event;
+
+    memset(&sink, 0, sizeof(sink));
+    sink.reject_cancel = TRUE;
+    funasr_control_init(&control);
+    funasr_control_begin_generation(&control, 8);
+    CHECK_TRUE("late STOP falls back to an immediate response",
+               funasr_control_request_stop(&control, &fake_vtable, &sink));
+    CHECK_TRUE("late STOP attempted one transport cancel", sink.cancels == 1);
+    CHECK_TRUE("late STOP receives one response", sink.stop_responses == 1);
+    event = event_make(8, FUNASR_EVENT_FINAL_RESULT);
+    event.text = "already-committed";
+    funasr_control_handle_event(&control, &event, &fake_vtable, &sink);
+    CHECK_TRUE("committed final after STOP is suppressed",
+               sink.completions == 0);
+    CHECK_TRUE("committed final is counted as duplicate terminal",
+               control.duplicate_terminal_events == 1);
+}
+
 static void test_close_fence_is_only_close_release(void)
 {
     funasr_control_t control;
@@ -248,6 +272,7 @@ int main(void)
     test_stop_before_final_and_timeout();
     test_failure_mapping_and_stale_generation();
     test_stop_wins_failure_race();
+    test_stop_during_terminal_commit_responds();
     test_close_fence_is_only_close_release();
     if (failures != 0) {
         fprintf(stderr, "%d control assertion(s) failed\n", failures);

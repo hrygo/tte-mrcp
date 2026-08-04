@@ -1,6 +1,5 @@
 #include "funasr_audio.h"
 
-#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -28,8 +27,8 @@ static int failures = 0;
 
 static void check_samples(
     const char *label,
-    const int16_t *actual,
-    const int16_t *expected,
+    const apr_int16_t *actual,
+    const apr_int16_t *expected,
     apr_size_t count)
 {
     apr_size_t i;
@@ -68,11 +67,11 @@ static void test_pcm_duration_formulas(void)
 
 static void test_mono_interpolation_and_continuity(void)
 {
-    const int16_t first_input[] = {1000};
-    const int16_t second_input[] = {3000};
-    const int16_t first_expected[] = {1000, 1000};
-    const int16_t second_expected[] = {2000, 3000};
-    int16_t output[4];
+    const apr_int16_t first_input[] = {1000};
+    const apr_int16_t second_input[] = {3000};
+    const apr_int16_t first_expected[] = {1000, 1000};
+    const apr_int16_t second_expected[] = {2000, 3000};
+    apr_int16_t output[4];
     apr_size_t output_bytes = 0;
     funasr_resample_state_t state;
 
@@ -104,10 +103,10 @@ static void test_mono_interpolation_and_continuity(void)
 
 static void test_odd_byte_is_carried(void)
 {
-    const int16_t input[] = {1000, 2000};
-    const int16_t expected[] = {1000, 1500, 2000, 2000};
+    const apr_int16_t input[] = {1000, 2000};
+    const apr_int16_t expected[] = {1000, 1000, 1500, 2000};
     const unsigned char *bytes = (const unsigned char *)input;
-    int16_t output[4];
+    apr_int16_t output[4];
     apr_size_t output_bytes = 99;
     funasr_resample_state_t state;
 
@@ -138,10 +137,10 @@ static void test_odd_byte_is_carried(void)
 
 static void test_split_stereo_frame_preserves_layout(void)
 {
-    const int16_t input[] = {100, -100, 300, -300};
-    const int16_t expected[] = {100, -100, 200, -200, 300, -300, 300, -300};
+    const apr_int16_t input[] = {100, -100, 300, -300};
+    const apr_int16_t expected[] = {100, -100, 100, -100, 200, -200, 300, -300};
     const unsigned char *bytes = (const unsigned char *)input;
-    int16_t output[8];
+    apr_int16_t output[8];
     apr_size_t output_bytes = 0;
     funasr_resample_state_t state;
 
@@ -172,8 +171,8 @@ static void test_split_stereo_frame_preserves_layout(void)
 
 static void test_validation_and_capacity_failure_preserve_state(void)
 {
-    const int16_t input[] = {1000, 2000};
-    int16_t output[4];
+    const apr_int16_t input[] = {1000, 2000};
+    apr_int16_t output[4];
     apr_size_t output_bytes = 99;
     funasr_resample_state_t state;
     funasr_resample_state_t before;
@@ -228,6 +227,53 @@ static void test_validation_and_capacity_failure_preserve_state(void)
                8);
 }
 
+static void test_chunked_ramp_matches_one_shot(void)
+{
+    const apr_int16_t input[] = {100, 300, 500, 700, 900, 1100};
+    apr_int16_t one_shot[12];
+    apr_int16_t chunked[12];
+    apr_size_t one_shot_bytes;
+    apr_size_t first_bytes;
+    apr_size_t second_bytes;
+    funasr_resample_state_t one_shot_state;
+    funasr_resample_state_t chunked_state;
+
+    memset(&one_shot_state, 0, sizeof(one_shot_state));
+    memset(&chunked_state, 0, sizeof(chunked_state));
+    CHECK_TRUE("one-shot ramp resamples",
+               funasr_resample_8k_to_16k_into(
+                   &one_shot_state,
+                   input,
+                   sizeof(input),
+                   1,
+                   one_shot,
+                   sizeof(one_shot),
+                   &one_shot_bytes) == TRUE);
+    CHECK_TRUE("first ramp chunk resamples",
+               funasr_resample_8k_to_16k_into(
+                   &chunked_state,
+                   input,
+                   2 * sizeof(input[0]),
+                   1,
+                   chunked,
+                   sizeof(chunked),
+                   &first_bytes) == TRUE);
+    CHECK_TRUE("second ramp chunk resamples",
+               funasr_resample_8k_to_16k_into(
+                   &chunked_state,
+                   input + 2,
+                   sizeof(input) - 2 * sizeof(input[0]),
+                   1,
+                   (unsigned char *)chunked + first_bytes,
+                   sizeof(chunked) - first_bytes,
+                   &second_bytes) == TRUE);
+    CHECK_SIZE("chunked ramp byte count",
+               first_bytes + second_bytes,
+               one_shot_bytes);
+    CHECK_TRUE("chunked ramp equals one-shot",
+               memcmp(one_shot, chunked, one_shot_bytes) == 0);
+}
+
 int main(void)
 {
     test_pcm_duration_formulas();
@@ -235,6 +281,7 @@ int main(void)
     test_odd_byte_is_carried();
     test_split_stereo_frame_preserves_layout();
     test_validation_and_capacity_failure_preserve_state();
+    test_chunked_ramp_matches_one_shot();
 
     if (failures != 0) {
         fprintf(stderr, "%d resample assertion(s) failed\n", failures);

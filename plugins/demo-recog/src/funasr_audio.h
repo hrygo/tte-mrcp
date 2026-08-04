@@ -4,7 +4,6 @@
 #include "apt.h"
 
 #include <apr.h>
-#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -17,7 +16,7 @@ extern "C" {
 typedef struct funasr_resample_state_t {
     unsigned char partial[FUNASR_SAMPLE_WIDTH_BYTES * FUNASR_MAX_CHANNELS];
     apr_size_t partial_size;
-    int16_t previous[FUNASR_MAX_CHANNELS];
+    apr_int16_t previous[FUNASR_MAX_CHANNELS];
     apt_bool_t previous_valid;
 } funasr_resample_state_t;
 

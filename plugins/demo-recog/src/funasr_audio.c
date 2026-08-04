@@ -14,7 +14,7 @@ static unsigned char funasr_virtual_byte(
     return input[offset - state->partial_size];
 }
 
-static int16_t funasr_virtual_sample(
+static apr_int16_t funasr_virtual_sample(
     const funasr_resample_state_t *state,
     const unsigned char *input,
     apr_size_t byte_offset)
@@ -24,10 +24,12 @@ static int16_t funasr_virtual_sample(
     value = (apr_uint16_t)funasr_virtual_byte(state, input, byte_offset);
     value |= (apr_uint16_t)(
         (apr_uint16_t)funasr_virtual_byte(state, input, byte_offset + 1) << 8);
-    return (int16_t)value;
+    return (apr_int16_t)value;
 }
 
-static int16_t funasr_average_sample(int16_t first, int16_t second)
+static apr_int16_t funasr_average_sample(
+    apr_int16_t first,
+    apr_int16_t second)
 {
     int sum;
 
@@ -35,7 +37,7 @@ static int16_t funasr_average_sample(int16_t first, int16_t second)
     if (sum >= 0) {
         sum += 1;
     }
-    return (int16_t)(sum / 2);
+    return (apr_int16_t)(sum / 2);
 }
 
 apr_size_t funasr_pcm_bytes_for_ms(
@@ -96,7 +98,7 @@ apt_bool_t funasr_resample_8k_to_16k_into(
 {
     const unsigned char *input_bytes_ptr;
     funasr_resample_state_t next_state;
-    int16_t *output_samples;
+    apr_int16_t *output_samples;
     apr_size_t frame_bytes;
     apr_size_t total_bytes;
     apr_size_t frame_count;
@@ -133,16 +135,15 @@ apt_bool_t funasr_resample_8k_to_16k_into(
     }
 
     input_bytes_ptr = (const unsigned char *)input;
-    output_samples = (int16_t *)output;
+    output_samples = (apr_int16_t *)output;
     next_state = *state;
 
     for (frame_index = 0; frame_index < frame_count; ++frame_index) {
         for (channel_index = 0; channel_index < channels; ++channel_index) {
             apr_size_t current_offset;
-            apr_size_t next_offset;
             apr_size_t output_offset;
-            int16_t current_sample;
-            int16_t next_sample;
+            apr_int16_t current_sample;
+            apr_int16_t previous_sample;
 
             current_offset = frame_index * frame_bytes +
                 channel_index * FUNASR_SAMPLE_WIDTH_BYTES;
@@ -150,47 +151,13 @@ apt_bool_t funasr_resample_8k_to_16k_into(
                 state,
                 input_bytes_ptr,
                 current_offset);
-            if (frame_index + 1 < frame_count) {
-                next_offset = current_offset + frame_bytes;
-                next_sample = funasr_virtual_sample(
-                    state,
-                    input_bytes_ptr,
-                    next_offset);
-            } else {
-                next_sample = current_sample;
-            }
-
             output_offset = frame_index * channels * 2 + channel_index;
-            output_samples[output_offset] = current_sample;
-            output_samples[output_offset + channels] =
-                funasr_average_sample(current_sample, next_sample);
-        }
-    }
-
-    if (frame_count != 0 && next_state.previous_valid) {
-        for (channel_index = 0; channel_index < channels; ++channel_index) {
-            int16_t first_sample;
-
-            first_sample = funasr_virtual_sample(
-                state,
-                input_bytes_ptr,
-                channel_index * FUNASR_SAMPLE_WIDTH_BYTES);
-            output_samples[channel_index] = funasr_average_sample(
-                next_state.previous[channel_index],
-                first_sample);
-        }
-    }
-
-    if (frame_count != 0) {
-        apr_size_t last_frame_offset;
-
-        last_frame_offset = (frame_count - 1) * frame_bytes;
-        for (channel_index = 0; channel_index < channels; ++channel_index) {
-            next_state.previous[channel_index] = funasr_virtual_sample(
-                state,
-                input_bytes_ptr,
-                last_frame_offset +
-                    channel_index * FUNASR_SAMPLE_WIDTH_BYTES);
+            previous_sample = next_state.previous_valid ?
+                next_state.previous[channel_index] : current_sample;
+            output_samples[output_offset] =
+                funasr_average_sample(previous_sample, current_sample);
+            output_samples[output_offset + channels] = current_sample;
+            next_state.previous[channel_index] = current_sample;
         }
         next_state.previous_valid = TRUE;
     }

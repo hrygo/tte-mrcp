@@ -196,6 +196,12 @@ static void test_ws_short_read_and_mask(void)
     CHECK_TRUE("masked text opcode", event.opcode == FUNASR_WS_OPCODE_TEXT);
     CHECK_SIZE("masked text length", event.size, 5);
     CHECK_TRUE("masked payload decoded", memcmp(event.data, "hello", 5) == 0);
+
+    funasr_ws_decoder_reset(&decoder);
+    funasr_ws_decoder_reject_masked(&decoder, TRUE);
+    status = funasr_ws_decoder_feed(&decoder, frame, sizeof(frame), &event);
+    CHECK_TRUE("client mode rejects masked server frame",
+               status == FUNASR_WS_PROTOCOL_ERROR);
 }
 
 static void test_ws_extended_length_and_fragmented_control(void)
@@ -1073,6 +1079,22 @@ static void test_worker_keeps_media_enqueue_independent_of_partial_rx(
                    sizeof(expected_media));
     CHECK_TRUE("media gap p99 is 20ms",
                collector.last_metrics.media_gap_p99_us == 20000);
+    CHECK_TRUE("successful metrics have the neutral completion reason",
+               collector.last_metrics.completion_failure ==
+                   FUNASR_FAILURE_INTERNAL);
+
+    format.call_id = "worker-test-next";
+    CHECK_TRUE("next generation starts immediately after terminal event",
+               funasr_transport_begin_generation(
+                   transport,
+                   12,
+                   &format) == TRUE);
+    CHECK_TRUE("next generation can be cancelled",
+               funasr_transport_cancel_generation(transport, 12) == TRUE);
+    CHECK_TRUE("next generation drains",
+               wait_for_collector(&collector, 1, 1) == TRUE);
+    CHECK_TRUE("next generation metrics arrive",
+               wait_for_collector(&collector, 5, 2) == TRUE);
 
     CHECK_TRUE("close requested",
                funasr_transport_request_close(transport) == TRUE);
@@ -1080,6 +1102,8 @@ static void test_worker_keeps_media_enqueue_independent_of_partial_rx(
                wait_for_collector(&collector, 2, 1) == TRUE);
     CHECK_TRUE("worker joins",
                funasr_transport_join_closed(transport) == APR_SUCCESS);
+    CHECK_TRUE("metrics emitted once per generation",
+               collector.metrics == 2);
     CHECK_TRUE("POLLOUT requested only for pending bytes",
                io.poll_want_write > 0 && io.poll_without_write > 0);
     CHECK_TRUE("enqueue wakes worker", io.wake_count > 0);
@@ -1100,7 +1124,10 @@ static void test_worker_queues_pong_behind_pending_audio(
         fake_io_close,
         fake_io_wake
     };
-    static const unsigned char ping_frame[] = {0x89, 0x01, 'q'};
+    static const unsigned char ping_frames[] = {
+        0x89, 0x01, 'q',
+        0x89, 0x01, 'r'
+    };
     static const char response_json[] = "{\"code\":0,\"text\":\"pong-ok\"}";
     unsigned char response_frame[2 + sizeof(response_json) - 1];
     unsigned char media_chunk[6400];
@@ -1155,14 +1182,14 @@ static void test_worker_queues_pong_behind_pending_audio(
                    now_us) == FUNASR_ENQUEUE_ACCEPTED);
     CHECK_TRUE("audio write becomes pending",
                fake_io_wait_poll_write(&io, 1) == TRUE);
-    fake_io_append_inbound(&io, ping_frame, sizeof(ping_frame));
+    fake_io_append_inbound(&io, ping_frames, sizeof(ping_frames));
     funasr_transport_wake(transport);
     apr_sleep(10000);
     fake_io_set_stall(&io, FALSE);
     funasr_transport_wake(transport);
     CHECK_TRUE("audio and queued Pong are written",
                fake_io_wait_outbound(&io, 6415) == TRUE);
-    CHECK_TRUE("exactly one Pong follows pending audio",
+    CHECK_TRUE("latest pending Ping produces one Pong after audio",
                fake_io_count_opcode(&io, FUNASR_WS_OPCODE_PONG) == 1);
 
     response_frame[0] = 0x81;
@@ -1194,6 +1221,7 @@ static void test_worker_stop_drains_without_final(
     funasr_transport_config_t config;
     funasr_audio_format_t format;
     funasr_transport_t *transport;
+    funasr_media_snapshot_t snapshot;
     fake_io_t io;
     event_collector_t collector;
     apr_int64_t now_us = 2000000;
@@ -1249,6 +1277,17 @@ static void test_worker_stop_drains_without_final(
                funasr_transport_cancel_generation(
                    transport,
                    21) == TRUE);
+    CHECK_TRUE("cancel stops new media snapshots",
+               funasr_transport_media_snapshot(
+                   transport,
+                   &snapshot) == FALSE);
+    CHECK_TRUE("cancel rejects callback frames arriving after STOP",
+               funasr_transport_enqueue_pcm(
+                   transport,
+                   21,
+                   media_frame,
+                   sizeof(media_frame),
+                   now_us + 20000) == FUNASR_ENQUEUE_NOT_STREAMING);
     CHECK_TRUE("drain event arrives",
                wait_for_collector(&collector, 1, 1) == TRUE);
     CHECK_TRUE("STOP emits no final", collector.final_results == 0);
@@ -1392,6 +1431,8 @@ static void test_twenty_transport_workers_remain_independent(
                    wait_for_collector(&collectors[index], 2, 1) == TRUE);
         CHECK_TRUE("20-worker joins",
                    funasr_transport_join_closed(transports[index]) == APR_SUCCESS);
+        CHECK_TRUE("20-worker metrics are not duplicated on close",
+                   collectors[index].metrics == 1);
     }
     free(transports);
     free(ios);
@@ -1639,6 +1680,71 @@ static void test_worker_write_stall_uses_fake_clock(
                funasr_transport_join_closed(transport) == APR_SUCCESS);
 }
 
+static void test_stop_interrupts_stalled_handshake(apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    funasr_transport_config_t config;
+    funasr_audio_format_t format;
+    funasr_transport_t *transport;
+    fake_io_t io;
+    event_collector_t collector;
+
+    memset(&io, 0, sizeof(io));
+    memset(&collector, 0, sizeof(collector));
+    apr_thread_mutex_create(&io.mutex, APR_THREAD_MUTEX_DEFAULT, pool);
+    apr_thread_mutex_create(
+        &collector.mutex,
+        APR_THREAD_MUTEX_DEFAULT,
+        pool);
+    io.stall_writes = TRUE;
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.stop_drain_timeout_us = 20000;
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+    config.io_vtable = &fake_vtable;
+    config.io_obj = &io;
+    transport = funasr_transport_create(pool, 48, &config);
+
+    memset(&format, 0, sizeof(format));
+    format.input_sample_rate = 16000;
+    format.output_sample_rate = 16000;
+    format.channel_count = 1;
+    format.sample_width = 2;
+    format.call_id = "handshake-stop-test";
+    CHECK_TRUE("handshake-stop generation begins",
+               funasr_transport_begin_generation(transport, 71, &format));
+    CHECK_TRUE("worker enters stalled handshake",
+               fake_io_wait_poll_write(&io, 1));
+    CHECK_TRUE("STOP accepted during handshake",
+               funasr_transport_cancel_generation(transport, 71));
+    CHECK_TRUE("stalled handshake drains promptly",
+               wait_for_collector(&collector, 1, 1));
+    CHECK_TRUE("handshake STOP emits metrics first",
+               collector.sequence_size >= 2 &&
+               collector.sequence[collector.sequence_size - 2] ==
+                   FUNASR_EVENT_TRANSPORT_METRICS &&
+               collector.sequence[collector.sequence_size - 1] ==
+                   FUNASR_EVENT_GENERATION_DRAINED);
+    CHECK_TRUE("handshake STOP is not a transport failure",
+               collector.failures == 0);
+
+    funasr_transport_request_close(transport);
+    CHECK_TRUE("handshake-stop worker closes",
+               wait_for_collector(&collector, 2, 1));
+    CHECK_TRUE("handshake-stop worker joins",
+               funasr_transport_join_closed(transport) == APR_SUCCESS);
+}
+
 static void test_worker_rejected_close_fence_is_reported(
     apr_pool_t *pool)
 {
@@ -1748,6 +1854,8 @@ static void test_worker_close_without_generation_has_fence(apr_pool_t *pool)
     CHECK_TRUE("idle transport joins",
                funasr_transport_join_closed(transport) == APR_SUCCESS);
     CHECK_TRUE("idle transport never opens socket", io.opened == FALSE);
+    CHECK_TRUE("idle close does not invent generation metrics",
+               collector.metrics == 0);
 }
 
 int main(void)
@@ -1780,6 +1888,7 @@ int main(void)
     test_worker_preserves_handshake_sticky_frame(pool);
     test_worker_reports_one_queue_overrun(pool);
     test_worker_write_stall_uses_fake_clock(pool);
+    test_stop_interrupts_stalled_handshake(pool);
     test_worker_rejected_close_fence_is_reported(pool);
     test_worker_close_without_generation_has_fence(pool);
 

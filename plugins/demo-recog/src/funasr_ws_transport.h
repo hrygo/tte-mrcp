@@ -112,6 +112,7 @@ typedef struct funasr_ws_decoder_t {
     apr_size_t message_limit;
     funasr_ws_opcode_e fragment_opcode;
     apt_bool_t fragment_active;
+    apt_bool_t reject_masked;
     apt_bool_t failed;
 } funasr_ws_decoder_t;
 
@@ -125,6 +126,9 @@ void funasr_ws_decoder_init(
     apr_size_t message_limit);
 
 void funasr_ws_decoder_reset(funasr_ws_decoder_t *decoder);
+void funasr_ws_decoder_reject_masked(
+    funasr_ws_decoder_t *decoder,
+    apt_bool_t reject_masked);
 
 funasr_ws_status_e funasr_ws_decoder_feed(
     funasr_ws_decoder_t *decoder,

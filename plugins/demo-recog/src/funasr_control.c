@@ -53,7 +53,13 @@ apt_bool_t funasr_control_request_stop(
         return vtable->send_stop_response(obj, control->generation);
     }
     control->stop_pending = TRUE;
-    return vtable->cancel_generation(obj, control->generation);
+    if (vtable->cancel_generation(obj, control->generation)) {
+        return TRUE;
+    }
+    control->stop_pending = FALSE;
+    control->active = FALSE;
+    control->terminal = TRUE;
+    return vtable->send_stop_response(obj, control->generation);
 }
 
 apt_bool_t funasr_control_request_close(
