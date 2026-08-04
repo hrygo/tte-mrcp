@@ -93,9 +93,9 @@ rtk bash tools/stress/stress_test_improved.sh -h
 | macOS 插件 Autotools 构建与 `make check` | 已验证 | 插件本体编译，测试 4/4 通过 |
 | macOS 完整 CMake build | 阻断 | 公共 `libs/apr-toolkit` / `libs/mpf` 未获得 APR-util include，`apr_xml.h` not found；Issue #2 插件目标尚未进入失败点 |
 | macOS 完整 Autotools `make check` | 阻断 | 已知公共层 `JB_TRACE/RTP_TRACE` 向 `mpf_null_trace()` 传参导致编译失败 |
-| 20 个真实 UMC ASR 会话 | 阻断 | 当前 server/UMC 完整产物不可用；仅有明确标注的 20-worker 单测证据 |
+| 20 个真实 UMC ASR 会话 | CI 已定义，首跑待回填 | 由 `.github/workflows/build-linux.yml` 的 `verify-linux` job 在 Rocky Linux 8 容器内以 1 次预热 + 20 并发 split-payload loopback 执行；绿色运行后回填 pacing JSON 与阈值断言结果 |
 | Windows Win32/x64 | 未验证 | 当前环境无 Windows/MSBuild；工程 XML 已解析，solution 已接入新源文件和测试项目 |
-| Linux 目标发行版 | 未验证 | 当前环境无目标容器/sysroot，未执行 ELF、插件加载和 RTP/MRCP 冒烟 |
+| Linux 目标发行版 | CI 已定义，首跑待回填 | `build-linux` 在 ABI 基线容器（RHEL 7 / Rocky Linux 8）完成 Autotools 构建、`make check`（kylin 行含 CMake/CTest）与 ELF/GLIBC/ldd 审计；`verify-linux` 在 Rocky Linux 8 容器执行插件加载、RTP/MRCP 建链冒烟和 20 并发 ASR loopback，断言零 overrun、非故障 p99 `<100 ms`、最大值 `<250 ms`；Actions 首次绿色运行后回填证据 |
 | 生产灰度 | 线上未验证 | 未提供真实灰度流量与服务端日志 |
 
 上述两个完整构建阻断均位于未修改的公共层，不归因于本 Issue 的插件实现。本变更没有为绕过门禁而扩大到公共库修复。
@@ -112,4 +112,8 @@ rtk bash tools/stress/stress_test_improved.sh -h
 
 ## 6. 后续上线门禁
 
-合并前仍应在受支持的 Windows/Linux builder 上完成对应 solution/Autotools/CMake 构建和插件加载。公共层构建阻断解除后，按实施计划运行 1 次预热 + 20 个并发 UMC 会话，并以 fixture JSONL 与插件结构化 summary 生成 pacing JSON；只有真实结果满足零 overrun、非故障样本 gap p99 `<100 ms`、最大值 `<250 ms`，且故障会话在 5 秒 deadline 内终止，才能把端到端项改为通过。
+合并前仍需在受支持的 Windows builder 上完成对应 solution 构建和插件加载；Linux 门禁已定义为 `.github/workflows/build-linux.yml`：
+
+- `build-linux`：在 ABI 基线容器（RHEL 7 / Rocky Linux 8）内完成 Autotools 构建与 `make check`（kylin 行另跑 CMake/CTest 插件测试），并对打包产物执行 ELF/GLIBC 与 `ldd` 审计。
+- `verify-linux`：在 Rocky Linux 8 容器内启动 loopback fixture（split-payload 故障注入）与打包后的 `unimrcpserver`，确认 MRCPv2 profile 就绪、插件加载无失败，然后运行 1 次预热 + 20 个并发 UMC 会话，以 fixture JSONL 与插件结构化 summary 生成 pacing JSON。
+- 只有 Actions 首次绿色运行满足零 overrun、非故障样本 gap p99 `<100 ms`、最大值 `<250 ms`，且故障会话在 5 秒 deadline 内终止，才把 Linux 与端到端项改为通过。

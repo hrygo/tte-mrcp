@@ -682,9 +682,13 @@ Expected: generated inputs are synchronized and checks pass, or the exact unrela
 
 On a Windows builder with repository dependencies configured, build `unimrcp-2010.sln` and `unimrcp.sln` for Debug/Release Win32/x64, run both new test executables, load `demorecog.dll`, and run the 20-session loopback fixture. If that environment is unavailable, record Windows as “未验证”, not passed.
 
-- [ ] **Step 4: Run or explicitly defer Linux production-target gates**
+- [x] **Step 4: Define Linux production-target gates as a GitHub Actions workflow**
 
-On the target distribution/sysroot, run Autotools/CMake build, `make check`/CTest, `ldd` or equivalent dependency inspection, `demorecog.so` load, and the same 20-session loopback experiment. If unavailable, record Linux as “未验证”.
+`.github/workflows/build-linux.yml` 现在把 Linux 门禁定义为 CI：
+
+- `build-linux` 在 ABI 基线容器（RHEL 7 / Rocky Linux 8）内完成 Autotools 构建、`make check`（kylin 行另跑 CMake/CTest 插件测试）与 ELF/GLIBC/`ldd` 审计。
+- `verify-linux` 在 Rocky Linux 8 容器内完成 `demorecog.so`/`tts_websocket.so` 加载、RTP/MRCP 建链冒烟和 1 次预热 + 20 并发 split-payload loopback，并断言零 overrun、非故障 p99 `<100 ms`、最大值 `<250 ms`。
+- [ ] **Step 4a（待执行）**：Actions 首次绿色运行后，把 pacing JSON、fixture JSONL、server log 与测试日志作为证据回填到验证报告；在此之前 Linux 仍记录为“未验证/首跑待回填”，不得改为“已验证”。
 
 - [ ] **Step 5: Run final hygiene checks**
 
