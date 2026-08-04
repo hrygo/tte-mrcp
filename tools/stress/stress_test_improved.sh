@@ -29,6 +29,7 @@ SERVER_LOG=""               # demorecog 结构化 transport metrics 日志
 FIXTURE_REPORT=""           # funasr_ws_fixture.py JSONL 报告
 PACING_JSON=""              # 可选的 machine-readable pacing 汇总
 WARMUP=0                    # 正式采样前的 ASR 预热请求数
+FAULT_CONNECTION=1          # funasr_ws_fixture.py 的故障注入连接编号
 
 # 解析参数
 while getopts "c:t:i:r:a:o:s:d:h-:" opt; do
@@ -46,6 +47,7 @@ while getopts "c:t:i:r:a:o:s:d:h-:" opt; do
             echo "              [-a ASR音频目录] [-o ASR结果CSV] [-s 采样率] [-d 轮间延迟秒数]"
             echo "              [--tts-save] [--tts-var-dir 目录] [--round-delay=秒数]"
             echo "              [--server-log=文件] [--fixture-report=文件] [--pacing-json=文件] [--warmup=次数]"
+            echo "              [--fault-connection=编号] 传入 fixture 故障连接编号 (默认 1)"
             echo ""
             echo "参数说明:"
             echo "  -c  并发数，每轮同时发起的请求数 (默认: 1)"
@@ -63,6 +65,7 @@ while getopts "c:t:i:r:a:o:s:d:h-:" opt; do
             echo "  --fixture-report=文件  funasr_ws_fixture.py JSONL 报告（可选）"
             echo "  --pacing-json=文件     测试结束后生成 pacing JSON（可选）"
             echo "  --warmup=次数          ASR 正式采样前的串行预热次数（默认: 0）"
+            echo "  --fault-connection=编号 与 funasr_ws_fixture.py --fault-connection 保持一致"
             echo "  -h                显示此帮助信息"
             echo ""
             echo "===== 常用示例 ====="
@@ -124,6 +127,9 @@ while getopts "c:t:i:r:a:o:s:d:h-:" opt; do
                 warmup=*)
                     WARMUP="${OPTARG#*=}"
                     ;;
+                fault-connection=*)
+                    FAULT_CONNECTION="${OPTARG#*=}"
+                    ;;
                 *)
                     echo "未知选项: --$OPTARG"
                     exit 1
@@ -177,6 +183,7 @@ if [[ "$TEST_TYPE" == "asr" || "$TEST_TYPE" == "all" ]]; then
     if [[ "$WARMUP" -gt 0 ]]; then
         echo "预热请求:   $WARMUP"
     fi
+    echo "故障注入连接: $FAULT_CONNECTION"
 fi
 if [[ "$TEST_TYPE" == "tts" || "$TEST_TYPE" == "all" ]]; then
     echo "TTS 输出:   $TTS_VAR_DIR"
@@ -819,6 +826,7 @@ main() {
         if [[ -n "$FIXTURE_REPORT" ]]; then
             pacing_args+=(--fixture-report "$FIXTURE_REPORT")
         fi
+        pacing_args+=(--fault-connection "$FAULT_CONNECTION")
         if [[ ! -f "$fixture_tool" ]]; then
             echo -e "${RED}✗ pacing 汇总工具不存在: $fixture_tool${NC}"
             return 1
