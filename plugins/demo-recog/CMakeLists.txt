@@ -47,6 +47,7 @@ include_directories (
 	${APR_TOOLKIT_INCLUDE_DIRS}
 	${APR_INCLUDE_DIRS}
 	${APU_INCLUDE_DIRS}
+	${APRUTIL_INCLUDE_DIRS}
 )
 
 # Installation directives
@@ -69,9 +70,14 @@ if(BUILD_DEMORECOG_TESTS)
 
 	add_executable(test_funasr_ws_transport
 		tests/test_funasr_ws_transport.c
+		src/funasr_audio.c
 		src/funasr_clock.c
+		src/funasr_json.c
 		src/funasr_ws_transport.c)
-	target_link_libraries(test_funasr_ws_transport ${APR_LIBRARIES})
+	target_link_libraries(test_funasr_ws_transport
+		${APU_LIBRARIES}
+		${APRUTIL_LIBRARIES}
+		${APR_LIBRARIES})
 	set_target_properties(test_funasr_ws_transport PROPERTIES FOLDER "tests")
 	add_test(NAME demorecog_funasr_ws_transport COMMAND test_funasr_ws_transport)
 endif()

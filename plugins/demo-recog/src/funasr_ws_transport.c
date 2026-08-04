@@ -1,11 +1,69 @@
 #include "funasr_ws_transport.h"
+#include "funasr_audio.h"
+#include "funasr_json.h"
 
+#include <apr_base64.h>
+#include <apr_general.h>
+#include <apr_poll.h>
+#include <apr_sha1.h>
+#include <apr_strings.h>
+#include <apr_thread_cond.h>
+#include <apr_thread_proc.h>
 #include <apr_thread_mutex.h>
+#include <stdlib.h>
 #include <string.h>
+
+#define FUNASR_WS_GUID "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+#define FUNASR_CALL_ID_LIMIT 255U
+#define FUNASR_HANDSHAKE_BUFFER_SIZE 4096U
+#define FUNASR_WORKER_READ_BUFFER_SIZE 4096U
+#define FUNASR_WS_FRAME_OVERHEAD 14U
+
+typedef struct funasr_default_io_t {
+    apr_pool_t *pool;
+    apr_socket_t *socket;
+    apr_pollset_t *pollset;
+    apr_pollfd_t pollfd;
+    apr_int16_t registered_events;
+    apt_bool_t wakeable;
+} funasr_default_io_t;
+
+struct funasr_transport_t {
+    apr_pool_t *pool;
+    funasr_transport_id_t id;
+    funasr_transport_config_t config;
+    char *host;
+    char *path;
+    const funasr_transport_io_vtable_t *io_vtable;
+    void *io_obj;
+    funasr_default_io_t default_io;
+    apr_thread_mutex_t *mutex;
+    apr_thread_cond_t *condition;
+    apr_thread_t *thread;
+    funasr_tx_ring_t *ring;
+    funasr_transport_event_t *close_event;
+    funasr_generation_t generation;
+    funasr_audio_format_t format;
+    char call_id[FUNASR_CALL_ID_LIMIT + 1U];
+    funasr_transport_metrics_t metrics;
+    apr_int64_t last_media_us;
+    apr_size_t ring_limit;
+    apr_size_t chunk_size;
+    funasr_transport_failure_e media_failure;
+    apt_bool_t media_failure_latched;
+    apt_bool_t active;
+    apt_bool_t cancel_requested;
+    apt_bool_t close_requested;
+    apt_bool_t thread_started;
+    apt_bool_t worker_closed;
+    apt_bool_t close_fence_failed;
+    apt_bool_t joined;
+};
 
 struct funasr_tx_ring_t {
     unsigned char *data;
     apr_size_t capacity;
+    apr_size_t limit;
     apr_size_t read_offset;
     apr_size_t write_offset;
     apr_size_t size;
@@ -542,6 +600,7 @@ funasr_tx_ring_t *funasr_tx_ring_create(
     ring = apr_pcalloc(pool, sizeof(*ring));
     ring->data = apr_palloc(pool, capacity);
     ring->capacity = capacity;
+    ring->limit = capacity;
     if (!ring->data ||
         apr_thread_mutex_create(
             &ring->mutex,
@@ -593,7 +652,7 @@ funasr_enqueue_status_e funasr_tx_ring_enqueue(
         status = FUNASR_ENQUEUE_NOT_STREAMING;
     } else if (ring->generation != generation) {
         status = FUNASR_ENQUEUE_STALE_GENERATION;
-    } else if (size > ring->capacity - ring->size) {
+    } else if (size > ring->limit - ring->size) {
         ring->overrun_bytes += size;
         ring->overrun_events += 1;
         status = FUNASR_ENQUEUE_QUEUE_FULL;
@@ -708,4 +767,1420 @@ void funasr_tx_ring_close(funasr_tx_ring_t *ring)
     ring->active = FALSE;
     ring->closed = TRUE;
     apr_thread_mutex_unlock(ring->mutex);
+}
+
+static void funasr_tx_ring_set_limit(
+    funasr_tx_ring_t *ring,
+    apr_size_t limit)
+{
+    if (!ring) {
+        return;
+    }
+    apr_thread_mutex_lock(ring->mutex);
+    ring->limit = limit <= ring->capacity ? limit : ring->capacity;
+    apr_thread_mutex_unlock(ring->mutex);
+}
+
+void funasr_transport_event_destroy(funasr_transport_event_t *event)
+{
+    if (!event) {
+        return;
+    }
+    free(event->text);
+    free(event);
+}
+
+void funasr_transport_config_init(funasr_transport_config_t *config)
+{
+    if (!config) {
+        return;
+    }
+    memset(config, 0, sizeof(*config));
+    config->connect_timeout_us = FUNASR_CONNECT_TIMEOUT_US;
+    config->handshake_timeout_us = FUNASR_HANDSHAKE_TIMEOUT_US;
+    config->write_stall_timeout_us = FUNASR_WRITE_STALL_TIMEOUT_US;
+    config->stop_drain_timeout_us = FUNASR_STOP_DRAIN_TIMEOUT_US;
+    config->no_result_timeout_us = FUNASR_NO_RESULT_TIMEOUT_US;
+    config->poll_timeout_us = FUNASR_POLL_TIMEOUT_MS * 1000;
+    funasr_clock_default(&config->clock);
+}
+
+apt_bool_t funasr_ws_accept_compute(
+    const char *client_key,
+    char *output,
+    apr_size_t output_capacity)
+{
+    apr_sha1_ctx_t sha1;
+    unsigned char digest[APR_SHA1_DIGESTSIZE];
+    int encoded_size;
+    apr_size_t key_size;
+
+    if (!client_key || !output) {
+        return FALSE;
+    }
+    key_size = strlen(client_key);
+    if (key_size > 1024U || output_capacity < 29U) {
+        return FALSE;
+    }
+    apr_sha1_init(&sha1);
+    apr_sha1_update(&sha1, client_key, (unsigned int)key_size);
+    apr_sha1_update(
+        &sha1,
+        FUNASR_WS_GUID,
+        (unsigned int)(sizeof(FUNASR_WS_GUID) - 1U));
+    apr_sha1_final(digest, &sha1);
+    encoded_size = apr_base64_encode_binary(
+        output,
+        digest,
+        APR_SHA1_DIGESTSIZE);
+    return encoded_size > 0 && (apr_size_t)encoded_size <= output_capacity;
+}
+
+static apr_status_t funasr_default_io_open(
+    void *obj,
+    const char *host,
+    apr_port_t port,
+    apr_interval_time_t timeout)
+{
+    funasr_default_io_t *io;
+    apr_sockaddr_t *address;
+    apr_status_t status;
+    apr_uint32_t poll_flags;
+
+    io = (funasr_default_io_t *)obj;
+    io->socket = NULL;
+    io->pollset = NULL;
+    io->registered_events = 0;
+    io->wakeable = FALSE;
+    status = apr_sockaddr_info_get(
+        &address,
+        host,
+        APR_UNSPEC,
+        port,
+        0,
+        io->pool);
+    if (status != APR_SUCCESS) {
+        return status;
+    }
+    status = apr_socket_create(
+        &io->socket,
+        address->family,
+        SOCK_STREAM,
+        APR_PROTO_TCP,
+        io->pool);
+    if (status != APR_SUCCESS) {
+        return status;
+    }
+    apr_socket_timeout_set(io->socket, timeout);
+    status = apr_socket_connect(io->socket, address);
+    if (status != APR_SUCCESS) {
+        apr_socket_close(io->socket);
+        io->socket = NULL;
+        return status;
+    }
+    apr_socket_timeout_set(io->socket, 0);
+
+    poll_flags = 0;
+#ifdef APR_POLLSET_WAKEABLE
+    poll_flags = APR_POLLSET_WAKEABLE;
+#endif
+    status = apr_pollset_create(&io->pollset, 1, io->pool, poll_flags);
+    if (status == APR_ENOTIMPL && poll_flags != 0) {
+        status = apr_pollset_create(&io->pollset, 1, io->pool, 0);
+    } else if (status == APR_SUCCESS && poll_flags != 0) {
+        io->wakeable = TRUE;
+    }
+    if (status != APR_SUCCESS) {
+        apr_socket_close(io->socket);
+        io->socket = NULL;
+        return status;
+    }
+    memset(&io->pollfd, 0, sizeof(io->pollfd));
+    io->pollfd.p = io->pool;
+    io->pollfd.desc_type = APR_POLL_SOCKET;
+    io->pollfd.desc.s = io->socket;
+    return APR_SUCCESS;
+}
+
+static apr_status_t funasr_default_io_poll(
+    void *obj,
+    apr_interval_time_t timeout,
+    apt_bool_t want_write,
+    apr_int16_t *events)
+{
+    funasr_default_io_t *io;
+    apr_int16_t wanted;
+    apr_status_t status;
+    apr_int32_t count;
+    const apr_pollfd_t *descriptors;
+
+    io = (funasr_default_io_t *)obj;
+    if (!io->pollset || !io->socket || !events) {
+        return APR_EINVAL;
+    }
+    wanted = APR_POLLIN;
+    if (want_write) {
+        wanted |= APR_POLLOUT;
+    }
+    if (wanted != io->registered_events) {
+        if (io->registered_events != 0) {
+            apr_pollset_remove(io->pollset, &io->pollfd);
+        }
+        io->pollfd.reqevents = wanted;
+        status = apr_pollset_add(io->pollset, &io->pollfd);
+        if (status != APR_SUCCESS) {
+            return status;
+        }
+        io->registered_events = wanted;
+    }
+    *events = 0;
+    status = apr_pollset_poll(
+        io->pollset,
+        timeout,
+        &count,
+        &descriptors);
+    if (status == APR_SUCCESS && count > 0) {
+        if ((descriptors[0].rtnevents & APR_POLLIN) != 0) {
+            *events |= FUNASR_IO_READABLE;
+        }
+        if ((descriptors[0].rtnevents & APR_POLLOUT) != 0) {
+            *events |= FUNASR_IO_WRITABLE;
+        }
+        if ((descriptors[0].rtnevents &
+             (APR_POLLERR | APR_POLLHUP | APR_POLLNVAL)) != 0) {
+            return APR_EOF;
+        }
+    }
+    return status;
+}
+
+static apr_status_t funasr_default_io_read(
+    void *obj,
+    void *data,
+    apr_size_t *size)
+{
+    funasr_default_io_t *io = (funasr_default_io_t *)obj;
+    return apr_socket_recv(io->socket, (char *)data, size);
+}
+
+static apr_status_t funasr_default_io_write(
+    void *obj,
+    const void *data,
+    apr_size_t *size)
+{
+    funasr_default_io_t *io = (funasr_default_io_t *)obj;
+    return apr_socket_send(io->socket, (const char *)data, size);
+}
+
+static void funasr_default_io_close(void *obj)
+{
+    funasr_default_io_t *io = (funasr_default_io_t *)obj;
+    if (io->pollset) {
+        apr_pollset_destroy(io->pollset);
+        io->pollset = NULL;
+    }
+    if (io->socket) {
+        apr_socket_close(io->socket);
+        io->socket = NULL;
+    }
+    io->registered_events = 0;
+    io->wakeable = FALSE;
+}
+
+static apr_status_t funasr_default_io_wake(void *obj)
+{
+    funasr_default_io_t *io = (funasr_default_io_t *)obj;
+#ifdef APR_POLLSET_WAKEABLE
+    if (io->pollset && io->wakeable) {
+        return apr_pollset_wakeup(io->pollset);
+    }
+#endif
+    return APR_ENOTIMPL;
+}
+
+static const funasr_transport_io_vtable_t funasr_default_io_vtable = {
+    funasr_default_io_open,
+    funasr_default_io_poll,
+    funasr_default_io_read,
+    funasr_default_io_write,
+    funasr_default_io_close,
+    funasr_default_io_wake
+};
+
+static apt_bool_t funasr_status_retryable(apr_status_t status)
+{
+    return APR_STATUS_IS_EAGAIN(status) ||
+        APR_STATUS_IS_EINTR(status) ||
+        APR_STATUS_IS_TIMEUP(status);
+}
+
+static apt_bool_t funasr_emit_event(
+    funasr_transport_t *transport,
+    funasr_generation_t generation,
+    funasr_transport_event_type_e type,
+    funasr_transport_failure_e failure,
+    char *text,
+    apr_size_t text_size)
+{
+    funasr_transport_event_t *event;
+    apt_bool_t accepted;
+
+    event = (funasr_transport_event_t *)calloc(1, sizeof(*event));
+    if (!event) {
+        free(text);
+        return FALSE;
+    }
+    event->transport_id = transport->id;
+    event->generation = generation;
+    event->type = type;
+    event->failure = failure;
+    event->text = text;
+    event->text_size = text_size;
+    apr_thread_mutex_lock(transport->mutex);
+    event->metrics = transport->metrics;
+    apr_thread_mutex_unlock(transport->mutex);
+
+    accepted = FALSE;
+    if (transport->config.event_sink) {
+        accepted = transport->config.event_sink(
+            transport->config.event_sink_obj,
+            event);
+    }
+    if (!accepted) {
+        funasr_transport_event_destroy(event);
+    }
+    return accepted;
+}
+
+static apt_bool_t funasr_emit_close_fence(
+    funasr_transport_t *transport)
+{
+    funasr_transport_event_t *event;
+    apt_bool_t accepted;
+
+    event = transport->close_event;
+    transport->close_event = NULL;
+    if (!event) {
+        apr_thread_mutex_lock(transport->mutex);
+        transport->close_fence_failed = TRUE;
+        apr_thread_mutex_unlock(transport->mutex);
+        return FALSE;
+    }
+    event->transport_id = transport->id;
+    event->generation = transport->generation;
+    event->type = FUNASR_EVENT_WORKER_CLOSED;
+    apr_thread_mutex_lock(transport->mutex);
+    event->metrics = transport->metrics;
+    apr_thread_mutex_unlock(transport->mutex);
+    accepted = transport->config.event_sink(
+        transport->config.event_sink_obj,
+        event);
+    if (!accepted) {
+        funasr_transport_event_destroy(event);
+        apr_thread_mutex_lock(transport->mutex);
+        transport->close_fence_failed = TRUE;
+        apr_thread_mutex_unlock(transport->mutex);
+    }
+    return accepted;
+}
+
+static apt_bool_t funasr_http_header_value_equal(
+    const unsigned char *header,
+    apr_size_t size,
+    const char *name,
+    const char *expected)
+{
+    apr_size_t start;
+
+    start = 0;
+    while (start + 1U < size) {
+        apr_size_t end;
+        apr_size_t colon;
+        apr_size_t value_start;
+        apr_size_t value_end;
+
+        end = start;
+        while (end + 1U < size &&
+               !(header[end] == '\r' && header[end + 1U] == '\n')) {
+            ++end;
+        }
+        colon = start;
+        while (colon < end && header[colon] != ':') {
+            ++colon;
+        }
+        if (colon < end &&
+            funasr_span_equal_ci(header + start, colon - start, name)) {
+            value_start = colon + 1U;
+            while (value_start < end &&
+                   (header[value_start] == ' ' ||
+                    header[value_start] == '\t')) {
+                ++value_start;
+            }
+            value_end = end;
+            while (value_end > value_start &&
+                   (header[value_end - 1U] == ' ' ||
+                    header[value_end - 1U] == '\t')) {
+                --value_end;
+            }
+            return funasr_span_equal_ci(
+                header + value_start,
+                value_end - value_start,
+                expected);
+        }
+        if (end + 2U > size) {
+            break;
+        }
+        start = end + 2U;
+    }
+    return FALSE;
+}
+
+static apr_size_t funasr_ws_frame_encode(
+    funasr_transport_t *transport,
+    funasr_ws_opcode_e opcode,
+    const unsigned char *payload,
+    apr_size_t payload_size,
+    unsigned char *output,
+    apr_size_t output_capacity)
+{
+    unsigned char mask[4];
+    apr_size_t header_size;
+    apr_size_t index;
+
+    if (!output || payload_size > FUNASR_WS_FRAME_LIMIT) {
+        return 0;
+    }
+    header_size = 2U;
+    if (payload_size >= 126U && payload_size <= 65535U) {
+        header_size += 2U;
+    } else if (payload_size > 65535U) {
+        header_size += 8U;
+    }
+    header_size += 4U;
+    if (payload_size > output_capacity - header_size) {
+        return 0;
+    }
+    output[0] = (unsigned char)(0x80U | (unsigned char)opcode);
+    if (payload_size < 126U) {
+        output[1] = (unsigned char)(0x80U | payload_size);
+        header_size = 2U;
+    } else if (payload_size <= 65535U) {
+        output[1] = 0xFEU;
+        output[2] = (unsigned char)((payload_size >> 8) & 0xFFU);
+        output[3] = (unsigned char)(payload_size & 0xFFU);
+        header_size = 4U;
+    } else {
+        apr_uint64_t length = payload_size;
+        output[1] = 0xFFU;
+        for (index = 0; index < 8U; ++index) {
+            output[2U + index] =
+                (unsigned char)((length >> (56U - index * 8U)) & 0xFFU);
+        }
+        header_size = 10U;
+    }
+    if (apr_generate_random_bytes(mask, sizeof(mask)) != APR_SUCCESS) {
+        apr_uint64_t seed = transport->id ^ transport->generation;
+        for (index = 0; index < sizeof(mask); ++index) {
+            mask[index] = (unsigned char)(seed >> (index * 8U));
+        }
+    }
+    memcpy(output + header_size, mask, sizeof(mask));
+    header_size += sizeof(mask);
+    for (index = 0; index < payload_size; ++index) {
+        output[header_size + index] =
+            (unsigned char)(payload[index] ^ mask[index % 4U]);
+    }
+    return header_size + payload_size;
+}
+
+static apt_bool_t funasr_transport_generation_state(
+    funasr_transport_t *transport,
+    funasr_generation_t generation,
+    apt_bool_t *cancel,
+    apt_bool_t *close,
+    apt_bool_t *failed,
+    funasr_transport_failure_e *failure)
+{
+    apt_bool_t current;
+
+    apr_thread_mutex_lock(transport->mutex);
+    current = transport->active && transport->generation == generation;
+    *cancel = transport->cancel_requested;
+    *close = transport->close_requested;
+    *failed = transport->media_failure_latched;
+    *failure = transport->media_failure;
+    apr_thread_mutex_unlock(transport->mutex);
+    return current;
+}
+
+static void funasr_transport_finish_generation(
+    funasr_transport_t *transport,
+    funasr_generation_t generation)
+{
+    apr_thread_mutex_lock(transport->mutex);
+    if (transport->generation == generation) {
+        transport->active = FALSE;
+        transport->cancel_requested = FALSE;
+    }
+    apr_thread_mutex_unlock(transport->mutex);
+}
+
+static apt_bool_t funasr_worker_write_pending(
+    funasr_transport_t *transport,
+    unsigned char *buffer,
+    apr_size_t size,
+    apr_size_t *offset,
+    apr_int64_t *last_progress_us)
+{
+    apr_size_t amount;
+    apr_status_t status;
+
+    amount = size - *offset;
+    status = transport->io_vtable->write(
+        transport->io_obj,
+        buffer + *offset,
+        &amount);
+    if (status == APR_SUCCESS && amount != 0) {
+        *offset += amount;
+        *last_progress_us = funasr_clock_now_us(&transport->config.clock);
+        return TRUE;
+    }
+    if (funasr_status_retryable(status)) {
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static apt_bool_t funasr_worker_handshake(
+    funasr_transport_t *transport,
+    funasr_generation_t generation,
+    funasr_ws_decoder_t *ws_decoder)
+{
+    unsigned char nonce[16];
+    char key[32];
+    char accept[32];
+    char request[FUNASR_HANDSHAKE_BUFFER_SIZE];
+    unsigned char header_storage[FUNASR_HTTP_HEADER_LIMIT];
+    unsigned char input[FUNASR_WORKER_READ_BUFFER_SIZE];
+    funasr_http_decoder_t http_decoder;
+    apr_int64_t deadline;
+    apr_size_t request_size;
+    apr_size_t request_offset;
+    apr_size_t index;
+    int result;
+
+    if (apr_generate_random_bytes(nonce, sizeof(nonce)) != APR_SUCCESS) {
+        for (index = 0; index < sizeof(nonce); ++index) {
+            nonce[index] = (unsigned char)(generation >> ((index % 8U) * 8U));
+        }
+    }
+    if (apr_base64_encode_binary(key, nonce, sizeof(nonce)) <= 0 ||
+        !funasr_ws_accept_compute(key, accept, sizeof(accept))) {
+        return FALSE;
+    }
+    result = apr_snprintf(
+        request,
+        sizeof(request),
+        "GET %s?system_id=ncc&scene_id=outcall&call_id=%s&sample_rate=%u&n_channels=%u&sample_width=%u HTTP/1.1\r\n"
+        "Host: %s:%u\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: %s\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n",
+        transport->path,
+        transport->call_id,
+        (unsigned int)transport->format.output_sample_rate,
+        (unsigned int)transport->format.channel_count,
+        (unsigned int)transport->format.sample_width,
+        transport->host,
+        (unsigned int)transport->config.port,
+        key);
+    if (result <= 0 || (apr_size_t)result >= sizeof(request)) {
+        return FALSE;
+    }
+    request_size = (apr_size_t)result;
+    request_offset = 0;
+    funasr_http_decoder_init(
+        &http_decoder,
+        header_storage,
+        sizeof(header_storage));
+    deadline = funasr_clock_now_us(&transport->config.clock) +
+        transport->config.handshake_timeout_us;
+
+    while (funasr_clock_now_us(&transport->config.clock) < deadline) {
+        apr_int16_t events;
+        apr_status_t status;
+
+        status = transport->io_vtable->poll(
+            transport->io_obj,
+            transport->config.poll_timeout_us,
+            request_offset < request_size,
+            &events);
+        if (status != APR_SUCCESS && !funasr_status_retryable(status)) {
+            return FALSE;
+        }
+        if ((events & FUNASR_IO_WRITABLE) != 0 &&
+            request_offset < request_size) {
+            apr_size_t amount = request_size - request_offset;
+            status = transport->io_vtable->write(
+                transport->io_obj,
+                request + request_offset,
+                &amount);
+            if (status == APR_SUCCESS) {
+                request_offset += amount;
+            } else if (!funasr_status_retryable(status)) {
+                return FALSE;
+            }
+        }
+        if ((events & FUNASR_IO_READABLE) != 0) {
+            apr_size_t amount = sizeof(input);
+            apr_size_t consumed = 0;
+            funasr_http_status_e http_status;
+
+            status = transport->io_vtable->read(
+                transport->io_obj,
+                input,
+                &amount);
+            if (status == APR_EOF || (status == APR_SUCCESS && amount == 0)) {
+                return FALSE;
+            }
+            if (status != APR_SUCCESS) {
+                if (funasr_status_retryable(status)) {
+                    continue;
+                }
+                return FALSE;
+            }
+            http_status = funasr_http_decoder_feed(
+                &http_decoder,
+                input,
+                amount,
+                &consumed);
+            if (http_status == FUNASR_HTTP_COMPLETE) {
+                if (!funasr_http_header_value_equal(
+                        http_decoder.storage,
+                        http_decoder.size,
+                        "sec-websocket-accept",
+                        accept)) {
+                    return FALSE;
+                }
+                if (consumed < amount) {
+                    funasr_ws_event_t event;
+                    if (funasr_ws_decoder_feed(
+                            ws_decoder,
+                            input + consumed,
+                            amount - consumed,
+                            &event) == FUNASR_WS_PROTOCOL_ERROR) {
+                        return FALSE;
+                    }
+                }
+                return TRUE;
+            }
+            if (http_status != FUNASR_HTTP_NEED_MORE) {
+                return FALSE;
+            }
+        }
+    }
+    return FALSE;
+}
+
+static apt_bool_t funasr_worker_handle_ws_event(
+    funasr_transport_t *transport,
+    funasr_generation_t generation,
+    const funasr_ws_event_t *ws_event,
+    unsigned char *tx_buffer,
+    apr_size_t tx_capacity,
+    apr_size_t *tx_size,
+    apr_size_t *tx_offset,
+    apt_bool_t *final_received)
+{
+    if (ws_event->type == FUNASR_WS_EVENT_MESSAGE &&
+        ws_event->opcode == FUNASR_WS_OPCODE_TEXT) {
+        int code;
+        char *text_value;
+        apr_size_t text_size;
+
+        apr_thread_mutex_lock(transport->mutex);
+        transport->metrics.ws_rx_messages++;
+        apr_thread_mutex_unlock(transport->mutex);
+        if (funasr_json_get_int(
+                (const char *)ws_event->data,
+                ws_event->size,
+                "code",
+                &code) != FUNASR_JSON_OK || code != 0) {
+            return FALSE;
+        }
+        text_value = NULL;
+        text_size = 0;
+        if (funasr_json_get_string_heap(
+                (const char *)ws_event->data,
+                ws_event->size,
+                "text",
+                FUNASR_WS_MESSAGE_LIMIT,
+                &text_value,
+                &text_size) != FUNASR_JSON_OK) {
+            return FALSE;
+        }
+        funasr_emit_event(
+            transport,
+            generation,
+            FUNASR_EVENT_FINAL_RESULT,
+            FUNASR_FAILURE_INTERNAL,
+            text_value,
+            text_size);
+        *final_received = TRUE;
+        return TRUE;
+    }
+    if (ws_event->type == FUNASR_WS_EVENT_PING && *tx_size == *tx_offset) {
+        *tx_size = funasr_ws_frame_encode(
+            transport,
+            FUNASR_WS_OPCODE_PONG,
+            ws_event->data,
+            ws_event->size,
+            tx_buffer,
+            tx_capacity);
+        *tx_offset = 0;
+        return *tx_size != 0;
+    }
+    if (ws_event->type == FUNASR_WS_EVENT_CLOSE) {
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static apt_bool_t funasr_worker_read_available(
+    funasr_transport_t *transport,
+    funasr_generation_t generation,
+    funasr_ws_decoder_t *decoder,
+    unsigned char *tx_buffer,
+    apr_size_t tx_capacity,
+    apr_size_t *tx_size,
+    apr_size_t *tx_offset,
+    apt_bool_t *final_received)
+{
+    unsigned char input[FUNASR_WORKER_READ_BUFFER_SIZE];
+    apr_size_t budget;
+
+    budget = 64U * 1024U;
+    while (budget != 0) {
+        apr_size_t amount = sizeof(input);
+        apr_status_t status;
+        funasr_ws_status_e ws_status;
+        funasr_ws_event_t ws_event;
+
+        if (amount > budget) {
+            amount = budget;
+        }
+        status = transport->io_vtable->read(
+            transport->io_obj,
+            input,
+            &amount);
+        if (status == APR_EOF || (status == APR_SUCCESS && amount == 0)) {
+            return FALSE;
+        }
+        if (status != APR_SUCCESS) {
+            return funasr_status_retryable(status);
+        }
+        budget -= amount;
+        apr_thread_mutex_lock(transport->mutex);
+        if (amount < sizeof(input)) {
+            transport->metrics.ws_rx_partial_reads++;
+        }
+        apr_thread_mutex_unlock(transport->mutex);
+        ws_status = funasr_ws_decoder_feed(
+            decoder,
+            input,
+            amount,
+            &ws_event);
+        while (ws_status == FUNASR_WS_EVENT_READY) {
+            if (!funasr_worker_handle_ws_event(
+                    transport,
+                    generation,
+                    &ws_event,
+                    tx_buffer,
+                    tx_capacity,
+                    tx_size,
+                    tx_offset,
+                    final_received)) {
+                return FALSE;
+            }
+            if (*final_received) {
+                return TRUE;
+            }
+            ws_status = funasr_ws_decoder_feed(
+                decoder,
+                NULL,
+                0,
+                &ws_event);
+        }
+        if (ws_status == FUNASR_WS_PROTOCOL_ERROR ||
+            ws_status == FUNASR_WS_LIMIT_EXCEEDED) {
+            return FALSE;
+        }
+        if (amount < sizeof(input)) {
+            return TRUE;
+        }
+    }
+    return TRUE;
+}
+
+static void funasr_worker_emit_failure(
+    funasr_transport_t *transport,
+    funasr_generation_t generation,
+    funasr_transport_failure_e failure)
+{
+    apr_thread_mutex_lock(transport->mutex);
+    transport->metrics.completion_failure = failure;
+    apr_thread_mutex_unlock(transport->mutex);
+    funasr_emit_event(
+        transport,
+        generation,
+        FUNASR_EVENT_TRANSPORT_FAILED,
+        failure,
+        NULL,
+        0);
+}
+
+static void *APR_THREAD_FUNC funasr_transport_worker(
+    apr_thread_t *thread,
+    void *obj)
+{
+    funasr_transport_t *transport;
+    unsigned char *frame_payload;
+    unsigned char *tx_buffer;
+    unsigned char *frame_storage;
+    unsigned char *message_storage;
+    apr_size_t max_chunk;
+
+    (void)thread;
+    transport = (funasr_transport_t *)obj;
+    max_chunk = funasr_pcm_bytes_for_ms(
+        FUNASR_OUTPUT_SAMPLE_RATE,
+        FUNASR_MAX_CHANNELS,
+        FUNASR_SAMPLE_WIDTH_BYTES,
+        FUNASR_WS_CHUNK_DURATION_MS);
+    frame_payload = apr_palloc(transport->pool, max_chunk);
+    tx_buffer = apr_palloc(
+        transport->pool,
+        max_chunk + FUNASR_WS_FRAME_OVERHEAD);
+    frame_storage = apr_palloc(
+        transport->pool,
+        FUNASR_WS_FRAME_LIMIT + FUNASR_WS_FRAME_OVERHEAD);
+    message_storage = apr_palloc(
+        transport->pool,
+        FUNASR_WS_MESSAGE_LIMIT);
+
+    for (;;) {
+        funasr_generation_t generation;
+        apt_bool_t close_requested;
+
+        apr_thread_mutex_lock(transport->mutex);
+        while (!transport->active && !transport->close_requested) {
+            apr_thread_cond_timedwait(
+                transport->condition,
+                transport->mutex,
+                transport->config.poll_timeout_us);
+        }
+        close_requested = transport->close_requested;
+        generation = transport->generation;
+        apr_thread_mutex_unlock(transport->mutex);
+        if (close_requested) {
+            break;
+        }
+
+        {
+            funasr_ws_decoder_t decoder;
+            apr_status_t open_status;
+            apr_size_t tx_size;
+            apr_size_t tx_offset;
+            apr_int64_t last_write_progress_us;
+            apr_int64_t first_send_us;
+            apr_int64_t stop_started_us;
+            apt_bool_t input_started;
+            apt_bool_t end_frame_queued;
+            apt_bool_t final_received;
+            apt_bool_t generation_failed;
+            apt_bool_t generation_drained;
+            funasr_transport_failure_e terminal_failure;
+
+            tx_size = 0;
+            tx_offset = 0;
+            last_write_progress_us =
+                funasr_clock_now_us(&transport->config.clock);
+            first_send_us = 0;
+            stop_started_us = 0;
+            input_started = FALSE;
+            end_frame_queued = FALSE;
+            final_received = FALSE;
+            generation_failed = FALSE;
+            generation_drained = FALSE;
+            terminal_failure = FUNASR_FAILURE_INTERNAL;
+            funasr_ws_decoder_init(
+                &decoder,
+                frame_storage,
+                FUNASR_WS_FRAME_LIMIT + FUNASR_WS_FRAME_OVERHEAD,
+                message_storage,
+                FUNASR_WS_MESSAGE_LIMIT,
+                FUNASR_WS_FRAME_LIMIT,
+                FUNASR_WS_MESSAGE_LIMIT);
+
+            open_status = transport->io_vtable->open(
+                transport->io_obj,
+                transport->host,
+                transport->config.port,
+                transport->config.connect_timeout_us);
+            if (open_status != APR_SUCCESS) {
+                terminal_failure = FUNASR_FAILURE_CONNECT;
+                generation_failed = TRUE;
+            } else if (!funasr_worker_handshake(
+                           transport,
+                           generation,
+                           &decoder)) {
+                terminal_failure = FUNASR_FAILURE_HANDSHAKE;
+                generation_failed = TRUE;
+            }
+
+            while (!generation_failed && !final_received &&
+                   !generation_drained) {
+                apt_bool_t cancel;
+                apt_bool_t close;
+                apt_bool_t media_failed;
+                funasr_transport_failure_e media_failure;
+                apr_int64_t now_us;
+                apr_int16_t events;
+                apr_status_t poll_status;
+                apr_size_t ring_size;
+
+                if (!funasr_transport_generation_state(
+                        transport,
+                        generation,
+                        &cancel,
+                        &close,
+                        &media_failed,
+                        &media_failure)) {
+                    break;
+                }
+                if (close) {
+                    break;
+                }
+                now_us = funasr_clock_now_us(&transport->config.clock);
+                if (media_failed) {
+                    terminal_failure = media_failure;
+                    generation_failed = TRUE;
+                    break;
+                }
+                if (cancel && stop_started_us == 0) {
+                    stop_started_us = now_us;
+                }
+
+                ring_size = funasr_tx_ring_size(transport->ring);
+                if (ring_size != 0 && !input_started) {
+                    funasr_emit_event(
+                        transport,
+                        generation,
+                        FUNASR_EVENT_INPUT_STARTED,
+                        FUNASR_FAILURE_INTERNAL,
+                        NULL,
+                        0);
+                    input_started = TRUE;
+                }
+                if (tx_size == tx_offset &&
+                    (ring_size >= transport->chunk_size ||
+                     (cancel && ring_size != 0))) {
+                    apr_size_t amount = transport->chunk_size;
+                    if (amount > ring_size) {
+                        amount = ring_size;
+                    }
+                    if (funasr_tx_ring_dequeue(
+                            transport->ring,
+                            frame_payload,
+                            &amount)) {
+                        tx_size = funasr_ws_frame_encode(
+                            transport,
+                            FUNASR_WS_OPCODE_BINARY,
+                            frame_payload,
+                            amount,
+                            tx_buffer,
+                            max_chunk + FUNASR_WS_FRAME_OVERHEAD);
+                        tx_offset = 0;
+                    }
+                }
+                if (cancel && tx_size == tx_offset &&
+                    funasr_tx_ring_size(transport->ring) == 0 &&
+                    !end_frame_queued) {
+                    tx_size = funasr_ws_frame_encode(
+                        transport,
+                        FUNASR_WS_OPCODE_BINARY,
+                        NULL,
+                        0,
+                        tx_buffer,
+                        max_chunk + FUNASR_WS_FRAME_OVERHEAD);
+                    tx_offset = 0;
+                    end_frame_queued = TRUE;
+                }
+                if (cancel && end_frame_queued &&
+                    tx_size == tx_offset) {
+                    funasr_emit_event(
+                        transport,
+                        generation,
+                        FUNASR_EVENT_GENERATION_DRAINED,
+                        FUNASR_FAILURE_INTERNAL,
+                        NULL,
+                        0);
+                    generation_drained = TRUE;
+                    break;
+                }
+
+                poll_status = transport->io_vtable->poll(
+                    transport->io_obj,
+                    transport->config.poll_timeout_us,
+                    tx_size != tx_offset,
+                    &events);
+                if (poll_status != APR_SUCCESS &&
+                    !funasr_status_retryable(poll_status)) {
+                    terminal_failure = FUNASR_FAILURE_EOF;
+                    generation_failed = TRUE;
+                    break;
+                }
+                if ((events & FUNASR_IO_WRITABLE) != 0 &&
+                    tx_size != tx_offset) {
+                    apr_size_t before = tx_offset;
+                    if (!funasr_worker_write_pending(
+                            transport,
+                            tx_buffer,
+                            tx_size,
+                            &tx_offset,
+                            &last_write_progress_us)) {
+                        terminal_failure = FUNASR_FAILURE_EOF;
+                        generation_failed = TRUE;
+                        break;
+                    }
+                    if (tx_offset > before && first_send_us == 0) {
+                        first_send_us = last_write_progress_us;
+                    }
+                }
+                if ((events & FUNASR_IO_READABLE) != 0 &&
+                    !funasr_worker_read_available(
+                        transport,
+                        generation,
+                        &decoder,
+                        tx_buffer,
+                        max_chunk + FUNASR_WS_FRAME_OVERHEAD,
+                        &tx_size,
+                        &tx_offset,
+                        &final_received)) {
+                    terminal_failure = FUNASR_FAILURE_PROTOCOL;
+                    generation_failed = TRUE;
+                    break;
+                }
+                now_us = funasr_clock_now_us(&transport->config.clock);
+                if (tx_size != tx_offset &&
+                    now_us - last_write_progress_us >=
+                        transport->config.write_stall_timeout_us) {
+                    terminal_failure = FUNASR_FAILURE_WRITE_STALL;
+                    generation_failed = TRUE;
+                    break;
+                }
+                if (cancel && stop_started_us != 0 &&
+                    now_us - stop_started_us >=
+                        transport->config.stop_drain_timeout_us) {
+                    funasr_emit_event(
+                        transport,
+                        generation,
+                        FUNASR_EVENT_GENERATION_DRAINED,
+                        FUNASR_FAILURE_WRITE_STALL,
+                        NULL,
+                        0);
+                    generation_drained = TRUE;
+                    break;
+                }
+                if (!cancel && first_send_us != 0 &&
+                    now_us - first_send_us >=
+                        transport->config.no_result_timeout_us) {
+                    terminal_failure = FUNASR_FAILURE_NO_RESULT_TIMEOUT;
+                    generation_failed = TRUE;
+                    break;
+                }
+            }
+
+            transport->io_vtable->close(transport->io_obj);
+            if (generation_failed) {
+                apt_bool_t cancel;
+                apt_bool_t close;
+                apt_bool_t ignored_failed;
+                funasr_transport_failure_e ignored_failure;
+                funasr_transport_generation_state(
+                    transport,
+                    generation,
+                    &cancel,
+                    &close,
+                    &ignored_failed,
+                    &ignored_failure);
+                if (cancel) {
+                    funasr_emit_event(
+                        transport,
+                        generation,
+                        FUNASR_EVENT_GENERATION_DRAINED,
+                        terminal_failure,
+                        NULL,
+                        0);
+                } else if (!close) {
+                    funasr_worker_emit_failure(
+                        transport,
+                        generation,
+                        terminal_failure);
+                }
+            }
+            funasr_transport_finish_generation(transport, generation);
+        }
+    }
+
+    transport->io_vtable->close(transport->io_obj);
+    funasr_emit_event(
+        transport,
+        transport->generation,
+        FUNASR_EVENT_TRANSPORT_METRICS,
+        FUNASR_FAILURE_INTERNAL,
+        NULL,
+        0);
+    funasr_emit_close_fence(transport);
+    apr_thread_mutex_lock(transport->mutex);
+    transport->worker_closed = TRUE;
+    apr_thread_cond_broadcast(transport->condition);
+    apr_thread_mutex_unlock(transport->mutex);
+    return NULL;
+}
+
+funasr_transport_t *funasr_transport_create(
+    apr_pool_t *engine_pool,
+    funasr_transport_id_t id,
+    const funasr_transport_config_t *config)
+{
+    funasr_transport_t *transport;
+    apr_pool_t *pool;
+    apr_size_t max_ring;
+
+    if (!engine_pool || !config || id == 0 || !config->host ||
+        !config->path || !config->event_sink) {
+        return NULL;
+    }
+    if (apr_pool_create(&pool, engine_pool) != APR_SUCCESS) {
+        return NULL;
+    }
+    transport = apr_pcalloc(pool, sizeof(*transport));
+    transport->pool = pool;
+    transport->id = id;
+    transport->config = *config;
+    transport->host = apr_pstrdup(pool, config->host);
+    transport->path = apr_pstrdup(pool, config->path);
+    transport->config.host = transport->host;
+    transport->config.path = transport->path;
+    if (!transport->config.clock.now_us) {
+        funasr_clock_default(&transport->config.clock);
+    }
+    if (transport->config.poll_timeout_us <= 0) {
+        transport->config.poll_timeout_us = FUNASR_POLL_TIMEOUT_MS * 1000;
+    }
+    if (transport->config.connect_timeout_us <= 0) {
+        transport->config.connect_timeout_us = FUNASR_CONNECT_TIMEOUT_US;
+    }
+    if (transport->config.handshake_timeout_us <= 0) {
+        transport->config.handshake_timeout_us = FUNASR_HANDSHAKE_TIMEOUT_US;
+    }
+    if (transport->config.write_stall_timeout_us <= 0) {
+        transport->config.write_stall_timeout_us =
+            FUNASR_WRITE_STALL_TIMEOUT_US;
+    }
+    if (transport->config.stop_drain_timeout_us <= 0) {
+        transport->config.stop_drain_timeout_us =
+            FUNASR_STOP_DRAIN_TIMEOUT_US;
+    }
+    if (transport->config.no_result_timeout_us <= 0) {
+        transport->config.no_result_timeout_us =
+            FUNASR_NO_RESULT_TIMEOUT_US;
+    }
+    if (apr_thread_mutex_create(
+            &transport->mutex,
+            APR_THREAD_MUTEX_DEFAULT,
+            pool) != APR_SUCCESS ||
+        apr_thread_cond_create(&transport->condition, pool) != APR_SUCCESS) {
+        apr_pool_destroy(pool);
+        return NULL;
+    }
+    max_ring = funasr_pcm_bytes_for_ms(
+        FUNASR_OUTPUT_SAMPLE_RATE,
+        FUNASR_MAX_CHANNELS,
+        FUNASR_SAMPLE_WIDTH_BYTES,
+        FUNASR_TX_RING_DURATION_MS);
+    transport->ring = funasr_tx_ring_create(pool, max_ring);
+    transport->close_event =
+        (funasr_transport_event_t *)calloc(1, sizeof(*transport->close_event));
+    if (!transport->ring || !transport->close_event) {
+        free(transport->close_event);
+        apr_pool_destroy(pool);
+        return NULL;
+    }
+    if (config->io_vtable) {
+        transport->io_vtable = config->io_vtable;
+        transport->io_obj = config->io_obj;
+    } else {
+        transport->default_io.pool = pool;
+        transport->io_vtable = &funasr_default_io_vtable;
+        transport->io_obj = &transport->default_io;
+    }
+    return transport;
+}
+
+apt_bool_t funasr_transport_begin_generation(
+    funasr_transport_t *transport,
+    funasr_generation_t generation,
+    const funasr_audio_format_t *format)
+{
+    apr_size_t ring_limit;
+    apr_size_t chunk_size;
+
+    if (!transport || !format || generation == 0 ||
+        format->output_sample_rate != FUNASR_OUTPUT_SAMPLE_RATE ||
+        format->sample_width != FUNASR_SAMPLE_WIDTH_BYTES ||
+        format->channel_count == 0 ||
+        format->channel_count > FUNASR_MAX_CHANNELS ||
+        !format->call_id || strlen(format->call_id) > FUNASR_CALL_ID_LIMIT) {
+        return FALSE;
+    }
+    ring_limit = funasr_pcm_bytes_for_ms(
+        format->output_sample_rate,
+        format->channel_count,
+        format->sample_width,
+        FUNASR_TX_RING_DURATION_MS);
+    chunk_size = funasr_pcm_bytes_for_ms(
+        format->output_sample_rate,
+        format->channel_count,
+        format->sample_width,
+        FUNASR_WS_CHUNK_DURATION_MS);
+    if (ring_limit == 0 || chunk_size == 0) {
+        return FALSE;
+    }
+    apr_thread_mutex_lock(transport->mutex);
+    if (transport->active || transport->close_requested ||
+        transport->worker_closed) {
+        apr_thread_mutex_unlock(transport->mutex);
+        return FALSE;
+    }
+    transport->generation = generation;
+    transport->format = *format;
+    memcpy(
+        transport->call_id,
+        format->call_id,
+        strlen(format->call_id) + 1U);
+    transport->format.call_id = transport->call_id;
+    memset(&transport->metrics, 0, sizeof(transport->metrics));
+    transport->last_media_us = 0;
+    transport->ring_limit = ring_limit;
+    transport->chunk_size = chunk_size;
+    transport->media_failure_latched = FALSE;
+    transport->cancel_requested = FALSE;
+    transport->active = TRUE;
+    funasr_tx_ring_set_limit(transport->ring, ring_limit);
+    funasr_tx_ring_begin(transport->ring, generation);
+    if (!transport->thread_started) {
+        if (apr_thread_create(
+                &transport->thread,
+                NULL,
+                funasr_transport_worker,
+                transport,
+                transport->pool) != APR_SUCCESS) {
+            transport->active = FALSE;
+            apr_thread_mutex_unlock(transport->mutex);
+            return FALSE;
+        }
+        transport->thread_started = TRUE;
+    }
+    apr_thread_cond_signal(transport->condition);
+    apr_thread_mutex_unlock(transport->mutex);
+    return TRUE;
+}
+
+apt_bool_t funasr_transport_media_snapshot(
+    funasr_transport_t *transport,
+    funasr_media_snapshot_t *snapshot)
+{
+    if (!transport || !snapshot) {
+        return FALSE;
+    }
+    apr_thread_mutex_lock(transport->mutex);
+    if (!transport->active) {
+        apr_thread_mutex_unlock(transport->mutex);
+        return FALSE;
+    }
+    snapshot->generation = transport->generation;
+    snapshot->input_sample_rate = transport->format.input_sample_rate;
+    snapshot->channel_count = transport->format.channel_count;
+    apr_thread_mutex_unlock(transport->mutex);
+    return TRUE;
+}
+
+funasr_enqueue_status_e funasr_transport_enqueue_pcm(
+    funasr_transport_t *transport,
+    funasr_generation_t generation,
+    const void *data,
+    apr_size_t size,
+    apr_int64_t now_us)
+{
+    funasr_enqueue_status_e status;
+    apr_size_t ring_size;
+
+    if (!transport) {
+        return FUNASR_ENQUEUE_NOT_STREAMING;
+    }
+    status = funasr_tx_ring_enqueue(
+        transport->ring,
+        generation,
+        data,
+        size);
+    apr_thread_mutex_lock(transport->mutex);
+    if (status == FUNASR_ENQUEUE_ACCEPTED) {
+        apr_int64_t gap = transport->last_media_us == 0 ?
+            0 : now_us - transport->last_media_us;
+        transport->metrics.media_frames++;
+        if (gap > transport->metrics.media_gap_max_us) {
+            transport->metrics.media_gap_max_us = gap;
+        }
+        transport->last_media_us = now_us;
+        ring_size = funasr_tx_ring_size(transport->ring);
+        if (ring_size > transport->metrics.tx_ring_high_water_bytes) {
+            transport->metrics.tx_ring_high_water_bytes = ring_size;
+        }
+    } else if (status == FUNASR_ENQUEUE_QUEUE_FULL &&
+               transport->generation == generation &&
+               !transport->media_failure_latched) {
+        transport->media_failure_latched = TRUE;
+        transport->media_failure = FUNASR_FAILURE_QUEUE_OVERRUN;
+        transport->metrics.tx_ring_overrun_bytes =
+            funasr_tx_ring_overrun_bytes(transport->ring);
+        transport->metrics.tx_ring_overrun_events =
+            funasr_tx_ring_overrun_events(transport->ring);
+    }
+    apr_thread_cond_signal(transport->condition);
+    apr_thread_mutex_unlock(transport->mutex);
+    funasr_transport_wake(transport);
+    return status;
+}
+
+apt_bool_t funasr_transport_latch_media_failure(
+    funasr_transport_t *transport,
+    funasr_generation_t generation,
+    funasr_transport_failure_e failure)
+{
+    apt_bool_t latched;
+
+    if (!transport) {
+        return FALSE;
+    }
+    apr_thread_mutex_lock(transport->mutex);
+    latched = transport->active &&
+        transport->generation == generation &&
+        !transport->media_failure_latched;
+    if (latched) {
+        transport->media_failure_latched = TRUE;
+        transport->media_failure = failure;
+        apr_thread_cond_signal(transport->condition);
+    }
+    apr_thread_mutex_unlock(transport->mutex);
+    if (latched) {
+        funasr_transport_wake(transport);
+    }
+    return latched;
+}
+
+apt_bool_t funasr_transport_cancel_generation(
+    funasr_transport_t *transport,
+    funasr_generation_t generation)
+{
+    apt_bool_t accepted;
+
+    if (!transport) {
+        return FALSE;
+    }
+    apr_thread_mutex_lock(transport->mutex);
+    accepted = transport->active &&
+        transport->generation == generation;
+    if (accepted) {
+        transport->cancel_requested = TRUE;
+        apr_thread_cond_signal(transport->condition);
+    }
+    apr_thread_mutex_unlock(transport->mutex);
+    if (accepted) {
+        funasr_transport_wake(transport);
+    }
+    return accepted;
+}
+
+apt_bool_t funasr_transport_wake(funasr_transport_t *transport)
+{
+    apr_status_t status;
+
+    if (!transport) {
+        return FALSE;
+    }
+    apr_thread_mutex_lock(transport->mutex);
+    apr_thread_cond_signal(transport->condition);
+    apr_thread_mutex_unlock(transport->mutex);
+    status = transport->io_vtable->wake(transport->io_obj);
+    return status == APR_SUCCESS || status == APR_ENOTIMPL;
+}
+
+apt_bool_t funasr_transport_request_close(funasr_transport_t *transport)
+{
+    if (!transport) {
+        return FALSE;
+    }
+    apr_thread_mutex_lock(transport->mutex);
+    if (transport->close_requested) {
+        apr_thread_mutex_unlock(transport->mutex);
+        return TRUE;
+    }
+    transport->close_requested = TRUE;
+    transport->active = FALSE;
+    funasr_tx_ring_close(transport->ring);
+    apr_thread_cond_broadcast(transport->condition);
+    apr_thread_mutex_unlock(transport->mutex);
+    funasr_transport_wake(transport);
+    return TRUE;
+}
+
+apr_status_t funasr_transport_join_closed(funasr_transport_t *transport)
+{
+    apr_status_t thread_status;
+    apr_status_t status;
+
+    if (!transport) {
+        return APR_EINVAL;
+    }
+    apr_thread_mutex_lock(transport->mutex);
+    if (!transport->thread_started) {
+        transport->worker_closed = TRUE;
+        transport->joined = TRUE;
+        apr_thread_mutex_unlock(transport->mutex);
+        return APR_SUCCESS;
+    }
+    if (transport->joined) {
+        apr_thread_mutex_unlock(transport->mutex);
+        return APR_SUCCESS;
+    }
+    apr_thread_mutex_unlock(transport->mutex);
+    status = apr_thread_join(&thread_status, transport->thread);
+    if (status == APR_SUCCESS) {
+        apr_thread_mutex_lock(transport->mutex);
+        transport->joined = TRUE;
+        apr_thread_mutex_unlock(transport->mutex);
+    }
+    if (status != APR_SUCCESS) {
+        return status;
+    }
+    if (thread_status != APR_SUCCESS) {
+        return thread_status;
+    }
+    apr_thread_mutex_lock(transport->mutex);
+    status = transport->close_fence_failed ? APR_EGENERAL : APR_SUCCESS;
+    apr_thread_mutex_unlock(transport->mutex);
+    return status;
 }

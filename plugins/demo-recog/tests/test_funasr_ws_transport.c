@@ -3,6 +3,8 @@
 
 #include <apr_general.h>
 #include <apr_pools.h>
+#include <apr_thread_mutex.h>
+#include <apr_time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -380,6 +382,927 @@ static void test_ring_generation_wrap_and_overrun(apr_pool_t *pool)
                    1) == FUNASR_ENQUEUE_CLOSED);
 }
 
+typedef struct fake_io_t {
+    apr_thread_mutex_t *mutex;
+    unsigned char handshake_request[4096];
+    apr_size_t handshake_request_size;
+    unsigned char inbound[8192];
+    apr_size_t inbound_size;
+    apr_size_t inbound_offset;
+    unsigned char outbound[65536];
+    apr_size_t outbound_size;
+    apr_size_t read_chunk;
+    apt_bool_t opened;
+    apt_bool_t handshake_ready;
+    apt_bool_t stall_writes;
+    int poll_want_write;
+    int poll_without_write;
+    int wake_count;
+} fake_io_t;
+
+typedef struct event_collector_t {
+    apr_thread_mutex_t *mutex;
+    int input_started;
+    int final_results;
+    int failures;
+    int drained;
+    int metrics;
+    int closed;
+    funasr_transport_failure_e last_failure;
+    char final_text[64];
+    funasr_transport_event_type_e sequence[32];
+    int sequence_size;
+    apt_bool_t reject_events;
+} event_collector_t;
+
+static apr_status_t fake_io_open(
+    void *obj,
+    const char *host,
+    apr_port_t port,
+    apr_interval_time_t timeout)
+{
+    fake_io_t *io = obj;
+
+    (void)host;
+    (void)port;
+    (void)timeout;
+    apr_thread_mutex_lock(io->mutex);
+    io->opened = TRUE;
+    io->handshake_request_size = 0;
+    io->inbound_size = 0;
+    io->inbound_offset = 0;
+    io->handshake_ready = FALSE;
+    apr_thread_mutex_unlock(io->mutex);
+    return APR_SUCCESS;
+}
+
+static apr_status_t fake_io_poll(
+    void *obj,
+    apr_interval_time_t timeout,
+    apt_bool_t want_write,
+    apr_int16_t *events)
+{
+    fake_io_t *io = obj;
+
+    (void)timeout;
+    *events = 0;
+    apr_thread_mutex_lock(io->mutex);
+    if (want_write) {
+        io->poll_want_write++;
+    } else {
+        io->poll_without_write++;
+    }
+    if (io->inbound_offset < io->inbound_size) {
+        *events |= FUNASR_IO_READABLE;
+    }
+    if (want_write && !io->stall_writes) {
+        *events |= FUNASR_IO_WRITABLE;
+    }
+    apr_thread_mutex_unlock(io->mutex);
+    if (*events == 0) {
+        apr_sleep(1000);
+        return APR_TIMEUP;
+    }
+    return APR_SUCCESS;
+}
+
+static apt_bool_t fake_find_client_key(
+    const unsigned char *request,
+    apr_size_t request_size,
+    char *key,
+    apr_size_t key_capacity)
+{
+    static const char header[] = "Sec-WebSocket-Key: ";
+    apr_size_t offset;
+
+    for (offset = 0; offset + sizeof(header) - 1 < request_size; ++offset) {
+        apr_size_t end;
+        apr_size_t key_size;
+
+        if (memcmp(request + offset, header, sizeof(header) - 1) != 0) {
+            continue;
+        }
+        offset += sizeof(header) - 1;
+        end = offset;
+        while (end < request_size && request[end] != '\r') {
+            ++end;
+        }
+        key_size = end - offset;
+        if (end >= request_size || key_size + 1 > key_capacity) {
+            return FALSE;
+        }
+        memcpy(key, request + offset, key_size);
+        key[key_size] = '\0';
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static apt_bool_t fake_request_complete(
+    const unsigned char *request,
+    apr_size_t request_size)
+{
+    apr_size_t offset;
+
+    if (request_size < 4) {
+        return FALSE;
+    }
+    for (offset = 0; offset + 4 <= request_size; ++offset) {
+        if (memcmp(request + offset, "\r\n\r\n", 4) == 0) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static apr_status_t fake_io_write(
+    void *obj,
+    const void *data,
+    apr_size_t *size)
+{
+    fake_io_t *io = obj;
+    apr_size_t amount = *size;
+
+    apr_thread_mutex_lock(io->mutex);
+    if (io->stall_writes) {
+        *size = 0;
+        apr_thread_mutex_unlock(io->mutex);
+        return APR_EAGAIN;
+    }
+
+    if (!io->handshake_ready) {
+        char key[128];
+        char accept[128];
+        int response_size;
+
+        if (amount > sizeof(io->handshake_request) -
+                io->handshake_request_size) {
+            apr_thread_mutex_unlock(io->mutex);
+            return APR_ENOSPC;
+        }
+        memcpy(io->handshake_request + io->handshake_request_size,
+               data,
+               amount);
+        io->handshake_request_size += amount;
+        if (fake_request_complete(io->handshake_request,
+                                  io->handshake_request_size)) {
+            if (!fake_find_client_key(io->handshake_request,
+                                      io->handshake_request_size,
+                                      key,
+                                      sizeof(key)) ||
+                !funasr_ws_accept_compute(key, accept, sizeof(accept))) {
+                apr_thread_mutex_unlock(io->mutex);
+                return APR_EGENERAL;
+            }
+            response_size = snprintf(
+                (char *)io->inbound,
+                sizeof(io->inbound),
+                "HTTP/1.1 101 Switching Protocols\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                "Sec-WebSocket-Accept: %s\r\n"
+                "\r\n",
+                accept);
+            if (response_size <= 0 ||
+                (apr_size_t)response_size >= sizeof(io->inbound)) {
+                apr_thread_mutex_unlock(io->mutex);
+                return APR_ENOSPC;
+            }
+            io->inbound_size = (apr_size_t)response_size;
+            io->inbound_offset = 0;
+            io->handshake_ready = TRUE;
+        }
+    } else {
+        if (amount > sizeof(io->outbound) - io->outbound_size) {
+            apr_thread_mutex_unlock(io->mutex);
+            return APR_ENOSPC;
+        }
+        memcpy(io->outbound + io->outbound_size, data, amount);
+        io->outbound_size += amount;
+    }
+    apr_thread_mutex_unlock(io->mutex);
+    return APR_SUCCESS;
+}
+
+static apr_status_t fake_io_read(
+    void *obj,
+    void *data,
+    apr_size_t *size)
+{
+    fake_io_t *io = obj;
+    apr_size_t available;
+    apr_size_t amount;
+
+    apr_thread_mutex_lock(io->mutex);
+    available = io->inbound_size - io->inbound_offset;
+    if (available == 0) {
+        *size = 0;
+        apr_thread_mutex_unlock(io->mutex);
+        return APR_EAGAIN;
+    }
+    amount = *size;
+    if (amount > available) {
+        amount = available;
+    }
+    if (io->read_chunk != 0 && amount > io->read_chunk) {
+        amount = io->read_chunk;
+    }
+    memcpy(data, io->inbound + io->inbound_offset, amount);
+    io->inbound_offset += amount;
+    *size = amount;
+    apr_thread_mutex_unlock(io->mutex);
+    return APR_SUCCESS;
+}
+
+static void fake_io_close(void *obj)
+{
+    fake_io_t *io = obj;
+
+    apr_thread_mutex_lock(io->mutex);
+    io->opened = FALSE;
+    apr_thread_mutex_unlock(io->mutex);
+}
+
+static apr_status_t fake_io_wake(void *obj)
+{
+    fake_io_t *io = obj;
+
+    apr_thread_mutex_lock(io->mutex);
+    io->wake_count++;
+    apr_thread_mutex_unlock(io->mutex);
+    return APR_SUCCESS;
+}
+
+static apt_bool_t collect_transport_event(
+    void *obj,
+    funasr_transport_event_t *event)
+{
+    event_collector_t *collector = obj;
+    apt_bool_t reject;
+
+    apr_thread_mutex_lock(collector->mutex);
+    if (collector->sequence_size <
+            (int)(sizeof(collector->sequence) /
+                  sizeof(collector->sequence[0]))) {
+        collector->sequence[collector->sequence_size++] = event->type;
+    }
+    switch (event->type) {
+        case FUNASR_EVENT_INPUT_STARTED:
+            collector->input_started++;
+            break;
+        case FUNASR_EVENT_FINAL_RESULT:
+            collector->final_results++;
+            if (event->text && event->text_size < sizeof(collector->final_text)) {
+                memcpy(collector->final_text, event->text, event->text_size);
+                collector->final_text[event->text_size] = '\0';
+            }
+            break;
+        case FUNASR_EVENT_TRANSPORT_FAILED:
+            collector->failures++;
+            collector->last_failure = event->failure;
+            break;
+        case FUNASR_EVENT_GENERATION_DRAINED:
+            collector->drained++;
+            break;
+        case FUNASR_EVENT_TRANSPORT_METRICS:
+            collector->metrics++;
+            break;
+        case FUNASR_EVENT_WORKER_CLOSED:
+            collector->closed++;
+            break;
+    }
+    reject = collector->reject_events;
+    apr_thread_mutex_unlock(collector->mutex);
+    if (!reject) {
+        funasr_transport_event_destroy(event);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static void fake_io_append_inbound(
+    fake_io_t *io,
+    const void *data,
+    apr_size_t size)
+{
+    apr_thread_mutex_lock(io->mutex);
+    CHECK_TRUE("fake inbound capacity",
+               size <= sizeof(io->inbound) - io->inbound_size);
+    if (size <= sizeof(io->inbound) - io->inbound_size) {
+        memcpy(io->inbound + io->inbound_size, data, size);
+        io->inbound_size += size;
+    }
+    apr_thread_mutex_unlock(io->mutex);
+}
+
+static apt_bool_t fake_io_wait_outbound(
+    fake_io_t *io,
+    apr_size_t minimum_size)
+{
+    int attempts;
+
+    for (attempts = 0; attempts < 2000; ++attempts) {
+        apr_size_t size;
+
+        apr_thread_mutex_lock(io->mutex);
+        size = io->outbound_size;
+        apr_thread_mutex_unlock(io->mutex);
+        if (size >= minimum_size) {
+            return TRUE;
+        }
+        apr_sleep(1000);
+    }
+    return FALSE;
+}
+
+static apt_bool_t fake_io_decode_binary(
+    fake_io_t *io,
+    unsigned char *output,
+    apr_size_t output_capacity,
+    apr_size_t *output_size,
+    int *empty_frames)
+{
+    unsigned char *wire;
+    unsigned char *frame_storage;
+    unsigned char *message_storage;
+    apr_size_t wire_size;
+    funasr_ws_decoder_t decoder;
+    funasr_ws_event_t event;
+    funasr_ws_status_e status;
+    apt_bool_t ok;
+
+    wire = malloc(sizeof(io->outbound));
+    frame_storage = malloc(FUNASR_WS_FRAME_LIMIT + 14U);
+    message_storage = malloc(FUNASR_WS_MESSAGE_LIMIT);
+    if (!wire || !frame_storage || !message_storage) {
+        free(wire);
+        free(frame_storage);
+        free(message_storage);
+        return FALSE;
+    }
+    apr_thread_mutex_lock(io->mutex);
+    wire_size = io->outbound_size;
+    memcpy(wire, io->outbound, wire_size);
+    apr_thread_mutex_unlock(io->mutex);
+
+    *output_size = 0;
+    *empty_frames = 0;
+    ok = TRUE;
+    funasr_ws_decoder_init(
+        &decoder,
+        frame_storage,
+        FUNASR_WS_FRAME_LIMIT + 14U,
+        message_storage,
+        FUNASR_WS_MESSAGE_LIMIT,
+        FUNASR_WS_FRAME_LIMIT,
+        FUNASR_WS_MESSAGE_LIMIT);
+    status = funasr_ws_decoder_feed(&decoder, wire, wire_size, &event);
+    while (status == FUNASR_WS_EVENT_READY) {
+        if (event.type == FUNASR_WS_EVENT_MESSAGE &&
+            event.opcode == FUNASR_WS_OPCODE_BINARY) {
+            if (event.size == 0) {
+                ++(*empty_frames);
+            } else if (event.size > output_capacity - *output_size) {
+                ok = FALSE;
+                break;
+            } else {
+                memcpy(output + *output_size, event.data, event.size);
+                *output_size += event.size;
+            }
+        }
+        status = funasr_ws_decoder_feed(&decoder, NULL, 0, &event);
+    }
+    if (status == FUNASR_WS_PROTOCOL_ERROR ||
+        status == FUNASR_WS_LIMIT_EXCEEDED) {
+        ok = FALSE;
+    }
+    free(wire);
+    free(frame_storage);
+    free(message_storage);
+    return ok;
+}
+
+static int collector_value(event_collector_t *collector, int which)
+{
+    int value;
+
+    apr_thread_mutex_lock(collector->mutex);
+    if (which == 0) {
+        value = collector->final_results;
+    } else if (which == 1) {
+        value = collector->drained;
+    } else if (which == 2) {
+        value = collector->closed;
+    } else if (which == 4) {
+        value = collector->input_started;
+    } else {
+        value = collector->failures;
+    }
+    apr_thread_mutex_unlock(collector->mutex);
+    return value;
+}
+
+static apt_bool_t wait_for_collector(
+    event_collector_t *collector,
+    int which,
+    int expected)
+{
+    int attempts;
+
+    for (attempts = 0; attempts < 2000; ++attempts) {
+        if (collector_value(collector, which) >= expected) {
+            return TRUE;
+        }
+        apr_sleep(1000);
+    }
+    return FALSE;
+}
+
+static void test_worker_keeps_media_enqueue_independent_of_partial_rx(
+    apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    funasr_transport_config_t config;
+    funasr_audio_format_t format;
+    funasr_transport_t *transport;
+    funasr_media_snapshot_t snapshot;
+    fake_io_t io;
+    event_collector_t collector;
+    apr_int64_t now_us = 1000000;
+    unsigned char media_frame[640];
+    unsigned char expected_media[50U * sizeof(media_frame)];
+    unsigned char decoded_media[50U * sizeof(media_frame)];
+    apr_size_t decoded_size;
+    int empty_frames;
+    unsigned char response_header[4];
+    const char response_json[] = "{\"code\":0,\"text\":\"ok\"}";
+    int index;
+
+    memset(&io, 0, sizeof(io));
+    memset(&collector, 0, sizeof(collector));
+    CHECK_TRUE("fake I/O mutex",
+               apr_thread_mutex_create(
+                   &io.mutex,
+                   APR_THREAD_MUTEX_DEFAULT,
+                   pool) == APR_SUCCESS);
+    CHECK_TRUE("collector mutex",
+               apr_thread_mutex_create(
+                   &collector.mutex,
+                   APR_THREAD_MUTEX_DEFAULT,
+                   pool) == APR_SUCCESS);
+    io.read_chunk = 1;
+
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.clock.now_us = fake_now_us;
+    config.clock.obj = &now_us;
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+    config.io_vtable = &fake_vtable;
+    config.io_obj = &io;
+
+    transport = funasr_transport_create(pool, 42, &config);
+    CHECK_TRUE("transport created", transport != NULL);
+    memset(&format, 0, sizeof(format));
+    format.input_sample_rate = 16000;
+    format.output_sample_rate = 16000;
+    format.channel_count = 1;
+    format.sample_width = 2;
+    format.call_id = "worker-test";
+    CHECK_TRUE("generation begins",
+               funasr_transport_begin_generation(
+                   transport,
+                   11,
+                   &format) == TRUE);
+    CHECK_TRUE("media snapshot published",
+               funasr_transport_media_snapshot(
+                   transport,
+                   &snapshot) == TRUE);
+    CHECK_TRUE("snapshot generation", snapshot.generation == 11);
+
+    for (index = 0; index < 50; ++index) {
+        int byte_index;
+
+        for (byte_index = 0;
+             byte_index < (int)sizeof(media_frame);
+             ++byte_index) {
+            media_frame[byte_index] =
+                (unsigned char)(index + byte_index);
+        }
+        memcpy(expected_media + index * sizeof(media_frame),
+               media_frame,
+               sizeof(media_frame));
+        CHECK_TRUE("20ms media enqueue accepted while RX is partial",
+                   funasr_transport_enqueue_pcm(
+                       transport,
+                       11,
+                       media_frame,
+                       sizeof(media_frame),
+                       now_us) == FUNASR_ENQUEUE_ACCEPTED);
+        now_us += 20000;
+    }
+
+    CHECK_TRUE("worker completed handshake and observed input",
+               wait_for_collector(&collector, 4, 1) == TRUE);
+    CHECK_TRUE("worker sent all queued PCM",
+               fake_io_wait_outbound(&io, sizeof(expected_media)) == TRUE);
+    CHECK_TRUE("client frames decode",
+               fake_io_decode_binary(
+                   &io,
+                   decoded_media,
+                   sizeof(decoded_media),
+                   &decoded_size,
+                   &empty_frames) == TRUE);
+    CHECK_SIZE("exact PCM byte count", decoded_size, sizeof(expected_media));
+    CHECK_TRUE("exact PCM order",
+               memcmp(decoded_media,
+                      expected_media,
+                      sizeof(expected_media)) == 0);
+    CHECK_TRUE("no normal-stream end frame yet", empty_frames == 0);
+
+    response_header[0] = 0x81;
+    response_header[1] = 126;
+    response_header[2] = 0;
+    response_header[3] = (unsigned char)(sizeof(response_json) - 1);
+    fake_io_append_inbound(&io, response_header, sizeof(response_header));
+    now_us += 3000000;
+    funasr_transport_wake(transport);
+    fake_io_append_inbound(
+        &io,
+        response_json,
+        sizeof(response_json) - 1);
+    funasr_transport_wake(transport);
+
+    CHECK_TRUE("final event arrives",
+               wait_for_collector(&collector, 0, 1) == TRUE);
+    CHECK_TRUE("one input-start event", collector.input_started == 1);
+    CHECK_TRUE("final text preserved",
+               strcmp(collector.final_text, "ok") == 0);
+    CHECK_TRUE("no transport failure", collector.failures == 0);
+
+    CHECK_TRUE("close requested",
+               funasr_transport_request_close(transport) == TRUE);
+    CHECK_TRUE("close fence arrives",
+               wait_for_collector(&collector, 2, 1) == TRUE);
+    CHECK_TRUE("worker joins",
+               funasr_transport_join_closed(transport) == APR_SUCCESS);
+    CHECK_TRUE("POLLOUT requested only for pending bytes",
+               io.poll_want_write > 0 && io.poll_without_write > 0);
+    CHECK_TRUE("enqueue wakes worker", io.wake_count > 0);
+    CHECK_TRUE("WORKER_CLOSED is final",
+               collector.sequence_size > 0 &&
+               collector.sequence[collector.sequence_size - 1] ==
+                   FUNASR_EVENT_WORKER_CLOSED);
+}
+
+static void test_worker_stop_drains_without_final(
+    apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    funasr_transport_config_t config;
+    funasr_audio_format_t format;
+    funasr_transport_t *transport;
+    fake_io_t io;
+    event_collector_t collector;
+    apr_int64_t now_us = 2000000;
+    unsigned char media_frame[640];
+    unsigned char decoded_media[640];
+    apr_size_t decoded_size;
+    int empty_frames;
+
+    memset(&io, 0, sizeof(io));
+    memset(&collector, 0, sizeof(collector));
+    apr_thread_mutex_create(
+        &io.mutex,
+        APR_THREAD_MUTEX_DEFAULT,
+        pool);
+    apr_thread_mutex_create(
+        &collector.mutex,
+        APR_THREAD_MUTEX_DEFAULT,
+        pool);
+    io.read_chunk = 7;
+
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.clock.now_us = fake_now_us;
+    config.clock.obj = &now_us;
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+    config.io_vtable = &fake_vtable;
+    config.io_obj = &io;
+    transport = funasr_transport_create(pool, 43, &config);
+
+    memset(&format, 0, sizeof(format));
+    format.input_sample_rate = 16000;
+    format.output_sample_rate = 16000;
+    format.channel_count = 1;
+    format.sample_width = 2;
+    format.call_id = "stop-test";
+    CHECK_TRUE("STOP generation begins",
+               funasr_transport_begin_generation(
+                   transport,
+                   21,
+                   &format) == TRUE);
+    memset(media_frame, 0x33, sizeof(media_frame));
+    CHECK_TRUE("STOP tail enqueued",
+               funasr_transport_enqueue_pcm(
+                   transport,
+                   21,
+                   media_frame,
+                   sizeof(media_frame),
+                   now_us) == FUNASR_ENQUEUE_ACCEPTED);
+    CHECK_TRUE("generation cancel requested",
+               funasr_transport_cancel_generation(
+                   transport,
+                   21) == TRUE);
+    CHECK_TRUE("drain event arrives",
+               wait_for_collector(&collector, 1, 1) == TRUE);
+    CHECK_TRUE("STOP emits no final", collector.final_results == 0);
+    CHECK_TRUE("STOP frames decode",
+               fake_io_decode_binary(
+                   &io,
+                   decoded_media,
+                   sizeof(decoded_media),
+                   &decoded_size,
+                   &empty_frames) == TRUE);
+    CHECK_SIZE("STOP flushes tail", decoded_size, sizeof(media_frame));
+    CHECK_TRUE("STOP preserves tail bytes",
+               memcmp(decoded_media, media_frame, sizeof(media_frame)) == 0);
+    CHECK_TRUE("STOP emits exactly one empty binary frame",
+               empty_frames == 1);
+
+    funasr_transport_request_close(transport);
+    CHECK_TRUE("STOP worker closes",
+               wait_for_collector(&collector, 2, 1) == TRUE);
+    CHECK_TRUE("STOP worker joins",
+               funasr_transport_join_closed(transport) == APR_SUCCESS);
+}
+
+static void test_worker_reports_one_queue_overrun(
+    apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    funasr_transport_config_t config;
+    funasr_audio_format_t format;
+    funasr_transport_t *transport;
+    fake_io_t io;
+    event_collector_t collector;
+    apr_int64_t now_us = 3000000;
+    unsigned char chunk[6400];
+    unsigned char frame[640];
+    apt_bool_t queue_full;
+    int index;
+
+    memset(&io, 0, sizeof(io));
+    memset(&collector, 0, sizeof(collector));
+    apr_thread_mutex_create(&io.mutex, APR_THREAD_MUTEX_DEFAULT, pool);
+    apr_thread_mutex_create(
+        &collector.mutex,
+        APR_THREAD_MUTEX_DEFAULT,
+        pool);
+    io.read_chunk = 8;
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.clock.now_us = fake_now_us;
+    config.clock.obj = &now_us;
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+    config.io_vtable = &fake_vtable;
+    config.io_obj = &io;
+    transport = funasr_transport_create(pool, 44, &config);
+
+    memset(&format, 0, sizeof(format));
+    format.input_sample_rate = 16000;
+    format.output_sample_rate = 16000;
+    format.channel_count = 1;
+    format.sample_width = 2;
+    format.call_id = "overrun-test";
+    CHECK_TRUE("overrun generation begins",
+               funasr_transport_begin_generation(transport, 31, &format));
+    memset(chunk, 0x41, sizeof(chunk));
+    CHECK_TRUE("initial chunk accepted",
+               funasr_transport_enqueue_pcm(
+                   transport,
+                   31,
+                   chunk,
+                   sizeof(chunk),
+                   now_us) == FUNASR_ENQUEUE_ACCEPTED);
+    CHECK_TRUE("overrun worker observed input",
+               wait_for_collector(&collector, 4, 1));
+    apr_thread_mutex_lock(io.mutex);
+    io.stall_writes = TRUE;
+    apr_thread_mutex_unlock(io.mutex);
+
+    memset(frame, 0x42, sizeof(frame));
+    queue_full = FALSE;
+    for (index = 0; index < 100; ++index) {
+        funasr_enqueue_status_e status;
+
+        status = funasr_transport_enqueue_pcm(
+            transport,
+            31,
+            frame,
+            sizeof(frame),
+            now_us);
+        now_us += 20000;
+        if (status == FUNASR_ENQUEUE_QUEUE_FULL) {
+            queue_full = TRUE;
+        }
+    }
+    CHECK_TRUE("bounded ring reports queue full", queue_full);
+    CHECK_TRUE("overrun failure arrives",
+               wait_for_collector(&collector, 3, 1));
+    CHECK_TRUE("overrun failure is unique", collector.failures == 1);
+    CHECK_TRUE("overrun reason preserved",
+               collector.last_failure == FUNASR_FAILURE_QUEUE_OVERRUN);
+
+    funasr_transport_request_close(transport);
+    CHECK_TRUE("overrun worker closes",
+               wait_for_collector(&collector, 2, 1));
+    CHECK_TRUE("overrun worker joins",
+               funasr_transport_join_closed(transport) == APR_SUCCESS);
+}
+
+static void test_worker_write_stall_uses_fake_clock(
+    apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    funasr_transport_config_t config;
+    funasr_audio_format_t format;
+    funasr_transport_t *transport;
+    fake_io_t io;
+    event_collector_t collector;
+    apr_int64_t now_us = 4000000;
+    unsigned char first[640];
+    unsigned char remainder[5760];
+
+    memset(&io, 0, sizeof(io));
+    memset(&collector, 0, sizeof(collector));
+    apr_thread_mutex_create(&io.mutex, APR_THREAD_MUTEX_DEFAULT, pool);
+    apr_thread_mutex_create(
+        &collector.mutex,
+        APR_THREAD_MUTEX_DEFAULT,
+        pool);
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.clock.now_us = fake_now_us;
+    config.clock.obj = &now_us;
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+    config.io_vtable = &fake_vtable;
+    config.io_obj = &io;
+    transport = funasr_transport_create(pool, 45, &config);
+
+    memset(&format, 0, sizeof(format));
+    format.input_sample_rate = 16000;
+    format.output_sample_rate = 16000;
+    format.channel_count = 1;
+    format.sample_width = 2;
+    format.call_id = "stall-test";
+    CHECK_TRUE("stall generation begins",
+               funasr_transport_begin_generation(transport, 41, &format));
+    memset(first, 0x51, sizeof(first));
+    CHECK_TRUE("stall first frame accepted",
+               funasr_transport_enqueue_pcm(
+                   transport,
+                   41,
+                   first,
+                   sizeof(first),
+                   now_us) == FUNASR_ENQUEUE_ACCEPTED);
+    CHECK_TRUE("stall worker observed input",
+               wait_for_collector(&collector, 4, 1));
+    apr_thread_mutex_lock(io.mutex);
+    io.stall_writes = TRUE;
+    apr_thread_mutex_unlock(io.mutex);
+    memset(remainder, 0x52, sizeof(remainder));
+    CHECK_TRUE("stall chunk completed",
+               funasr_transport_enqueue_pcm(
+                   transport,
+                   41,
+                   remainder,
+                   sizeof(remainder),
+                   now_us) == FUNASR_ENQUEUE_ACCEPTED);
+    now_us += FUNASR_WRITE_STALL_TIMEOUT_US;
+    funasr_transport_wake(transport);
+    CHECK_TRUE("write-stall failure arrives",
+               wait_for_collector(&collector, 3, 1));
+    CHECK_TRUE("write-stall failure is unique", collector.failures == 1);
+    CHECK_TRUE("write-stall reason preserved",
+               collector.last_failure == FUNASR_FAILURE_WRITE_STALL);
+
+    funasr_transport_request_close(transport);
+    CHECK_TRUE("stall worker closes",
+               wait_for_collector(&collector, 2, 1));
+    CHECK_TRUE("stall worker joins",
+               funasr_transport_join_closed(transport) == APR_SUCCESS);
+}
+
+static void test_worker_rejected_close_fence_is_reported(
+    apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    funasr_transport_config_t config;
+    funasr_audio_format_t format;
+    funasr_transport_t *transport;
+    fake_io_t io;
+    event_collector_t collector;
+    apr_int64_t now_us = 5000000;
+    unsigned char frame[640];
+
+    memset(&io, 0, sizeof(io));
+    memset(&collector, 0, sizeof(collector));
+    apr_thread_mutex_create(&io.mutex, APR_THREAD_MUTEX_DEFAULT, pool);
+    apr_thread_mutex_create(
+        &collector.mutex,
+        APR_THREAD_MUTEX_DEFAULT,
+        pool);
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.clock.now_us = fake_now_us;
+    config.clock.obj = &now_us;
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+    config.io_vtable = &fake_vtable;
+    config.io_obj = &io;
+    transport = funasr_transport_create(pool, 46, &config);
+
+    memset(&format, 0, sizeof(format));
+    format.input_sample_rate = 16000;
+    format.output_sample_rate = 16000;
+    format.channel_count = 1;
+    format.sample_width = 2;
+    format.call_id = "sink-reject-test";
+    CHECK_TRUE("sink-reject generation begins",
+               funasr_transport_begin_generation(transport, 51, &format));
+    memset(frame, 0x61, sizeof(frame));
+    CHECK_TRUE("sink-reject frame accepted",
+               funasr_transport_enqueue_pcm(
+                   transport,
+                   51,
+                   frame,
+                   sizeof(frame),
+                   now_us) == FUNASR_ENQUEUE_ACCEPTED);
+    CHECK_TRUE("sink-reject worker observed input",
+               wait_for_collector(&collector, 4, 1));
+    apr_thread_mutex_lock(collector.mutex);
+    collector.reject_events = TRUE;
+    apr_thread_mutex_unlock(collector.mutex);
+    funasr_transport_request_close(transport);
+    CHECK_TRUE("rejected close fence attempted",
+               wait_for_collector(&collector, 2, 1));
+    CHECK_TRUE("rejected close fence makes join fail",
+               funasr_transport_join_closed(transport) == APR_EGENERAL);
+    CHECK_TRUE("rejected WORKER_CLOSED remains final attempt",
+               collector.sequence_size > 0 &&
+               collector.sequence[collector.sequence_size - 1] ==
+                   FUNASR_EVENT_WORKER_CLOSED);
+}
+
 int main(void)
 {
     apr_pool_t *pool = NULL;
@@ -403,6 +1326,11 @@ int main(void)
     test_ws_extended_length_and_fragmented_control();
     test_ws_protocol_and_size_errors();
     test_ring_generation_wrap_and_overrun(pool);
+    test_worker_keeps_media_enqueue_independent_of_partial_rx(pool);
+    test_worker_stop_drains_without_final(pool);
+    test_worker_reports_one_queue_overrun(pool);
+    test_worker_write_stall_uses_fake_clock(pool);
+    test_worker_rejected_close_fence_is_reported(pool);
 
     apr_pool_destroy(pool);
     if (failures != 0) {
