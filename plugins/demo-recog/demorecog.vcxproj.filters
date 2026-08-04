@@ -14,5 +14,17 @@
     <ClCompile Include="src\demo_recog_engine.c">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="src\funasr_audio.c"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\funasr_clock.c"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\funasr_control.c"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\funasr_json.c"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\funasr_ws_transport.c"><Filter>src</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\funasr_audio.h"><Filter>include</Filter></ClInclude>
+    <ClInclude Include="src\funasr_clock.h"><Filter>include</Filter></ClInclude>
+    <ClInclude Include="src\funasr_control.h"><Filter>include</Filter></ClInclude>
+    <ClInclude Include="src\funasr_json.h"><Filter>include</Filter></ClInclude>
+    <ClInclude Include="src\funasr_ws_transport.h"><Filter>include</Filter></ClInclude>
   </ItemGroup>
 </Project>

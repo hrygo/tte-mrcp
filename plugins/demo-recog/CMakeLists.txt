@@ -32,6 +32,9 @@ if (WIN32)
 	target_link_libraries(${PROJECT_NAME} ws2_32 winmm)
 elseif (UNIX)
 	target_link_libraries(${PROJECT_NAME} m)
+	if (NOT APPLE)
+		target_link_libraries(${PROJECT_NAME} rt)
+	endif ()
 endif ()
 
 # Preprocessor definitions
@@ -84,6 +87,14 @@ if(BUILD_DEMORECOG_TESTS)
 		${APU_LIBRARIES}
 		${APRUTIL_LIBRARIES}
 		${APR_LIBRARIES})
+	if (WIN32)
+		target_link_libraries(test_funasr_ws_transport ws2_32 winmm)
+	elseif (UNIX)
+		target_link_libraries(test_funasr_ws_transport m)
+		if (NOT APPLE)
+			target_link_libraries(test_funasr_ws_transport rt)
+		endif ()
+	endif ()
 	set_target_properties(test_funasr_ws_transport PROPERTIES FOLDER "tests")
 	add_test(NAME demorecog_funasr_ws_transport COMMAND test_funasr_ws_transport)
 

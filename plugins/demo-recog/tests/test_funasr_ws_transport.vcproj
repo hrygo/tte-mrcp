@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="Windows-1252"?>
+<VisualStudioProject ProjectType="Visual C++" Version="8.00" Name="test_funasr_ws_transport" ProjectGUID="{7A83B5F1-1D2E-4A37-9C51-020000000001}" RootNamespace="test_funasr_ws_transport">
+  <Platforms><Platform Name="Win32"/><Platform Name="x64"/></Platforms>
+  <Configurations>
+    <Configuration Name="Debug|Win32" ConfigurationType="1" InheritedPropertySheets="$(ProjectDir)..\..\..\build\vsprops\unidebug.vsprops;$(ProjectDir)..\..\..\build\vsprops\unibin.vsprops;$(ProjectDir)..\..\..\build\vsprops\uniplugin.vsprops"><Tool Name="VCCLCompilerTool" AdditionalIncludeDirectories="..\src"/><Tool Name="VCLinkerTool" AdditionalDependencies="libaprutil-1.lib libapr-1.lib ws2_32.lib"/></Configuration>
+    <Configuration Name="Release|Win32" ConfigurationType="1" InheritedPropertySheets="$(ProjectDir)..\..\..\build\vsprops\unirelease.vsprops;$(ProjectDir)..\..\..\build\vsprops\unibin.vsprops;$(ProjectDir)..\..\..\build\vsprops\uniplugin.vsprops"><Tool Name="VCCLCompilerTool" AdditionalIncludeDirectories="..\src"/><Tool Name="VCLinkerTool" AdditionalDependencies="libaprutil-1.lib libapr-1.lib ws2_32.lib"/></Configuration>
+    <Configuration Name="Debug|x64" ConfigurationType="1" InheritedPropertySheets="$(ProjectDir)..\..\..\build\vsprops\unidebug.vsprops;$(ProjectDir)..\..\..\build\vsprops\unibin-x64.vsprops;$(ProjectDir)..\..\..\build\vsprops\uniplugin-x64.vsprops"><Tool Name="VCCLCompilerTool" AdditionalIncludeDirectories="..\src"/><Tool Name="VCLinkerTool" AdditionalDependencies="libaprutil-1.lib libapr-1.lib ws2_32.lib"/></Configuration>
+    <Configuration Name="Release|x64" ConfigurationType="1" InheritedPropertySheets="$(ProjectDir)..\..\..\build\vsprops\unirelease.vsprops;$(ProjectDir)..\..\..\build\vsprops\unibin-x64.vsprops;$(ProjectDir)..\..\..\build\vsprops\uniplugin-x64.vsprops"><Tool Name="VCCLCompilerTool" AdditionalIncludeDirectories="..\src"/><Tool Name="VCLinkerTool" AdditionalDependencies="libaprutil-1.lib libapr-1.lib ws2_32.lib"/></Configuration>
+  </Configurations>
+  <Files><Filter Name="src" Filter="c;h"><File RelativePath=".\test_funasr_ws_transport.c"/><File RelativePath="..\src\funasr_audio.c"/><File RelativePath="..\src\funasr_clock.c"/><File RelativePath="..\src\funasr_json.c"/><File RelativePath="..\src\funasr_ws_transport.c"/></Filter></Files>
+</VisualStudioProject>
