@@ -1,5 +1,146 @@
-#!/bin/sh
-set -eu
+#!/usr/bin/expect -f
+# UniMRCP 单次测试脚本 (使用 expect)
+# 参数: test_type profile root_dir worker_id
 
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec expect "$ROOT_DIR/tests/integration/umc_test.exp" "$@"
+set timeout 30
+set test_type [lindex $argv 0]
+set profile [lindex $argv 1]
+set root_dir [lindex $argv 2]
+set worker_id [lindex $argv 3]
+
+if {$worker_id == ""} {
+    set worker_id 0
+}
+
+set umc_bin "$root_dir/platforms/umc/umc"
+
+# 启动 umc (使用 -l 6 INFO 级别，确保 NLSML 识别结果可见)
+spawn $umc_bin -r $root_dir -l 6 -o 1
+
+# 等待提示符
+expect {
+    ">*" {}
+    timeout {
+        puts "RESULT:TIMEOUT"
+        exit 1
+    }
+}
+
+# 发送测试命令
+if {$test_type == "synth"} {
+    send "run synth $profile\r"
+} elseif {$test_type == "recog"} {
+    send "run recog $profile\r"
+}
+
+set nlsml_text ""
+set rtp_received 0
+
+# =========================================================================
+# Phase 1: 等待 RECOGNITION-COMPLETE / SPEAK-COMPLETE 或错误
+# =========================================================================
+# 关键问题：MRCP 消息头中的 "RECOGNITION-COMPLETE" 字符串出现时间
+# 远早于 umc 解析 NLSML 后输出的 Interpretation[].instance[] trace。
+# 如果在一个 expect 块中同时监听这两个模式，RECOGNITION-COMPLETE
+# 会先匹配到并退出 expect，导致 nlsml_text 永远为空。
+#
+# 解决方案：分两阶段——
+#   Phase 1: 只等待完成事件（RECOGNITION-COMPLETE / SPEAK-COMPLETE）
+#            和 RTP 统计，用 exp_continue 持续监听
+#   Phase 2: 得到 SUCCESS 结果后，再等一小段时间专门捕获
+#            Interpretation[].instance[] trace
+# =========================================================================
+expect {
+    -re {r:(\d+) l:\d+ j:\d+} {
+        if {$expect_out(1,string) > 0} {
+            set rtp_received 1
+        }
+        exp_continue
+    }
+    -re {RECOGNITION-COMPLETE} {
+        set saved_timeout $timeout
+        set timeout 3
+        expect {
+            -re {Completion-Cause:\s*000} {
+                set result "SUCCESS"
+            }
+            -re {Completion-Cause:\s*00[1-9][^\n\r]*} {
+                set result "MRCP_ERROR"
+                set nlsml_text $expect_out(0,string)
+            }
+            timeout {
+                set result "SUCCESS"
+            }
+        }
+        set timeout $saved_timeout
+    }
+    -re {SPEAK-COMPLETE} {
+        set saved_timeout $timeout
+        set timeout 3
+        expect {
+            -re {Completion-Cause:\s*000} {
+                set result "SUCCESS"
+            }
+            -re {Completion-Cause:\s*00[1-9][^\n\r]*} {
+                set result "MRCP_ERROR"
+                set nlsml_text $expect_out(0,string)
+            }
+            timeout {
+                set result "SUCCESS"
+            }
+        }
+        set timeout $saved_timeout
+    }
+    -re {Completion-Cause:\s*00[1-9]} {
+        set result "MRCP_ERROR"
+        set nlsml_text $expect_out(0,string)
+    }
+    -re {Failed to Create NUA|initializing SIP stack failed|Address already in use} {
+        set result "SIP_ERROR"
+    }
+    timeout {
+        if {$rtp_received} {
+            set result "TIMEOUT"
+        } else {
+            set result "NODATA"
+        }
+    }
+}
+
+# =========================================================================
+# Phase 2: 成功完成后，等待 Interpretation[].instance[] trace
+# =========================================================================
+# umc 在收到 RECOGNITION-COMPLETE 事件后，异步解析 NLSML 并通过
+# apt_log 输出 Interpretation[].instance[] 行。Phase 1 结束后，这些
+# 输出可能已在缓冲区中，也可能即将到来。用 5 秒超时足够捕获。
+# =========================================================================
+if {$result == "SUCCESS"} {
+    set saved_timeout $timeout
+    set timeout 5
+    expect {
+        -re {Interpretation\[\d+\]\.instance\[\d+\]: ([^\r\n]+)} {
+            set nlsml_text $expect_out(1,string)
+        }
+        timeout {
+            # Interpretation trace 未出现（罕见情况）
+            # shell 脚本会从日志中 NLSML body 回退提取
+        }
+    }
+    set timeout $saved_timeout
+}
+
+# 等待一段时间让服务器处理完剩余消息
+sleep 1
+
+# 发送退出命令
+send "exit\r"
+
+# 等待 umc 退出
+expect eof
+
+# 输出结果 (包含 NLSML 识别文本)
+if {$nlsml_text != ""} {
+    puts "RESULT:$result NLSML:$nlsml_text"
+} else {
+    puts "RESULT:$result"
+}

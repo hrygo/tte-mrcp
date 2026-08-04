@@ -10,7 +10,7 @@ DATAFILES           += grammar.jsgf grammar.mixed grammar.srgs grammar.xml \
 endif
 
 if TTS_WEBSOCKET_PLUGIN
-DATAFILES           += demo-16kHz.pcm demo-8kHz.pcm
+DATAFILES           += tts_websocket-16kHz.pcm tts_websocket-8kHz.pcm
 endif
 
 if DEMORECOG_PLUGIN
