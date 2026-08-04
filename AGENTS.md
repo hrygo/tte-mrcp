@@ -14,9 +14,9 @@
 
 历史报告、备份源码、生成物和旧日志属于非现行证据，不能证明当前行为；旧报告中的函数名、目录名和行号不覆盖当前代码。
 
-代码发现必须优先使用 codebase-memory-mcp：`search_graph` → `trace_path` → `get_code_snippet` → `query_graph` → `get_architecture`。只有搜索字符串、配置值、非代码文件或图谱不足时，才回退到 `rtk rg` 等文本搜索。
+代码发现必须优先使用 codebase-memory-mcp：`search_graph` → `trace_path` → `get_code_snippet` → `query_graph` → `get_architecture`。只有搜索字符串、配置值、非代码文件或图谱不足时，才回退到 `rg` 等文本搜索。
 
-所有 shell 命令必须以 `rtk` 为前缀；复杂命令使用 `rtk run '...'`。禁止将 `$HOME`、`$CODEX_HOME` 或宽泛目录作为破坏性操作目标。
+Shell 命令使用系统标准命令和项目实际可用工具；复杂命令应保持可读、可复现。禁止将 `$HOME`、`$CODEX_HOME` 或宽泛目录作为破坏性操作目标。
 
 ### 1.1 项目继承关系与开发重心
 
@@ -263,7 +263,7 @@ MRCP SPEAK
 ### 5.1 任务输入与事实记录
 
 1. 任务输入包含本文件、相关目录规则和用户指定的 SSOT。
-2. `rtk git status --short` 是已有工作区改动的记录入口，用户改动保持不变。
+2. `git status --short` 是已有工作区改动的记录入口，用户改动保持不变。
 3. 代码入口、调用者和被调用者以图谱查询及精确源码片段为依据。
 4. 结论分为“源码事实、测试/实验事实、线上事实、推断”，四类证据不混用。
 5. 多文件变更具有设计记录和实施计划；单文件确定性修改不要求独立计划。
@@ -281,12 +281,12 @@ MRCP SPEAK
 验收门禁包含与变更范围匹配的以下项目：
 
 ```sh
-rtk git diff --check
-rtk run 'find tools -type f -name "*.sh" -print0 | xargs -0 bash -n'
-rtk ./tools/dev/setup_macos.sh
-rtk ./bootstrap                 # configure.ac/Makefile.am/build 宏变化时适用
-rtk ./configure --help
-rtk cmake -S . -B /tmp/tte-mrcp-cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+git diff --check
+find tools -type f -name "*.sh" -print0 | xargs -0 bash -n
+./tools/dev/setup_macos.sh
+./bootstrap                 # configure.ac/Makefile.am/build 宏变化时适用
+./configure --help
+cmake -S . -B /tmp/tte-mrcp-cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 ```
 
 上面的 `tools/dev` 和 Homebrew 命令是 macOS 开发验证，不是 Linux 生产构建命令，也不是 Windows 验证命令。跨平台任务必须按目标环境补充：Windows 使用对应 Visual Studio solution、MSBuild/CTest 和 DLL 加载检查；Linux 使用目标发行版的 Autotools/CMake 构建、插件加载和服务启动冒烟测试。
@@ -300,8 +300,8 @@ rtk cmake -S . -B /tmp/tte-mrcp-cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 1. **Issue**：先有可追踪的 Issue 或任务编号；没有编号时先创建或获取 Issue，不得直接以临时分支替代需求记录。
 2. **分支**：从最新 `main` 创建专用分支，命名为 `<type>/issue-<number>-<short-slug>`，例如 `fix/issue-943-terminal-cleanup`、`docs/issue-120-root-layout`。禁止在 `main`、`master` 或其他默认保护分支上提交变更。
 3. **提交**：只暂存当前 Issue 范围内的文件；提交信息使用 Conventional Commits，并在提交正文或 footer 中关联 Issue。
-4. **验证**：提交前运行与变更范围匹配的验证门禁，并检查 `rtk git diff --check`、暂存区内容和敏感文件。
-5. **推送分支**：只能推送 Issue 分支，例如 `rtk git push -u origin <issue-branch>`；严禁执行 `git push origin main`、`git push origin master` 或向默认分支直接推送。
+4. **验证**：提交前运行与变更范围匹配的验证门禁，并检查 `git diff --check`、暂存区内容和敏感文件。
+5. **推送分支**：只能推送 Issue 分支，例如 `git push -u origin <issue-branch>`；严禁执行 `git push origin main`、`git push origin master` 或向默认分支直接推送。
 6. **PR**：从 Issue 分支创建 PR，目标为 `main`，PR 必须包含变更范围、验证结果、已知阻断和 Issue 关联（例如 `Closes #123`）。代码通过审核和保护规则后，才能由合并流程进入 `main`。
 7. **清理**：PR 合并并确认远程 `main` 包含目标提交后，才删除本地和远程 Issue 分支；未合并分支不得清理。
 
