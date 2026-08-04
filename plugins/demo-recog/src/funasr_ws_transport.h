@@ -179,10 +179,16 @@ typedef enum funasr_transport_failure_e {
 
 typedef struct funasr_transport_metrics_t {
     apr_uint64_t media_frames;
+    apr_uint64_t valid_audio_bytes;
+    apr_int64_t media_gap_p99_us;
     apr_int64_t media_gap_max_us;
+    apr_int64_t enqueue_max_us;
+    apr_int64_t ws_first_send_ms;
+    apr_int64_t ws_write_wait_max_ms;
     apr_size_t tx_ring_high_water_bytes;
     apr_size_t tx_ring_overrun_bytes;
     apr_size_t tx_ring_overrun_events;
+    apr_uint64_t abnormal_closes;
     apr_uint64_t ws_rx_partial_reads;
     apr_uint64_t ws_rx_messages;
     funasr_transport_failure_e completion_failure;

@@ -18,6 +18,7 @@
 #define FUNASR_HANDSHAKE_BUFFER_SIZE 4096U
 #define FUNASR_WORKER_READ_BUFFER_SIZE 4096U
 #define FUNASR_WS_FRAME_OVERHEAD 14U
+#define FUNASR_MEDIA_GAP_BUCKETS 1001U
 
 typedef struct funasr_default_io_t {
     apr_pool_t *pool;
@@ -46,6 +47,9 @@ struct funasr_transport_t {
     funasr_audio_format_t format;
     char call_id[FUNASR_CALL_ID_LIMIT + 1U];
     funasr_transport_metrics_t metrics;
+    apr_uint32_t media_gap_histogram[FUNASR_MEDIA_GAP_BUCKETS];
+    apr_uint64_t media_gap_samples;
+    apr_int64_t generation_started_us;
     apr_int64_t last_media_us;
     apr_size_t ring_limit;
     apr_size_t chunk_size;
@@ -1022,6 +1026,28 @@ static apt_bool_t funasr_status_retryable(apr_status_t status)
         APR_STATUS_IS_TIMEUP(status);
 }
 
+static void funasr_metrics_refresh_locked(funasr_transport_t *transport)
+{
+    apr_uint64_t threshold;
+    apr_uint64_t accumulated;
+    apr_size_t bucket;
+
+    if (transport->media_gap_samples == 0) {
+        transport->metrics.media_gap_p99_us = 0;
+        return;
+    }
+    threshold = (transport->media_gap_samples * 99U + 99U) / 100U;
+    accumulated = 0;
+    for (bucket = 0; bucket < FUNASR_MEDIA_GAP_BUCKETS; ++bucket) {
+        accumulated += transport->media_gap_histogram[bucket];
+        if (accumulated >= threshold) {
+            transport->metrics.media_gap_p99_us =
+                (apr_int64_t)bucket * 1000;
+            return;
+        }
+    }
+}
+
 static apt_bool_t funasr_emit_event(
     funasr_transport_t *transport,
     funasr_generation_t generation,
@@ -1045,6 +1071,7 @@ static apt_bool_t funasr_emit_event(
     event->text = text;
     event->text_size = text_size;
     apr_thread_mutex_lock(transport->mutex);
+    funasr_metrics_refresh_locked(transport);
     event->metrics = transport->metrics;
     apr_thread_mutex_unlock(transport->mutex);
 
@@ -1078,6 +1105,7 @@ static apt_bool_t funasr_emit_close_fence(
     event->generation = transport->generation;
     event->type = FUNASR_EVENT_WORKER_CLOSED;
     apr_thread_mutex_lock(transport->mutex);
+    funasr_metrics_refresh_locked(transport);
     event->metrics = transport->metrics;
     apr_thread_mutex_unlock(transport->mutex);
     accepted = transport->config.event_sink(
@@ -1267,6 +1295,8 @@ static apt_bool_t funasr_worker_handle_ws_event(
     apr_size_t tx_capacity,
     apr_size_t *tx_size,
     apr_size_t *tx_offset,
+    unsigned char *pong_payload,
+    apr_size_t *pong_size,
     apt_bool_t *final_received);
 
 static apt_bool_t funasr_worker_handshake(
@@ -1417,6 +1447,8 @@ static apt_bool_t funasr_worker_handle_ws_event(
     apr_size_t tx_capacity,
     apr_size_t *tx_size,
     apr_size_t *tx_offset,
+    unsigned char *pong_payload,
+    apr_size_t *pong_size,
     apt_bool_t *final_received)
 {
     if (ws_event->type == FUNASR_WS_EVENT_MESSAGE &&
@@ -1456,16 +1488,24 @@ static apt_bool_t funasr_worker_handle_ws_event(
         *final_received = TRUE;
         return TRUE;
     }
-    if (ws_event->type == FUNASR_WS_EVENT_PING && *tx_size == *tx_offset) {
-        *tx_size = funasr_ws_frame_encode(
-            transport,
-            FUNASR_WS_OPCODE_PONG,
-            ws_event->data,
-            ws_event->size,
-            tx_buffer,
-            tx_capacity);
-        *tx_offset = 0;
-        return *tx_size != 0;
+    if (ws_event->type == FUNASR_WS_EVENT_PING) {
+        if (*tx_size == *tx_offset) {
+            *tx_size = funasr_ws_frame_encode(
+                transport,
+                FUNASR_WS_OPCODE_PONG,
+                ws_event->data,
+                ws_event->size,
+                tx_buffer,
+                tx_capacity);
+            *tx_offset = 0;
+            return *tx_size != 0;
+        }
+        if (*pong_size != 0 || ws_event->size > 125U) {
+            return FALSE;
+        }
+        memcpy(pong_payload, ws_event->data, ws_event->size);
+        *pong_size = ws_event->size;
+        return TRUE;
     }
     if (ws_event->type == FUNASR_WS_EVENT_CLOSE) {
         return FALSE;
@@ -1481,6 +1521,8 @@ static apt_bool_t funasr_worker_read_available(
     apr_size_t tx_capacity,
     apr_size_t *tx_size,
     apr_size_t *tx_offset,
+    unsigned char *pong_payload,
+    apr_size_t *pong_size,
     apt_bool_t *final_received)
 {
     unsigned char input[FUNASR_WORKER_READ_BUFFER_SIZE];
@@ -1526,6 +1568,8 @@ static apt_bool_t funasr_worker_read_available(
                     tx_capacity,
                     tx_size,
                     tx_offset,
+                    pong_payload,
+                    pong_size,
                     final_received)) {
                 return FALSE;
             }
@@ -1622,6 +1666,8 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
             apr_int64_t write_wait_started_us;
             apr_int64_t last_audio_send_us;
             apr_int64_t stop_started_us;
+            unsigned char pong_payload[125];
+            apr_size_t pong_size;
             apt_bool_t input_started;
             apt_bool_t end_frame_queued;
             apt_bool_t final_received;
@@ -1639,6 +1685,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
             write_wait_started_us = 0;
             last_audio_send_us = 0;
             stop_started_us = 0;
+            pong_size = 0;
             input_started = FALSE;
             end_frame_queued = FALSE;
             final_received = FALSE;
@@ -1681,6 +1728,8 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                     max_chunk + FUNASR_WS_FRAME_OVERHEAD,
                     &tx_size,
                     &tx_offset,
+                    pong_payload,
+                    &pong_size,
                     &final_received)) {
                 terminal_failure = FUNASR_FAILURE_PROTOCOL;
                 generation_failed = TRUE;
@@ -1730,7 +1779,19 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                         0);
                     input_started = TRUE;
                 }
-                if (tx_size == tx_offset &&
+                if (tx_size == tx_offset && pong_size != 0) {
+                    tx_size = funasr_ws_frame_encode(
+                        transport,
+                        FUNASR_WS_OPCODE_PONG,
+                        pong_payload,
+                        pong_size,
+                        tx_buffer,
+                        max_chunk + FUNASR_WS_FRAME_OVERHEAD);
+                    tx_offset = 0;
+                    pong_size = 0;
+                    tx_audio = FALSE;
+                    write_wait_started_us = now_us;
+                } else if (tx_size == tx_offset &&
                     (ring_size >= transport->chunk_size ||
                      (cancel && ring_size != 0))) {
                     apr_size_t amount = transport->chunk_size;
@@ -1806,9 +1867,26 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                         break;
                     }
                     if (tx_offset > before) {
+                        apr_int64_t write_wait_ms =
+                            write_wait_started_us == 0 ? 0 :
+                            (last_write_progress_us - write_wait_started_us) /
+                                1000;
+
+                        apr_thread_mutex_lock(transport->mutex);
+                        if (write_wait_ms >
+                                transport->metrics.ws_write_wait_max_ms) {
+                            transport->metrics.ws_write_wait_max_ms =
+                                write_wait_ms;
+                        }
                         if (tx_audio) {
                             last_audio_send_us = last_write_progress_us;
+                            if (transport->metrics.ws_first_send_ms < 0) {
+                                transport->metrics.ws_first_send_ms =
+                                    (last_write_progress_us -
+                                     transport->generation_started_us) / 1000;
+                            }
                         }
+                        apr_thread_mutex_unlock(transport->mutex);
                         write_wait_started_us = last_write_progress_us;
                     }
                 }
@@ -1823,6 +1901,8 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                             max_chunk + FUNASR_WS_FRAME_OVERHEAD,
                             &tx_size,
                             &tx_offset,
+                            pong_payload,
+                            &pong_size,
                             &final_received)) {
                         terminal_failure = FUNASR_FAILURE_PROTOCOL;
                         generation_failed = TRUE;
@@ -1886,6 +1966,9 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                         NULL,
                         0);
                 } else if (!close) {
+                    apr_thread_mutex_lock(transport->mutex);
+                    transport->metrics.abnormal_closes++;
+                    apr_thread_mutex_unlock(transport->mutex);
                     funasr_worker_emit_failure(
                         transport,
                         generation,
@@ -2047,6 +2130,14 @@ apt_bool_t funasr_transport_begin_generation(
         strlen(format->call_id) + 1U);
     transport->format.call_id = transport->call_id;
     memset(&transport->metrics, 0, sizeof(transport->metrics));
+    transport->metrics.ws_first_send_ms = -1;
+    memset(
+        transport->media_gap_histogram,
+        0,
+        sizeof(transport->media_gap_histogram));
+    transport->media_gap_samples = 0;
+    transport->generation_started_us =
+        funasr_clock_now_us(&transport->config.clock);
     transport->last_media_us = 0;
     transport->ring_limit = ring_limit;
     transport->chunk_size = chunk_size;
@@ -2101,10 +2192,13 @@ funasr_enqueue_status_e funasr_transport_enqueue_pcm(
 {
     funasr_enqueue_status_e status;
     apr_size_t ring_size;
+    apr_int64_t enqueue_started_us;
+    apr_int64_t enqueue_elapsed_us;
 
     if (!transport) {
         return FUNASR_ENQUEUE_NOT_STREAMING;
     }
+    enqueue_started_us = funasr_clock_now_us(&transport->config.clock);
     status = funasr_tx_ring_enqueue(
         transport->ring,
         generation,
@@ -2115,8 +2209,17 @@ funasr_enqueue_status_e funasr_transport_enqueue_pcm(
         apr_int64_t gap = transport->last_media_us == 0 ?
             0 : now_us - transport->last_media_us;
         transport->metrics.media_frames++;
+        transport->metrics.valid_audio_bytes += size;
         if (gap > transport->metrics.media_gap_max_us) {
             transport->metrics.media_gap_max_us = gap;
+        }
+        if (gap > 0) {
+            apr_size_t bucket = (apr_size_t)(gap / 1000);
+            if (bucket >= FUNASR_MEDIA_GAP_BUCKETS) {
+                bucket = FUNASR_MEDIA_GAP_BUCKETS - 1U;
+            }
+            transport->media_gap_histogram[bucket]++;
+            transport->media_gap_samples++;
         }
         transport->last_media_us = now_us;
         ring_size = funasr_tx_ring_size(transport->ring);
@@ -2132,6 +2235,11 @@ funasr_enqueue_status_e funasr_transport_enqueue_pcm(
             funasr_tx_ring_overrun_bytes(transport->ring);
         transport->metrics.tx_ring_overrun_events =
             funasr_tx_ring_overrun_events(transport->ring);
+    }
+    enqueue_elapsed_us =
+        funasr_clock_now_us(&transport->config.clock) - enqueue_started_us;
+    if (enqueue_elapsed_us > transport->metrics.enqueue_max_us) {
+        transport->metrics.enqueue_max_us = enqueue_elapsed_us;
     }
     apr_thread_cond_signal(transport->condition);
     apr_thread_mutex_unlock(transport->mutex);

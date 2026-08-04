@@ -396,6 +396,7 @@ typedef struct fake_io_t {
     unsigned char outbound[65536];
     apr_size_t outbound_size;
     apr_size_t read_chunk;
+    apr_size_t write_chunk;
     apt_bool_t opened;
     apt_bool_t handshake_ready;
     apt_bool_t stall_writes;
@@ -414,6 +415,7 @@ typedef struct event_collector_t {
     int drained;
     int metrics;
     int closed;
+    funasr_transport_metrics_t last_metrics;
     funasr_transport_failure_e last_failure;
     char final_text[64];
     funasr_transport_event_type_e sequence[32];
@@ -534,6 +536,9 @@ static apr_status_t fake_io_write(
         *size = 0;
         apr_thread_mutex_unlock(io->mutex);
         return APR_EAGAIN;
+    }
+    if (io->write_chunk != 0 && amount > io->write_chunk) {
+        amount = io->write_chunk;
     }
 
     if (!io->handshake_ready) {
@@ -681,6 +686,7 @@ static apt_bool_t collect_transport_event(
             break;
         case FUNASR_EVENT_TRANSPORT_METRICS:
             collector->metrics++;
+            collector->last_metrics = event->metrics;
             break;
         case FUNASR_EVENT_WORKER_CLOSED:
             collector->closed++;
@@ -746,6 +752,31 @@ static apt_bool_t fake_io_wait_poll_write(fake_io_t *io, int minimum_count)
         apr_sleep(1000);
     }
     return FALSE;
+}
+
+static apt_bool_t fake_io_wait_handshake(fake_io_t *io)
+{
+    int attempts;
+
+    for (attempts = 0; attempts < 2000; ++attempts) {
+        apt_bool_t ready;
+
+        apr_thread_mutex_lock(io->mutex);
+        ready = io->handshake_ready;
+        apr_thread_mutex_unlock(io->mutex);
+        if (ready) {
+            return TRUE;
+        }
+        apr_sleep(1000);
+    }
+    return FALSE;
+}
+
+static void fake_io_set_stall(fake_io_t *io, apt_bool_t stalled)
+{
+    apr_thread_mutex_lock(io->mutex);
+    io->stall_writes = stalled;
+    apr_thread_mutex_unlock(io->mutex);
 }
 
 static apt_bool_t fake_io_decode_binary(
@@ -815,6 +846,56 @@ static apt_bool_t fake_io_decode_binary(
     return ok;
 }
 
+static int fake_io_count_opcode(fake_io_t *io, unsigned char opcode)
+{
+    unsigned char *wire;
+    unsigned char *frame_storage;
+    unsigned char *message_storage;
+    apr_size_t wire_size;
+    funasr_ws_decoder_t decoder;
+    funasr_ws_event_t event;
+    funasr_ws_status_e status;
+    int count;
+
+    wire = malloc(sizeof(io->outbound));
+    frame_storage = malloc(FUNASR_WS_FRAME_LIMIT + 14U);
+    message_storage = malloc(FUNASR_WS_MESSAGE_LIMIT);
+    if (!wire || !frame_storage || !message_storage) {
+        free(wire);
+        free(frame_storage);
+        free(message_storage);
+        return -1;
+    }
+    apr_thread_mutex_lock(io->mutex);
+    wire_size = io->outbound_size;
+    memcpy(wire, io->outbound, wire_size);
+    apr_thread_mutex_unlock(io->mutex);
+    count = 0;
+    funasr_ws_decoder_init(
+        &decoder,
+        frame_storage,
+        FUNASR_WS_FRAME_LIMIT + 14U,
+        message_storage,
+        FUNASR_WS_MESSAGE_LIMIT,
+        FUNASR_WS_FRAME_LIMIT,
+        FUNASR_WS_MESSAGE_LIMIT);
+    status = funasr_ws_decoder_feed(&decoder, wire, wire_size, &event);
+    while (status == FUNASR_WS_EVENT_READY) {
+        if (event.opcode == opcode) {
+            ++count;
+        }
+        status = funasr_ws_decoder_feed(&decoder, NULL, 0, &event);
+    }
+    if (status == FUNASR_WS_PROTOCOL_ERROR ||
+        status == FUNASR_WS_LIMIT_EXCEEDED) {
+        count = -1;
+    }
+    free(wire);
+    free(frame_storage);
+    free(message_storage);
+    return count;
+}
+
 static int collector_value(event_collector_t *collector, int which)
 {
     int value;
@@ -828,6 +909,8 @@ static int collector_value(event_collector_t *collector, int which)
         value = collector->closed;
     } else if (which == 4) {
         value = collector->input_started;
+    } else if (which == 5) {
+        value = collector->metrics;
     } else {
         value = collector->failures;
     }
@@ -977,10 +1060,19 @@ static void test_worker_keeps_media_enqueue_independent_of_partial_rx(
 
     CHECK_TRUE("final event arrives",
                wait_for_collector(&collector, 0, 1) == TRUE);
+    CHECK_TRUE("metrics event arrives",
+               wait_for_collector(&collector, 5, 1) == TRUE);
     CHECK_TRUE("one input-start event", collector.input_started == 1);
     CHECK_TRUE("final text preserved",
                strcmp(collector.final_text, "ok") == 0);
     CHECK_TRUE("no transport failure", collector.failures == 0);
+    CHECK_TRUE("all media frames counted",
+               collector.last_metrics.media_frames == 50);
+    CHECK_TRUE("valid audio bytes counted",
+               collector.last_metrics.valid_audio_bytes ==
+                   sizeof(expected_media));
+    CHECK_TRUE("media gap p99 is 20ms",
+               collector.last_metrics.media_gap_p99_us == 20000);
 
     CHECK_TRUE("close requested",
                funasr_transport_request_close(transport) == TRUE);
@@ -995,6 +1087,97 @@ static void test_worker_keeps_media_enqueue_independent_of_partial_rx(
                collector.sequence_size > 0 &&
                collector.sequence[collector.sequence_size - 1] ==
                    FUNASR_EVENT_WORKER_CLOSED);
+}
+
+static void test_worker_queues_pong_behind_pending_audio(
+    apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    static const unsigned char ping_frame[] = {0x89, 0x01, 'q'};
+    static const char response_json[] = "{\"code\":0,\"text\":\"pong-ok\"}";
+    unsigned char response_frame[2 + sizeof(response_json) - 1];
+    unsigned char media_chunk[6400];
+    funasr_transport_config_t config;
+    funasr_audio_format_t format;
+    funasr_transport_t *transport;
+    fake_io_t io;
+    event_collector_t collector;
+    apr_int64_t now_us;
+
+    memset(&io, 0, sizeof(io));
+    memset(&collector, 0, sizeof(collector));
+    apr_thread_mutex_create(&io.mutex, APR_THREAD_MUTEX_DEFAULT, pool);
+    apr_thread_mutex_create(
+        &collector.mutex,
+        APR_THREAD_MUTEX_DEFAULT,
+        pool);
+    now_us = 3000000;
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.clock.now_us = fake_now_us;
+    config.clock.obj = &now_us;
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+    config.io_vtable = &fake_vtable;
+    config.io_obj = &io;
+    transport = funasr_transport_create(pool, 44, &config);
+
+    memset(&format, 0, sizeof(format));
+    format.input_sample_rate = 16000;
+    format.output_sample_rate = 16000;
+    format.channel_count = 1;
+    format.sample_width = 2;
+    format.call_id = "pong-test";
+    CHECK_TRUE("Pong generation begins",
+               funasr_transport_begin_generation(
+                   transport,
+                   31,
+                   &format) == TRUE);
+    CHECK_TRUE("Pong handshake completes",
+               fake_io_wait_handshake(&io) == TRUE);
+    fake_io_set_stall(&io, TRUE);
+    memset(media_chunk, 0x4a, sizeof(media_chunk));
+    CHECK_TRUE("Pong audio chunk enqueued",
+               funasr_transport_enqueue_pcm(
+                   transport,
+                   31,
+                   media_chunk,
+                   sizeof(media_chunk),
+                   now_us) == FUNASR_ENQUEUE_ACCEPTED);
+    CHECK_TRUE("audio write becomes pending",
+               fake_io_wait_poll_write(&io, 1) == TRUE);
+    fake_io_append_inbound(&io, ping_frame, sizeof(ping_frame));
+    funasr_transport_wake(transport);
+    apr_sleep(10000);
+    fake_io_set_stall(&io, FALSE);
+    funasr_transport_wake(transport);
+    CHECK_TRUE("audio and queued Pong are written",
+               fake_io_wait_outbound(&io, 6415) == TRUE);
+    CHECK_TRUE("exactly one Pong follows pending audio",
+               fake_io_count_opcode(&io, FUNASR_WS_OPCODE_PONG) == 1);
+
+    response_frame[0] = 0x81;
+    response_frame[1] = (unsigned char)(sizeof(response_json) - 1);
+    memcpy(response_frame + 2, response_json, sizeof(response_json) - 1);
+    fake_io_append_inbound(&io, response_frame, sizeof(response_frame));
+    funasr_transport_wake(transport);
+    CHECK_TRUE("Pong test final arrives",
+               wait_for_collector(&collector, 0, 1) == TRUE);
+    CHECK_TRUE("Pong test close requested",
+               funasr_transport_request_close(transport) == TRUE);
+    CHECK_TRUE("Pong test close fence arrives",
+               wait_for_collector(&collector, 2, 1) == TRUE);
+    CHECK_TRUE("Pong test worker joins",
+               funasr_transport_join_closed(transport) == APR_SUCCESS);
 }
 
 static void test_worker_stop_drains_without_final(
@@ -1087,6 +1270,133 @@ static void test_worker_stop_drains_without_final(
                wait_for_collector(&collector, 2, 1) == TRUE);
     CHECK_TRUE("STOP worker joins",
                funasr_transport_join_closed(transport) == APR_SUCCESS);
+}
+
+static void test_twenty_transport_workers_remain_independent(
+    apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    static const char response_json[] = "{\"code\":0,\"text\":\"twenty-ok\"}";
+    enum { TRANSPORT_COUNT = 20, FRAME_COUNT = 50 };
+    funasr_transport_t **transports;
+    fake_io_t *ios;
+    event_collector_t *collectors;
+    apr_int64_t *now_us;
+    unsigned char response_frame[2 + sizeof(response_json) - 1];
+    unsigned char media_frame[640];
+    int index;
+    int frame;
+
+    transports = calloc(TRANSPORT_COUNT, sizeof(*transports));
+    ios = calloc(TRANSPORT_COUNT, sizeof(*ios));
+    collectors = calloc(TRANSPORT_COUNT, sizeof(*collectors));
+    now_us = calloc(TRANSPORT_COUNT, sizeof(*now_us));
+    CHECK_TRUE("20-worker allocations",
+               transports && ios && collectors && now_us);
+    if (!transports || !ios || !collectors || !now_us) {
+        free(transports);
+        free(ios);
+        free(collectors);
+        free(now_us);
+        return;
+    }
+    response_frame[0] = 0x81;
+    response_frame[1] = (unsigned char)(sizeof(response_json) - 1);
+    memcpy(response_frame + 2, response_json, sizeof(response_json) - 1);
+    memset(media_frame, 0x5b, sizeof(media_frame));
+
+    for (index = 0; index < TRANSPORT_COUNT; ++index) {
+        funasr_transport_config_t config;
+        funasr_audio_format_t format;
+
+        apr_thread_mutex_create(
+            &ios[index].mutex,
+            APR_THREAD_MUTEX_DEFAULT,
+            pool);
+        apr_thread_mutex_create(
+            &collectors[index].mutex,
+            APR_THREAD_MUTEX_DEFAULT,
+            pool);
+        now_us[index] = 4000000;
+        funasr_transport_config_init(&config);
+        config.host = "127.0.0.1";
+        config.port = 8888;
+        config.path = "/ws/audio";
+        config.clock.now_us = fake_now_us;
+        config.clock.obj = &now_us[index];
+        config.event_sink = collect_transport_event;
+        config.event_sink_obj = &collectors[index];
+        config.io_vtable = &fake_vtable;
+        config.io_obj = &ios[index];
+        transports[index] = funasr_transport_create(
+            pool,
+            (funasr_transport_id_t)(100 + index),
+            &config);
+        memset(&format, 0, sizeof(format));
+        format.input_sample_rate = 16000;
+        format.output_sample_rate = 16000;
+        format.channel_count = 1;
+        format.sample_width = 2;
+        format.call_id = "twenty-worker-test";
+        CHECK_TRUE("20-worker generation begins",
+                   transports[index] != NULL &&
+                   funasr_transport_begin_generation(
+                       transports[index],
+                       (funasr_generation_t)(1000 + index),
+                       &format) == TRUE);
+    }
+    for (frame = 0; frame < FRAME_COUNT; ++frame) {
+        for (index = 0; index < TRANSPORT_COUNT; ++index) {
+            CHECK_TRUE("20-worker media accepted",
+                       funasr_transport_enqueue_pcm(
+                           transports[index],
+                           (funasr_generation_t)(1000 + index),
+                           media_frame,
+                           sizeof(media_frame),
+                           now_us[index]) == FUNASR_ENQUEUE_ACCEPTED);
+            now_us[index] += 20000;
+        }
+    }
+    for (index = 0; index < TRANSPORT_COUNT; ++index) {
+        CHECK_TRUE("20-worker exact audio sent",
+                   fake_io_wait_outbound(
+                       &ios[index],
+                       FRAME_COUNT * sizeof(media_frame)) == TRUE);
+        fake_io_append_inbound(
+            &ios[index],
+            response_frame,
+            sizeof(response_frame));
+        funasr_transport_wake(transports[index]);
+    }
+    for (index = 0; index < TRANSPORT_COUNT; ++index) {
+        CHECK_TRUE("20-worker final arrives",
+                   wait_for_collector(&collectors[index], 0, 1) == TRUE);
+        CHECK_TRUE("20-worker metrics arrive",
+                   wait_for_collector(&collectors[index], 5, 1) == TRUE);
+        CHECK_TRUE("20-worker frame count",
+                   collectors[index].last_metrics.media_frames == FRAME_COUNT);
+        CHECK_TRUE("20-worker has no overrun",
+                   collectors[index].last_metrics.tx_ring_overrun_events == 0);
+        CHECK_TRUE("20-worker close requested",
+                   funasr_transport_request_close(transports[index]) == TRUE);
+    }
+    for (index = 0; index < TRANSPORT_COUNT; ++index) {
+        CHECK_TRUE("20-worker close fence",
+                   wait_for_collector(&collectors[index], 2, 1) == TRUE);
+        CHECK_TRUE("20-worker joins",
+                   funasr_transport_join_closed(transports[index]) == APR_SUCCESS);
+    }
+    free(transports);
+    free(ios);
+    free(collectors);
+    free(now_us);
 }
 
 static void test_worker_preserves_handshake_sticky_frame(apr_pool_t *pool)
@@ -1464,7 +1774,9 @@ int main(void)
     test_ws_protocol_and_size_errors();
     test_ring_generation_wrap_and_overrun(pool);
     test_worker_keeps_media_enqueue_independent_of_partial_rx(pool);
+    test_worker_queues_pong_behind_pending_audio(pool);
     test_worker_stop_drains_without_final(pool);
+    test_twenty_transport_workers_remain_independent(pool);
     test_worker_preserves_handshake_sticky_frame(pool);
     test_worker_reports_one_queue_overrun(pool);
     test_worker_write_stall_uses_fake_clock(pool);
