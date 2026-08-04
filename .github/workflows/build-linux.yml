@@ -1,4 +1,4 @@
-name: Build Linux Packages
+name: Build and Verify Linux Packages
 
 on:
   pull_request:
@@ -26,6 +26,9 @@ jobs:
             require_gcc_485: 'true'
             artifact_name: tte-mrcp-rhel7-x86_64
             zip_name: tte-mrcp-rhel7-x86_64.zip
+            # CentOS 7 only ships CMake 2.8.12; the Autotools gate covers this row.
+            run_cmake_gate: 'false'
+            verify_image: rockylinux:8
           - target: kylinv10-aarch64
             runner: ubuntu-24.04-arm
             build_image: rockylinux:8
@@ -34,6 +37,8 @@ jobs:
             require_gcc_485: 'false'
             artifact_name: tte-mrcp-kylinv10-aarch64
             zip_name: tte-mrcp-kylinv10-aarch64.zip
+            run_cmake_gate: 'true'
+            verify_image: rockylinux:8
 
     steps:
       - name: Check out source
@@ -46,6 +51,7 @@ jobs:
           ELF_MACHINE: ${{ matrix.elf_machine }}
           GLIBC_MAX: ${{ matrix.glibc_max }}
           REQUIRE_GCC_485: ${{ matrix.require_gcc_485 }}
+          RUN_CMAKE_GATE: ${{ matrix.run_cmake_gate }}
           TARGET: ${{ matrix.target }}
           ZIP_NAME: ${{ matrix.zip_name }}
         run: |
@@ -58,6 +64,7 @@ jobs:
             --env GITHUB_WORKSPACE=/work \
             --env GLIBC_MAX \
             --env REQUIRE_GCC_485 \
+            --env RUN_CMAKE_GATE \
             --env TARGET \
             --env ZIP_NAME \
             "$BUILD_IMAGE" \
@@ -81,7 +88,7 @@ jobs:
                 ;;
               kylinv10-aarch64)
                 dnf -y install apr-devel apr-util-devel binutils file gcc gcc-c++ make \
-                  openssl-devel pkgconf-pkg-config autoconf automake diffutils git libtool unzip zip
+                  cmake openssl-devel pkgconf-pkg-config autoconf automake diffutils git libtool unzip zip
                 ;;
               *)
                 echo "Unsupported target: $TARGET" >&2
@@ -199,6 +206,56 @@ jobs:
           bundle_non_system_libraries
           audit_elf
 
+          # ---- Plugin unit-test gates (target ABI container) ----
+          # Autotools gate: demorecog check_PROGRAMS (4 tests).
+          make -C "$GITHUB_WORKSPACE/build/ci/plugins/demo-recog" check \
+            > "$GITHUB_WORKSPACE/check-autotools-$TARGET.log" 2>&1 || {
+              tail -n 120 "$GITHUB_WORKSPACE/check-autotools-$TARGET.log"
+              exit 1
+            }
+          grep -E "^(PASS|FAIL|SKIP|ERROR|XFAIL|XPASS):" \
+            "$GITHUB_WORKSPACE/check-autotools-$TARGET.log" || true
+
+          # CMake gate (kylinv10 row only): plugin tests via CTest.
+          if [ "$RUN_CMAKE_GATE" = true ]; then
+            cmake -S "$GITHUB_WORKSPACE" -B "$GITHUB_WORKSPACE/build/ci-cmake" \
+              -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+              -DBUILD_DEMORECOG_TESTS=ON \
+              -DBUILD_TTS_WEBSOCKET_TESTS=ON \
+              > "$GITHUB_WORKSPACE/cmake-configure-$TARGET.log" 2>&1 || {
+                tail -n 120 "$GITHUB_WORKSPACE/cmake-configure-$TARGET.log"
+                exit 1
+              }
+            cmake --build "$GITHUB_WORKSPACE/build/ci-cmake" \
+              --target test_resample test_json_unescape \
+                     test_funasr_ws_transport test_funasr_control \
+                     test_tts_websocket_http_parse \
+              -j"$(getconf _NPROCESSORS_ONLN)" \
+              > "$GITHUB_WORKSPACE/cmake-build-$TARGET.log" 2>&1 || {
+                tail -n 120 "$GITHUB_WORKSPACE/cmake-build-$TARGET.log"
+                exit 1
+              }
+            ctest --test-dir "$GITHUB_WORKSPACE/build/ci-cmake" \
+              --output-on-failure \
+              -R '^(demorecog_|tts_websocket_)' \
+              > "$GITHUB_WORKSPACE/ctest-$TARGET.log" 2>&1 || {
+                tail -n 120 "$GITHUB_WORKSPACE/ctest-$TARGET.log"
+                exit 1
+              }
+          fi
+
+          # ---- Dependency inspection: no unresolved dynamic library ----
+          : > "$GITHUB_WORKSPACE/ldd-$TARGET.txt"
+          while IFS= read -r candidate; do
+            printf '== %s ==\n' "$candidate" >> "$GITHUB_WORKSPACE/ldd-$TARGET.txt"
+            ldd "$candidate" >> "$GITHUB_WORKSPACE/ldd-$TARGET.txt" 2>&1 || true
+          done < <(elf_files)
+          if grep -q "not found" "$GITHUB_WORKSPACE/ldd-$TARGET.txt"; then
+            echo "Unresolved dynamic dependencies:" >&2
+            grep -B1 "not found" "$GITHUB_WORKSPACE/ldd-$TARGET.txt" >&2
+            exit 1
+          fi
+
           cd "$GITHUB_WORKSPACE/package-root"
           zip -r "$GITHUB_WORKSPACE/$ZIP_NAME" opt/tte-mrcp
           unzip -l "$GITHUB_WORKSPACE/$ZIP_NAME"
@@ -223,3 +280,236 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.zip_name }}
           if-no-files-found: error
+
+  # Runtime verification of the packaged tree in a Linux container:
+  # plugin load, RTP/MRCP link smoke and the Issue #2 20-session loopback
+  # fixture with machine-readable pacing thresholds.
+  verify-linux:
+    name: verify ${{ matrix.target }}
+    needs: build-linux
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: rhel7-x86_64
+            runner: ubuntu-24.04
+            artifact_name: tte-mrcp-rhel7-x86_64
+            zip_name: tte-mrcp-rhel7-x86_64.zip
+            verify_image: rockylinux:8
+          - target: kylinv10-aarch64
+            runner: ubuntu-24.04-arm
+            artifact_name: tte-mrcp-kylinv10-aarch64
+            zip_name: tte-mrcp-kylinv10-aarch64.zip
+            verify_image: rockylinux:8
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: artifacts
+
+      - name: Verify runtime gates in a Linux container
+        shell: bash
+        env:
+          VERIFY_IMAGE: ${{ matrix.verify_image }}
+          TARGET: ${{ matrix.target }}
+          ZIP_NAME: ${{ matrix.zip_name }}
+          CONCURRENCY: '20'
+          FAULT_CONNECTION: '2'
+        run: |
+          set -euo pipefail
+          test -f "artifacts/$ZIP_NAME"
+          docker run --interactive --rm \
+            --volume "$GITHUB_WORKSPACE:/work" \
+            --workdir /work \
+            --env GITHUB_WORKSPACE=/work \
+            --env TARGET \
+            --env ZIP_NAME \
+            --env CONCURRENCY \
+            --env FAULT_CONNECTION \
+            "$VERIFY_IMAGE" \
+            bash -seu <<'CONTAINER_SCRIPT'
+          set -o pipefail
+
+          dnf -y install --setopt=install_weak_deps=False \
+            expect python3 file binutils procps-ng unzip
+          # The fixture requires Python >= 3.7 (PEP 563 future annotations);
+          # Rocky Linux 8's default python3 is 3.6, so enable the python39 module.
+          dnf -y module enable python39
+          dnf -y install python39
+          ln -sfn /usr/bin/python3.9 /usr/local/bin/python3
+          python3 --version
+
+          cd "$GITHUB_WORKSPACE"
+          rm -rf verify-root
+          mkdir -p verify-root
+          cd verify-root
+          unzip -q "$GITHUB_WORKSPACE/artifacts/$ZIP_NAME"
+          package_dir="$GITHUB_WORKSPACE/verify-root/opt/tte-mrcp"
+          export LD_LIBRARY_PATH="$package_dir/lib"
+          export PATH="$package_dir/bin:$PATH"
+          mkdir -p "$package_dir/log" "$package_dir/var"
+
+          # 1. Fixture self-test (stdlib only, no third-party dependencies)
+          python3 "$GITHUB_WORKSPACE/tools/diagnostics/funasr_ws_fixture.py" --self-test
+
+          # 2. Runtime dependency inspection: every ELF must resolve
+          for candidate in "$package_dir"/bin/* "$package_dir"/plugin/*.so; do
+            [ -f "$candidate" ] || continue
+            if file "$candidate" | grep -q ELF; then
+              if ldd "$candidate" 2>&1 | grep -q "not found"; then
+                echo "Unresolved dependency for $candidate" >&2
+                ldd "$candidate" >&2 || true
+                exit 1
+              fi
+            fi
+          done
+
+          # 3. Emit loopback server config: exactly one Demo-Recog-1 -> fixture
+          python3 "$GITHUB_WORKSPACE/tools/diagnostics/funasr_ws_fixture.py" \
+            --emit-config "$GITHUB_WORKSPACE/conf/unimrcpserver.xml" \
+            "$package_dir/conf/unimrcpserver.xml" \
+            --host 127.0.0.1 --port 8022 --path /ws/asr
+          test "$(grep -c 'id="Demo-Recog-1"' "$package_dir/conf/unimrcpserver.xml")" -eq 1
+
+          # 4. Start the loopback fixture with fault injection
+          python3 "$GITHUB_WORKSPACE/tools/diagnostics/funasr_ws_fixture.py" \
+            --host 127.0.0.1 --port 8022 --path /ws/asr \
+            --mode split-payload \
+            --fault-connection "$FAULT_CONNECTION" \
+            --report "$GITHUB_WORKSPACE/fixture.jsonl" \
+            > "$GITHUB_WORKSPACE/fixture.log" 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" "$server_pid" 2>/dev/null || true' EXIT
+
+          for i in $(seq 1 30); do
+            if grep -q '"event": "listening"' "$GITHUB_WORKSPACE/fixture.log"; then
+              break
+            fi
+            if ! kill -0 "$fixture_pid" 2>/dev/null; then
+              echo "fixture exited early" >&2
+              cat "$GITHUB_WORKSPACE/fixture.log" >&2 || true
+              exit 1
+            fi
+            sleep 1
+          done
+          grep -q '"event": "listening"' "$GITHUB_WORKSPACE/fixture.log"
+
+          # 5. Start unimrcpserver from the packaged tree (console log only)
+          cd "$package_dir"
+          bin/unimrcpserver -r "$package_dir" -l 6 -o 1 \
+            > "$GITHUB_WORKSPACE/server.log" 2>&1 &
+          server_pid=$!
+
+          ready=0
+          for i in $(seq 1 60); do
+            if grep -q "Create MRCPv2 Profile" "$GITHUB_WORKSPACE/server.log"; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              echo "unimrcpserver exited early" >&2
+              tail -n 120 "$GITHUB_WORKSPACE/server.log" >&2 || true
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "$ready" != 1 ]; then
+            echo "unimrcpserver did not become ready" >&2
+            tail -n 120 "$GITHUB_WORKSPACE/server.log" >&2 || true
+            exit 1
+          fi
+          sleep 2
+
+          # 6. Assert config/plugin load did not fail
+          if grep -qE "Failed to Load UniMRCP Server Document|Failed to compose plugin path" \
+             "$GITHUB_WORKSPACE/server.log"; then
+            echo "server config/plugin load failure" >&2
+            exit 1
+          fi
+
+          # 7. UMC binary path expected by the stress script
+          mkdir -p "$GITHUB_WORKSPACE/platforms/umc"
+          ln -sfn "$package_dir/bin/umc" "$GITHUB_WORKSPACE/platforms/umc/umc"
+
+          # 8. 20-concurrent split-payload loopback experiment (1 warmup)
+          cd "$GITHUB_WORKSPACE"
+          bash tools/stress/stress_test_improved.sh \
+            -t asr -c "$CONCURRENCY" -i 1 \
+            -r "$GITHUB_WORKSPACE" \
+            -a "$GITHUB_WORKSPACE/data" \
+            --server-log="$GITHUB_WORKSPACE/server.log" \
+            --fixture-report="$GITHUB_WORKSPACE/fixture.jsonl" \
+            --pacing-json="$GITHUB_WORKSPACE/pacing.json" \
+            --warmup=1 \
+            --fault-connection="$FAULT_CONNECTION"
+
+          # 9. Assert Issue #2 pacing acceptance thresholds
+          python3 - "$GITHUB_WORKSPACE/pacing.json" "$CONCURRENCY" <<'PY'
+          import json
+          import sys
+
+          pacing_path, expected_requests = sys.argv[1], int(sys.argv[2])
+          with open(pacing_path, encoding="utf-8") as handle:
+              report = json.load(handle)
+          problems = []
+          if report.get("requests") != expected_requests:
+              problems.append(f"requests={report.get('requests')} != {expected_requests}")
+          if report.get("overrun_events", -1) != 0:
+              problems.append(f"overrun_events={report.get('overrun_events')}")
+          if report.get("abnormal_closes", -1) != 0:
+              problems.append(f"abnormal_closes={report.get('abnormal_closes')}")
+          if report.get("successes", -1) < expected_requests - 1:
+              problems.append(f"successes={report.get('successes')} < {expected_requests - 1}")
+          p99 = report.get("nonfault_frame_gap_p99_ms")
+          maximum = report.get("nonfault_frame_gap_max_ms")
+          if p99 is not None and p99 >= 100:
+              problems.append(f"nonfault_frame_gap_p99_ms={p99} >= 100")
+          if maximum is not None and maximum >= 250:
+              problems.append(f"nonfault_frame_gap_max_ms={maximum} >= 250")
+          if problems:
+              print(json.dumps(report, ensure_ascii=False, indent=2))
+              raise SystemExit("\n".join(problems))
+          print(
+              "pacing gate OK: "
+              f"requests={report.get('requests')} successes={report.get('successes')} "
+              f"p99={p99}ms max={maximum}ms overrun={report.get('overrun_events')}"
+          )
+          PY
+          CONTAINER_SCRIPT
+
+      - name: Publish verify summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f pacing.json
+          {
+            echo "## ${{ matrix.target }} runtime verification"
+            echo
+            echo "- Package: \`${{ matrix.zip_name }}\`"
+            echo "- Verify image: \`${{ matrix.verify_image }}\`"
+            echo "- 20 concurrent ASR sessions + 1 warmup, split-payload fault on connection 2"
+            echo
+            echo "### Pacing report"
+            echo '```json'
+            cat pacing.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-verify-evidence
+          path: |
+            server.log
+            fixture.log
+            fixture.jsonl
+            pacing.json
+            stress_results/
+          if-no-files-found: ignore
