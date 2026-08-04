@@ -60,6 +60,14 @@ struct funasr_transport_t {
     apt_bool_t joined;
 };
 
+static apr_status_t funasr_transport_pool_cleanup(void *obj)
+{
+    funasr_transport_t *transport = obj;
+    free(transport->close_event);
+    transport->close_event = NULL;
+    return APR_SUCCESS;
+}
+
 struct funasr_tx_ring_t {
     unsigned char *data;
     apr_size_t capacity;
@@ -1251,10 +1259,22 @@ static apt_bool_t funasr_worker_write_pending(
     return FALSE;
 }
 
+static apt_bool_t funasr_worker_handle_ws_event(
+    funasr_transport_t *transport,
+    funasr_generation_t generation,
+    const funasr_ws_event_t *ws_event,
+    unsigned char *tx_buffer,
+    apr_size_t tx_capacity,
+    apr_size_t *tx_size,
+    apr_size_t *tx_offset,
+    apt_bool_t *final_received);
+
 static apt_bool_t funasr_worker_handshake(
     funasr_transport_t *transport,
     funasr_generation_t generation,
-    funasr_ws_decoder_t *ws_decoder)
+    funasr_ws_decoder_t *ws_decoder,
+    funasr_ws_event_t *sticky_event,
+    apt_bool_t *sticky_ready)
 {
     unsigned char nonce[16];
     char key[32];
@@ -1269,6 +1289,8 @@ static apt_bool_t funasr_worker_handshake(
     apr_size_t index;
     int result;
 
+    *sticky_ready = FALSE;
+    memset(sticky_event, 0, sizeof(*sticky_event));
     if (apr_generate_random_bytes(nonce, sizeof(nonce)) != APR_SUCCESS) {
         for (index = 0; index < sizeof(nonce); ++index) {
             nonce[index] = (unsigned char)(generation >> ((index % 8U) * 8U));
@@ -1364,12 +1386,16 @@ static apt_bool_t funasr_worker_handshake(
                     return FALSE;
                 }
                 if (consumed < amount) {
-                    funasr_ws_event_t event;
-                    if (funasr_ws_decoder_feed(
+                    funasr_ws_status_e sticky_status;
+                    sticky_status = funasr_ws_decoder_feed(
                             ws_decoder,
                             input + consumed,
                             amount - consumed,
-                            &event) == FUNASR_WS_PROTOCOL_ERROR) {
+                            sticky_event);
+                    if (sticky_status == FUNASR_WS_EVENT_READY) {
+                        *sticky_ready = TRUE;
+                    } else if (sticky_status == FUNASR_WS_PROTOCOL_ERROR ||
+                               sticky_status == FUNASR_WS_LIMIT_EXCEEDED) {
                         return FALSE;
                     }
                 }
@@ -1593,26 +1619,32 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
             apr_size_t tx_size;
             apr_size_t tx_offset;
             apr_int64_t last_write_progress_us;
-            apr_int64_t first_send_us;
+            apr_int64_t write_wait_started_us;
+            apr_int64_t last_audio_send_us;
             apr_int64_t stop_started_us;
             apt_bool_t input_started;
             apt_bool_t end_frame_queued;
             apt_bool_t final_received;
             apt_bool_t generation_failed;
             apt_bool_t generation_drained;
+            apt_bool_t tx_audio;
+            apt_bool_t sticky_ready;
+            funasr_ws_event_t sticky_event;
             funasr_transport_failure_e terminal_failure;
 
             tx_size = 0;
             tx_offset = 0;
             last_write_progress_us =
                 funasr_clock_now_us(&transport->config.clock);
-            first_send_us = 0;
+            write_wait_started_us = 0;
+            last_audio_send_us = 0;
             stop_started_us = 0;
             input_started = FALSE;
             end_frame_queued = FALSE;
             final_received = FALSE;
             generation_failed = FALSE;
             generation_drained = FALSE;
+            tx_audio = FALSE;
             terminal_failure = FUNASR_FAILURE_INTERNAL;
             funasr_ws_decoder_init(
                 &decoder,
@@ -1634,8 +1666,23 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
             } else if (!funasr_worker_handshake(
                            transport,
                            generation,
-                           &decoder)) {
+                           &decoder,
+                           &sticky_event,
+                           &sticky_ready)) {
                 terminal_failure = FUNASR_FAILURE_HANDSHAKE;
+                generation_failed = TRUE;
+            }
+            if (!generation_failed && sticky_ready &&
+                !funasr_worker_handle_ws_event(
+                    transport,
+                    generation,
+                    &sticky_event,
+                    tx_buffer,
+                    max_chunk + FUNASR_WS_FRAME_OVERHEAD,
+                    &tx_size,
+                    &tx_offset,
+                    &final_received)) {
+                terminal_failure = FUNASR_FAILURE_PROTOCOL;
                 generation_failed = TRUE;
             }
 
@@ -1702,6 +1749,8 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                             tx_buffer,
                             max_chunk + FUNASR_WS_FRAME_OVERHEAD);
                         tx_offset = 0;
+                        tx_audio = TRUE;
+                        write_wait_started_us = now_us;
                     }
                 }
                 if (cancel && tx_size == tx_offset &&
@@ -1715,6 +1764,8 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                         tx_buffer,
                         max_chunk + FUNASR_WS_FRAME_OVERHEAD);
                     tx_offset = 0;
+                    tx_audio = FALSE;
+                    write_wait_started_us = now_us;
                     end_frame_queued = TRUE;
                 }
                 if (cancel && end_frame_queued &&
@@ -1754,27 +1805,38 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                         generation_failed = TRUE;
                         break;
                     }
-                    if (tx_offset > before && first_send_us == 0) {
-                        first_send_us = last_write_progress_us;
+                    if (tx_offset > before) {
+                        if (tx_audio) {
+                            last_audio_send_us = last_write_progress_us;
+                        }
+                        write_wait_started_us = last_write_progress_us;
                     }
                 }
                 if ((events & FUNASR_IO_READABLE) != 0 &&
-                    !funasr_worker_read_available(
-                        transport,
-                        generation,
-                        &decoder,
-                        tx_buffer,
-                        max_chunk + FUNASR_WS_FRAME_OVERHEAD,
-                        &tx_size,
-                        &tx_offset,
-                        &final_received)) {
-                    terminal_failure = FUNASR_FAILURE_PROTOCOL;
-                    generation_failed = TRUE;
-                    break;
+                    !final_received) {
+                    apt_bool_t had_pending = tx_size != tx_offset;
+                    if (!funasr_worker_read_available(
+                            transport,
+                            generation,
+                            &decoder,
+                            tx_buffer,
+                            max_chunk + FUNASR_WS_FRAME_OVERHEAD,
+                            &tx_size,
+                            &tx_offset,
+                            &final_received)) {
+                        terminal_failure = FUNASR_FAILURE_PROTOCOL;
+                        generation_failed = TRUE;
+                        break;
+                    }
+                    if (!had_pending && tx_size != tx_offset) {
+                        tx_audio = FALSE;
+                        write_wait_started_us = now_us;
+                    }
                 }
                 now_us = funasr_clock_now_us(&transport->config.clock);
                 if (tx_size != tx_offset &&
-                    now_us - last_write_progress_us >=
+                    write_wait_started_us != 0 &&
+                    now_us - write_wait_started_us >=
                         transport->config.write_stall_timeout_us) {
                     terminal_failure = FUNASR_FAILURE_WRITE_STALL;
                     generation_failed = TRUE;
@@ -1793,8 +1855,8 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                     generation_drained = TRUE;
                     break;
                 }
-                if (!cancel && first_send_us != 0 &&
-                    now_us - first_send_us >=
+                if (!cancel && last_audio_send_us != 0 &&
+                    now_us - last_audio_send_us >=
                         transport->config.no_result_timeout_us) {
                     terminal_failure = FUNASR_FAILURE_NO_RESULT_TIMEOUT;
                     generation_failed = TRUE;
@@ -1830,6 +1892,13 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                         terminal_failure);
                 }
             }
+            funasr_emit_event(
+                transport,
+                generation,
+                FUNASR_EVENT_TRANSPORT_METRICS,
+                terminal_failure,
+                NULL,
+                0);
             funasr_transport_finish_generation(transport, generation);
         }
     }
@@ -1927,6 +1996,11 @@ funasr_transport_t *funasr_transport_create(
         transport->io_vtable = &funasr_default_io_vtable;
         transport->io_obj = &transport->default_io;
     }
+    apr_pool_cleanup_register(
+        pool,
+        transport,
+        funasr_transport_pool_cleanup,
+        apr_pool_cleanup_null);
     return transport;
 }
 
@@ -2130,6 +2204,8 @@ apt_bool_t funasr_transport_wake(funasr_transport_t *transport)
 
 apt_bool_t funasr_transport_request_close(funasr_transport_t *transport)
 {
+    apr_status_t start_status;
+
     if (!transport) {
         return FALSE;
     }
@@ -2141,8 +2217,23 @@ apt_bool_t funasr_transport_request_close(funasr_transport_t *transport)
     transport->close_requested = TRUE;
     transport->active = FALSE;
     funasr_tx_ring_close(transport->ring);
+    start_status = APR_SUCCESS;
+    if (!transport->thread_started) {
+        start_status = apr_thread_create(
+            &transport->thread,
+            NULL,
+            funasr_transport_worker,
+            transport,
+            transport->pool);
+        if (start_status == APR_SUCCESS) {
+            transport->thread_started = TRUE;
+        }
+    }
     apr_thread_cond_broadcast(transport->condition);
     apr_thread_mutex_unlock(transport->mutex);
+    if (start_status != APR_SUCCESS) {
+        return FALSE;
+    }
     funasr_transport_wake(transport);
     return TRUE;
 }

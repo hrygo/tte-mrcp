@@ -398,6 +398,8 @@ typedef struct fake_io_t {
     int poll_want_write;
     int poll_without_write;
     int wake_count;
+    unsigned char handshake_suffix[256];
+    apr_size_t handshake_suffix_size;
 } fake_io_t;
 
 typedef struct event_collector_t {
@@ -569,6 +571,15 @@ static apr_status_t fake_io_write(
                 return APR_ENOSPC;
             }
             io->inbound_size = (apr_size_t)response_size;
+            if (io->handshake_suffix_size >
+                    sizeof(io->inbound) - io->inbound_size) {
+                apr_thread_mutex_unlock(io->mutex);
+                return APR_ENOSPC;
+            }
+            memcpy(io->inbound + io->inbound_size,
+                   io->handshake_suffix,
+                   io->handshake_suffix_size);
+            io->inbound_size += io->handshake_suffix_size;
             io->inbound_offset = 0;
             io->handshake_ready = TRUE;
         }
@@ -708,6 +719,24 @@ static apt_bool_t fake_io_wait_outbound(
         size = io->outbound_size;
         apr_thread_mutex_unlock(io->mutex);
         if (size >= minimum_size) {
+            return TRUE;
+        }
+        apr_sleep(1000);
+    }
+    return FALSE;
+}
+
+static apt_bool_t fake_io_wait_poll_write(fake_io_t *io, int minimum_count)
+{
+    int attempts;
+
+    for (attempts = 0; attempts < 2000; ++attempts) {
+        int count;
+
+        apr_thread_mutex_lock(io->mutex);
+        count = io->poll_want_write;
+        apr_thread_mutex_unlock(io->mutex);
+        if (count >= minimum_count) {
             return TRUE;
         }
         apr_sleep(1000);
@@ -1056,6 +1085,67 @@ static void test_worker_stop_drains_without_final(
                funasr_transport_join_closed(transport) == APR_SUCCESS);
 }
 
+static void test_worker_preserves_handshake_sticky_frame(apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    static const char response[] = "{\"code\":0,\"text\":\"sticky\"}";
+    funasr_transport_config_t config;
+    funasr_audio_format_t format;
+    funasr_transport_t *transport;
+    fake_io_t io;
+    event_collector_t collector;
+    apr_int64_t now_us = 2500000;
+
+    memset(&io, 0, sizeof(io));
+    memset(&collector, 0, sizeof(collector));
+    apr_thread_mutex_create(&io.mutex, APR_THREAD_MUTEX_DEFAULT, pool);
+    apr_thread_mutex_create(
+        &collector.mutex,
+        APR_THREAD_MUTEX_DEFAULT,
+        pool);
+    io.handshake_suffix[0] = 0x81;
+    io.handshake_suffix[1] = (unsigned char)(sizeof(response) - 1U);
+    memcpy(io.handshake_suffix + 2, response, sizeof(response) - 1U);
+    io.handshake_suffix_size = sizeof(response) + 1U;
+
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.clock.now_us = fake_now_us;
+    config.clock.obj = &now_us;
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+    config.io_vtable = &fake_vtable;
+    config.io_obj = &io;
+    transport = funasr_transport_create(pool, 47, &config);
+    memset(&format, 0, sizeof(format));
+    format.input_sample_rate = 16000;
+    format.output_sample_rate = 16000;
+    format.channel_count = 1;
+    format.sample_width = 2;
+    format.call_id = "sticky-test";
+    CHECK_TRUE("sticky generation begins",
+               funasr_transport_begin_generation(transport, 61, &format));
+    CHECK_TRUE("sticky final arrives",
+               wait_for_collector(&collector, 0, 1));
+    CHECK_TRUE("sticky final text preserved",
+               strcmp(collector.final_text, "sticky") == 0);
+    CHECK_TRUE("sticky frame has no protocol failure", collector.failures == 0);
+    funasr_transport_request_close(transport);
+    CHECK_TRUE("sticky worker closes",
+               wait_for_collector(&collector, 2, 1));
+    CHECK_TRUE("sticky worker joins",
+               funasr_transport_join_closed(transport) == APR_SUCCESS);
+}
+
 static void test_worker_reports_one_queue_overrun(
     apr_pool_t *pool)
 {
@@ -1218,6 +1308,8 @@ static void test_worker_write_stall_uses_fake_clock(
                    remainder,
                    sizeof(remainder),
                    now_us) == FUNASR_ENQUEUE_ACCEPTED);
+    CHECK_TRUE("worker is waiting for writable socket",
+               fake_io_wait_poll_write(&io, 2));
     now_us += FUNASR_WRITE_STALL_TIMEOUT_US;
     funasr_transport_wake(transport);
     CHECK_TRUE("write-stall failure arrives",
@@ -1303,6 +1395,47 @@ static void test_worker_rejected_close_fence_is_reported(
                    FUNASR_EVENT_WORKER_CLOSED);
 }
 
+static void test_worker_close_without_generation_has_fence(apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    funasr_transport_config_t config;
+    funasr_transport_t *transport;
+    fake_io_t io;
+    event_collector_t collector;
+
+    memset(&io, 0, sizeof(io));
+    memset(&collector, 0, sizeof(collector));
+    apr_thread_mutex_create(&io.mutex, APR_THREAD_MUTEX_DEFAULT, pool);
+    apr_thread_mutex_create(
+        &collector.mutex,
+        APR_THREAD_MUTEX_DEFAULT,
+        pool);
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+    config.io_vtable = &fake_vtable;
+    config.io_obj = &io;
+    transport = funasr_transport_create(pool, 48, &config);
+    CHECK_TRUE("idle transport created", transport != NULL);
+    CHECK_TRUE("idle transport close requested",
+               funasr_transport_request_close(transport));
+    CHECK_TRUE("idle transport close fence arrives",
+               wait_for_collector(&collector, 2, 1));
+    CHECK_TRUE("idle transport joins",
+               funasr_transport_join_closed(transport) == APR_SUCCESS);
+    CHECK_TRUE("idle transport never opens socket", io.opened == FALSE);
+}
+
 int main(void)
 {
     apr_pool_t *pool = NULL;
@@ -1328,9 +1461,11 @@ int main(void)
     test_ring_generation_wrap_and_overrun(pool);
     test_worker_keeps_media_enqueue_independent_of_partial_rx(pool);
     test_worker_stop_drains_without_final(pool);
+    test_worker_preserves_handshake_sticky_frame(pool);
     test_worker_reports_one_queue_overrun(pool);
     test_worker_write_stall_uses_fake_clock(pool);
     test_worker_rejected_close_fence_is_reported(pool);
+    test_worker_close_without_generation_has_fence(pool);
 
     apr_pool_destroy(pool);
     if (failures != 0) {

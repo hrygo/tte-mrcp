@@ -4,6 +4,11 @@ project (demorecog)
 # Set source files
 set (DEMO_RECOG_SOURCES
 	src/demo_recog_engine.c
+	src/funasr_audio.c
+	src/funasr_clock.c
+	src/funasr_control.c
+	src/funasr_json.c
+	src/funasr_ws_transport.c
 )
 source_group ("src" FILES ${DEMO_RECOG_SOURCES})
 
@@ -19,6 +24,7 @@ set_target_properties (${PROJECT_NAME} PROPERTIES FOLDER "plugins")
 # Input libraries
 target_link_libraries(${PROJECT_NAME}
 	${APU_LIBRARIES}
+	${APRUTIL_LIBRARIES}
 	${APR_LIBRARIES}
 )
 # Input system libraries
