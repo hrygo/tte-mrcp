@@ -30,6 +30,7 @@ typedef apr_uint64_t funasr_transport_id_t;
 #define FUNASR_WRITE_STALL_TIMEOUT_US    5000000LL
 #define FUNASR_STOP_DRAIN_TIMEOUT_US     5000000LL
 #define FUNASR_NO_RESULT_TIMEOUT_US     10000000LL
+#define FUNASR_MEDIA_GAP_HISTOGRAM_BUCKETS 256U
 
 #define FUNASR_IO_READABLE 0x01
 #define FUNASR_IO_WRITABLE 0x02
@@ -180,6 +181,8 @@ typedef enum funasr_transport_failure_e {
 typedef struct funasr_transport_metrics_t {
     apr_uint64_t media_frames;
     apr_uint64_t valid_audio_bytes;
+    apr_uint64_t media_gap_samples;
+    apr_uint32_t media_gap_histogram[FUNASR_MEDIA_GAP_HISTOGRAM_BUCKETS];
     apr_int64_t media_gap_p99_us;
     apr_int64_t media_gap_max_us;
     apr_int64_t enqueue_max_us;

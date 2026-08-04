@@ -641,11 +641,19 @@ main() {
                     echo -e "${RED}✗ 预热音频复制失败: $audio_file -> $STRESS_INPUT_PCM${NC}"
                     exit 1
                 fi
+                if [[ -d "$RESULT_DIR/worker_0/data" ]]; then
+                    cp "$audio_file" "$RESULT_DIR/worker_0/data/stress_test_input.pcm" || {
+                        echo -e "${RED}✗ 预热音频复制到 worker-0 失败${NC}"
+                        exit 1
+                    }
+                fi
                 echo -e "${CYAN}--- ASR 预热 (${WARMUP} 次，串行，不计入正式结果) ---${NC}"
                 for ((warmup_index=1; warmup_index<=WARMUP; warmup_index++)); do
                     if ! run_test "asr" "warmup_${warmup_index}" 0; then
                         echo -e "${YELLOW}预热 ${warmup_index} 未成功，继续正式采样${NC}"
                     fi
+                    mv "$RESULT_DIR/asr_warmup_${warmup_index}.log" \
+                       "$RESULT_DIR/warmup_asr_${warmup_index}.log"
                 done
                 echo ""
             fi

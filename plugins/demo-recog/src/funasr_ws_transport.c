@@ -18,7 +18,6 @@
 #define FUNASR_HANDSHAKE_BUFFER_SIZE 4096U
 #define FUNASR_WORKER_READ_BUFFER_SIZE 4096U
 #define FUNASR_WS_FRAME_OVERHEAD 14U
-#define FUNASR_MEDIA_GAP_BUCKETS 1001U
 
 typedef struct funasr_default_io_t {
     apr_pool_t *pool;
@@ -47,8 +46,6 @@ struct funasr_transport_t {
     funasr_audio_format_t format;
     char call_id[FUNASR_CALL_ID_LIMIT + 1U];
     funasr_transport_metrics_t metrics;
-    apr_uint32_t media_gap_histogram[FUNASR_MEDIA_GAP_BUCKETS];
-    apr_uint64_t media_gap_samples;
     apr_int64_t generation_started_us;
     apr_int64_t last_media_us;
     apr_size_t ring_limit;
@@ -1032,14 +1029,16 @@ static void funasr_metrics_refresh_locked(funasr_transport_t *transport)
     apr_uint64_t accumulated;
     apr_size_t bucket;
 
-    if (transport->media_gap_samples == 0) {
+    if (transport->metrics.media_gap_samples == 0) {
         transport->metrics.media_gap_p99_us = 0;
         return;
     }
-    threshold = (transport->media_gap_samples * 99U + 99U) / 100U;
+    threshold = (transport->metrics.media_gap_samples * 99U + 99U) / 100U;
     accumulated = 0;
-    for (bucket = 0; bucket < FUNASR_MEDIA_GAP_BUCKETS; ++bucket) {
-        accumulated += transport->media_gap_histogram[bucket];
+    for (bucket = 0;
+         bucket < FUNASR_MEDIA_GAP_HISTOGRAM_BUCKETS;
+         ++bucket) {
+        accumulated += transport->metrics.media_gap_histogram[bucket];
         if (accumulated >= threshold) {
             transport->metrics.media_gap_p99_us =
                 (apr_int64_t)bucket * 1000;
@@ -2131,11 +2130,6 @@ apt_bool_t funasr_transport_begin_generation(
     transport->format.call_id = transport->call_id;
     memset(&transport->metrics, 0, sizeof(transport->metrics));
     transport->metrics.ws_first_send_ms = -1;
-    memset(
-        transport->media_gap_histogram,
-        0,
-        sizeof(transport->media_gap_histogram));
-    transport->media_gap_samples = 0;
     transport->generation_started_us =
         funasr_clock_now_us(&transport->config.clock);
     transport->last_media_us = 0;
@@ -2215,11 +2209,11 @@ funasr_enqueue_status_e funasr_transport_enqueue_pcm(
         }
         if (gap > 0) {
             apr_size_t bucket = (apr_size_t)(gap / 1000);
-            if (bucket >= FUNASR_MEDIA_GAP_BUCKETS) {
-                bucket = FUNASR_MEDIA_GAP_BUCKETS - 1U;
+            if (bucket >= FUNASR_MEDIA_GAP_HISTOGRAM_BUCKETS) {
+                bucket = FUNASR_MEDIA_GAP_HISTOGRAM_BUCKETS - 1U;
             }
-            transport->media_gap_histogram[bucket]++;
-            transport->media_gap_samples++;
+            transport->metrics.media_gap_histogram[bucket]++;
+            transport->metrics.media_gap_samples++;
         }
         transport->last_media_us = now_us;
         ring_size = funasr_tx_ring_size(transport->ring);

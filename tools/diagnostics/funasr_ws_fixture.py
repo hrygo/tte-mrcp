@@ -8,7 +8,6 @@ import base64
 import hashlib
 import json
 import math
-import os
 import re
 import signal
 import socket
@@ -22,13 +21,17 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import parse_qs, urlsplit
 
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 METRICS_RE = re.compile(
+    r"(?:session_id=(?P<session_id>[^\]]+)\]\s+)?"
     r"transport metrics generation=(?P<generation>\d+)"
     r" media_frames=(?P<media_frames>\d+)"
+    r" media_gap_samples=(?P<media_gap_samples>\d+)"
+    r" media_gap_hist_ms=(?P<media_gap_hist_ms>\S+)"
     r" media_gap_p99_ms=(?P<media_gap_p99_ms>\d+)"
     r" media_gap_max_ms=(?P<media_gap_max_ms>\d+)"
     r" valid_audio_bytes=(?P<valid_audio_bytes>\d+)"
@@ -105,8 +108,9 @@ def recv_exact(sock: socket.socket, size: int) -> bytes:
     return bytes(chunks)
 
 
-def read_frame(sock: socket.socket) -> tuple[int, bytes]:
+def read_frame(sock: socket.socket) -> tuple[int, bytes, int]:
     first, second = recv_exact(sock, 2)
+    wire_size = 2
     if first & 0x70:
         raise ValueError("reserved WebSocket bits are set")
     opcode = first & 0x0F
@@ -114,16 +118,19 @@ def read_frame(sock: socket.socket) -> tuple[int, bytes]:
     length = second & 0x7F
     if length == 126:
         length = struct.unpack("!H", recv_exact(sock, 2))[0]
+        wire_size += 2
     elif length == 127:
         length = struct.unpack("!Q", recv_exact(sock, 8))[0]
+        wire_size += 8
     if length > 2 * 1024 * 1024:
         raise ValueError("frame exceeds fixture limit")
     mask = recv_exact(sock, 4) if masked else b""
+    wire_size += len(mask) + length
     payload = bytearray(recv_exact(sock, length))
     if masked:
         for index in range(length):
             payload[index] ^= mask[index % 4]
-    return opcode, bytes(payload)
+    return opcode, bytes(payload), wire_size
 
 
 def make_record(connection_id: int, mode: str) -> dict[str, Any]:
@@ -131,6 +138,7 @@ def make_record(connection_id: int, mode: str) -> dict[str, Any]:
         "schema": "funasr-fixture-v1",
         "connection_id": connection_id,
         "mode": mode,
+        "call_id": None,
         "wall_start": None,
         "wall_end": None,
         "monotonic_start_s": 0.0,
@@ -205,8 +213,15 @@ class FixtureHandler(socketserver.BaseRequestHandler):
                 if len(header) > 16384:
                     raise ValueError("HTTP header exceeds fixture limit")
             request_line = bytes(header).split(b"\r\n", 1)[0]
-            if state.args.path.encode("ascii") not in request_line:
+            request_parts = request_line.decode("ascii").split()
+            if len(request_parts) != 3:
+                raise ValueError("invalid HTTP request line")
+            request_target = urlsplit(request_parts[1])
+            if request_target.path != state.args.path:
                 raise ValueError("unexpected WebSocket path")
+            record["call_id"] = parse_qs(request_target.query).get(
+                "call_id", [None]
+            )[0]
             match = re.search(
                 br"(?im)^Sec-WebSocket-Key:\s*([^\r\n]+)", bytes(header)
             )
@@ -220,8 +235,8 @@ class FixtureHandler(socketserver.BaseRequestHandler):
                     pause = state.args.pause_ms / 1000.0
                     record["injected_pauses_ms"].append(state.args.pause_ms)
                     time.sleep(pause)
-                opcode, payload = read_frame(self.request)
-                record["bytes_read"] += len(payload)
+                opcode, payload, wire_size = read_frame(self.request)
+                record["bytes_read"] += wire_size
                 if opcode == 0xA:
                     record["pong_received"] = True
                     continue
@@ -332,16 +347,47 @@ def load_jsonl(path: Path | None) -> list[dict[str, Any]]:
     return records
 
 
-def parse_server_metrics(path: Path | None) -> list[dict[str, int]]:
+def parse_gap_histogram(value: str) -> dict[int, int]:
+    if value == "-":
+        return {}
+    result: dict[int, int] = {}
+    for item in value.split(","):
+        bucket, count = item.split(":", 1)
+        result[int(bucket)] = result.get(int(bucket), 0) + int(count)
+    return result
+
+
+def parse_server_metrics(path: Path | None) -> list[dict[str, Any]]:
     if path is None or not path.is_file():
         return []
-    metrics: list[dict[str, int]] = []
+    metrics: list[dict[str, Any]] = []
     with path.open(encoding="utf-8", errors="replace") as stream:
         for line in stream:
             match = METRICS_RE.search(line)
             if match:
-                metrics.append({key: int(value) for key, value in match.groupdict().items()})
+                values: dict[str, Any] = {}
+                for key, value in match.groupdict().items():
+                    if key == "session_id":
+                        values[key] = value
+                    elif key == "media_gap_hist_ms":
+                        values[key] = parse_gap_histogram(value)
+                    else:
+                        values[key] = int(value)
+                metrics.append(values)
     return metrics
+
+
+def histogram_percentile(histogram: dict[int, int], percent: float) -> int | None:
+    sample_count = sum(histogram.values())
+    if sample_count == 0:
+        return None
+    threshold = max(1, math.ceil(sample_count * percent))
+    accumulated = 0
+    for bucket in sorted(histogram):
+        accumulated += histogram[bucket]
+        if accumulated >= threshold:
+            return bucket
+    return None
 
 
 def aggregate(
@@ -354,13 +400,38 @@ def aggregate(
     fixture = load_jsonl(fixture_report)
     metrics = parse_server_metrics(server_log)
     sample_fixture = fixture[warmup:]
-    sample_metrics = metrics[warmup:]
-    nonfault_gaps = [
+    if server_log is not None and not metrics:
+        raise ValueError(f"no transport metrics found in {server_log}")
+    metrics_by_session = {
+        str(metric["session_id"]): metric
+        for metric in metrics
+        if metric.get("session_id")
+    }
+    sample_metrics: list[dict[str, Any]] = []
+    nonfault_metrics: list[dict[str, Any]] = []
+    for index, record in enumerate(sample_fixture):
+        metric = metrics_by_session.get(str(record.get("call_id")))
+        if metric is None and warmup + index < len(metrics):
+            metric = metrics[warmup + index]
+        if metric is not None:
+            sample_metrics.append(metric)
+            if int(record.get("connection_id", 0)) != fault_connection:
+                nonfault_metrics.append(metric)
+    if not fixture:
+        sample_metrics = metrics[warmup:]
+        nonfault_metrics = sample_metrics
+    nonfault_chunk_gaps = [
         float(gap)
         for record in sample_fixture
         if int(record.get("connection_id", 0)) != fault_connection
         for gap in record.get("frame_gaps_ms", [])
     ]
+    nonfault_histogram: dict[int, int] = {}
+    for metric in nonfault_metrics:
+        for bucket, count in metric.get("media_gap_hist_ms", {}).items():
+            nonfault_histogram[int(bucket)] = (
+                nonfault_histogram.get(int(bucket), 0) + int(count)
+            )
     report: dict[str, Any] = {
         "schema": "funasr-pacing-v1",
         "generated_wall_time": time.time(),
@@ -389,9 +460,25 @@ def aggregate(
         "first_send_latency_ms": [
             m["first_send_ms"] for m in sample_metrics if m.get("first_send_ms", -1) >= 0
         ],
-        "nonfault_frame_gap_samples_ms": nonfault_gaps,
-        "nonfault_frame_gap_p99_ms": percentile(nonfault_gaps, 0.99),
-        "nonfault_frame_gap_max_ms": max(nonfault_gaps, default=None),
+        "nonfault_frame_gap_histogram_ms": {
+            str(bucket): nonfault_histogram[bucket]
+            for bucket in sorted(nonfault_histogram)
+        },
+        "nonfault_frame_gap_sample_count": sum(nonfault_histogram.values()),
+        "nonfault_frame_gap_p99_ms": histogram_percentile(
+            nonfault_histogram, 0.99
+        ),
+        "nonfault_frame_gap_max_ms": max(
+            (m.get("media_gap_max_ms", 0) for m in nonfault_metrics),
+            default=None,
+        ),
+        "nonfault_websocket_chunk_gap_samples_ms": nonfault_chunk_gaps,
+        "nonfault_websocket_chunk_gap_p99_ms": percentile(
+            nonfault_chunk_gaps, 0.99
+        ),
+        "nonfault_websocket_chunk_gap_max_ms": max(
+            nonfault_chunk_gaps, default=None
+        ),
         "plugin_metric_records": len(sample_metrics),
     }
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -461,8 +548,46 @@ class FixtureSelfTests(unittest.TestCase):
                 encoding="utf-8",
             )
             report = aggregate(None, fixture, output, 0, 1)
-            self.assertEqual(report["nonfault_frame_gap_p99_ms"], 210.0)
+            self.assertEqual(
+                report["nonfault_websocket_chunk_gap_p99_ms"], 210.0
+            )
             self.assertTrue(output.is_file())
+
+    def test_metrics_parser_and_histogram_aggregation(self) -> None:
+        line = (
+            "zyASR: [session_id=s-2] transport metrics generation=2 "
+            "media_frames=50 media_gap_samples=49 media_gap_hist_ms=20:48,120:1 "
+            "media_gap_p99_ms=120 media_gap_max_ms=120 valid_audio_bytes=32000 "
+            "ring_high_water=6400 overrun_bytes=0 overrun_events=0 "
+            "first_send_ms=201 write_wait_max_ms=2 abnormal_closes=0 "
+            "partial_reads=3 rx_messages=1 completion_failure=7\n"
+        )
+        record = make_record(2, "normal")
+        record["call_id"] = "s-2"
+        record["outcome"] = "final-sent"
+        with tempfile.TemporaryDirectory() as directory:
+            server_log = Path(directory) / "server.log"
+            fixture = Path(directory) / "fixture.jsonl"
+            output = Path(directory) / "pacing.json"
+            server_log.write_text(line, encoding="utf-8")
+            fixture.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            report = aggregate(server_log, fixture, output, 0, 0)
+            self.assertEqual(report["plugin_metric_records"], 1)
+            self.assertEqual(report["nonfault_frame_gap_sample_count"], 49)
+            self.assertEqual(report["nonfault_frame_gap_p99_ms"], 120)
+
+    def test_requested_empty_server_log_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            server_log = Path(directory) / "server.log"
+            server_log.write_text("unrelated\n", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                aggregate(
+                    server_log,
+                    None,
+                    Path(directory) / "pacing.json",
+                    0,
+                    0,
+                )
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

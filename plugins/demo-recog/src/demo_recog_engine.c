@@ -874,11 +874,52 @@ static void funasr_engine_close_on_task(funasr_engine_t *engine)
     funasr_engine_maybe_close_respond(engine);
 }
 
+static void funasr_gap_histogram_format(
+    const funasr_transport_metrics_t *metrics,
+    char *buffer,
+    apr_size_t capacity)
+{
+    apr_size_t offset;
+    apr_size_t bucket;
+
+    if (!buffer || capacity == 0) {
+        return;
+    }
+    offset = 0;
+    buffer[0] = '\0';
+    for (bucket = 0;
+         bucket < FUNASR_MEDIA_GAP_HISTOGRAM_BUCKETS;
+         ++bucket) {
+        int written;
+
+        if (metrics->media_gap_histogram[bucket] == 0) {
+            continue;
+        }
+        written = apr_snprintf(
+            buffer + offset,
+            capacity - offset,
+            "%s%lu:%lu",
+            offset == 0 ? "" : ",",
+            (unsigned long)bucket,
+            (unsigned long)metrics->media_gap_histogram[bucket]);
+        if (written < 0 || (apr_size_t)written >= capacity - offset) {
+            buffer[capacity - 1U] = '\0';
+            return;
+        }
+        offset += (apr_size_t)written;
+    }
+    if (offset == 0 && capacity > 1U) {
+        buffer[0] = '-';
+        buffer[1] = '\0';
+    }
+}
+
 static void funasr_transport_event_on_task(
     funasr_engine_t *engine,
     funasr_transport_event_t *event)
 {
     funasr_registry_entry_t *entry;
+    char gap_histogram[4096];
 
     entry = funasr_registry_find(engine, event->transport_id);
     if (!entry || !entry->channel) {
@@ -886,12 +927,18 @@ static void funasr_transport_event_on_task(
         return;
     }
     if (event->type == FUNASR_EVENT_TRANSPORT_METRICS) {
+        funasr_gap_histogram_format(
+            &event->metrics,
+            gap_histogram,
+            sizeof(gap_histogram));
         LOG_WITH_SID(
             entry->channel,
             APT_PRIO_INFO,
-            "transport metrics generation=%llu media_frames=%llu media_gap_p99_ms=%lld media_gap_max_ms=%lld valid_audio_bytes=%llu ring_high_water=%lu overrun_bytes=%lu overrun_events=%lu first_send_ms=%lld write_wait_max_ms=%lld abnormal_closes=%llu partial_reads=%llu rx_messages=%llu completion_failure=%d",
+            "transport metrics generation=%llu media_frames=%llu media_gap_samples=%llu media_gap_hist_ms=%s media_gap_p99_ms=%lld media_gap_max_ms=%lld valid_audio_bytes=%llu ring_high_water=%lu overrun_bytes=%lu overrun_events=%lu first_send_ms=%lld write_wait_max_ms=%lld abnormal_closes=%llu partial_reads=%llu rx_messages=%llu completion_failure=%d",
             (unsigned long long)event->generation,
             (unsigned long long)event->metrics.media_frames,
+            (unsigned long long)event->metrics.media_gap_samples,
+            gap_histogram,
             (long long)(event->metrics.media_gap_p99_us / 1000),
             (long long)(event->metrics.media_gap_max_us / 1000),
             (unsigned long long)event->metrics.valid_audio_bytes,

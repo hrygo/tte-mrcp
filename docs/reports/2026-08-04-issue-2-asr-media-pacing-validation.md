@@ -20,7 +20,7 @@ macOS 上 CMake 与 Autotools 的插件本体和 4 个插件测试均实际编�
 - HTTP 和 WebSocket 解码支持 short read、握手后粘包、fragment、Ping/Pong、Close、扩展长度和大小上限。
 - Ping 在音频帧部分发送期间到达时进入 worker 内部待发控制槽，音频发送完成后仍发送一次 Pong。
 - channel/engine close 使用 consumer task 上的 `WORKER_CLOSED` fence；worker 未退出时不释放 channel/engine pool。
-- 每会话汇总包含媒体帧数、有效音频字节、gap p99/max、ring high-water、overrun、首发延迟、最大写等待、异常关闭、partial read、消息数和完成失败原因。
+- 每会话汇总包含媒体帧数、有效音频字节、1 ms 分桶的 gap histogram 与 p99/max、ring high-water、overrun、首发延迟、最大写等待、异常关闭、partial read、消息数和完成失败原因。
 
 ## 3. 测试与实验事实
 
@@ -75,7 +75,7 @@ rtk bash -n tools/stress/stress_test_improved.sh
 rtk bash tools/stress/stress_test_improved.sh -h
 ```
 
-结果：fixture 6/6 自测通过；Python 编译与 Shell 语法通过；旧参数和默认值保留，新参数仅为增量。
+结果：fixture 8/8 自测通过；Python 编译与 Shell 语法通过；旧参数和默认值保留，新参数仅为增量。聚合器按 `call_id/session_id` 关联 fixture 与插件记录；显式指定的 server log 不含 transport metrics 时会失败，不会静默生成全零报告。
 
 生成 `/tmp/tte-mrcp-issue-2-unimrcpserver-v1.xml` 后使用独立 XML 解析确认：恰好一个 `Demo-Recog-1`，且 `funasr-host=127.0.0.1`、`funasr-port=8022`、`funasr-path=/ws/audio`。fixture 默认拒绝非回环监听、拒绝覆盖源文件或已有目标文件。
 
