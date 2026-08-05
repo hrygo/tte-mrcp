@@ -24,8 +24,20 @@ config_backup="$WORK_DIR/unimrcpserver.xml.original"
 
 cleanup() {
   set +e
+  # SIGTERM first, then wait up to 5 seconds; escalate to SIGKILL if needed.
   for pid in "$tts_pid" "$asr_pid" "$server_pid"; do
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+  done
+  for wait_i in 1 2 3 4 5; do
+    local alive=0
+    for pid in "$tts_pid" "$asr_pid" "$server_pid"; do
+      [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && alive=1
+    done
+    [ "$alive" = 0 ] && break
+    sleep 1
+  done
+  for pid in "$tts_pid" "$asr_pid" "$server_pid"; do
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
   done
   for pid in "$tts_pid" "$asr_pid" "$server_pid"; do
     [ -n "$pid" ] && wait "$pid" 2>/dev/null || true

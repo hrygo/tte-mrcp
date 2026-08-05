@@ -533,9 +533,18 @@ jobs:
           # processes must be torn down first.  Without this the second
           # server logs "Failed to Create Listening Socket" / "Failed to
           # Run Sofia-SIP Task" and the UMC driver receives RESULT:NODATA.
-          # We keep the variables set: the EXIT trap will harmlessly try
-          # to kill them again at container exit (process already dead).
+          #
+          # Tear-down protocol: SIGTERM first, then wait up to 5 seconds;
+          # if either process is still alive, escalate to SIGKILL.  This
+          # avoids hanging the job if a process ignores SIGTERM (unimrcpserver
+          # in particular has been observed to linger in shutdown).
           kill "$server_pid" "$fixture_pid" 2>/dev/null || true
+          for wait_i in 1 2 3 4 5; do
+            kill -0 "$server_pid" 2>/dev/null || kill -0 "$fixture_pid" 2>/dev/null || break
+            sleep 1
+          done
+          kill -0 "$server_pid" 2>/dev/null && kill -9 "$server_pid" 2>/dev/null || true
+          kill -0 "$fixture_pid" 2>/dev/null && kill -9 "$fixture_pid" 2>/dev/null || true
           wait "$server_pid" 2>/dev/null || true
           wait "$fixture_pid" 2>/dev/null || true
           # Reclaim the stress log so the E2E runner gets a clean server.log
