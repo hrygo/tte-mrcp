@@ -503,9 +503,9 @@ static apt_bool_t funasr_recognition_complete(
     LOG_WITH_SID(
         channel,
         APT_PRIO_INFO,
-        "recognition terminal cause=%d generation=%llu",
+        "recognition terminal cause=%d generation=%lu",
         (int)cause,
-        (unsigned long long)channel->control.generation);
+        (unsigned long)channel->control.generation);
     return mrcp_engine_channel_message_send(channel->channel, message);
 }
 
@@ -659,8 +659,8 @@ static apt_bool_t funasr_channel_recognize(
     LOG_WITH_SID(
         channel,
         APT_PRIO_INFO,
-        "recognition generation=%llu input_rate=%u channels=%u ring_bytes=%lu chunk_bytes=%lu",
-        (unsigned long long)generation,
+        "recognition generation=%lu input_rate=%u channels=%u ring_bytes=%lu chunk_bytes=%lu",
+        (unsigned long)generation,
         (unsigned int)descriptor->sampling_rate,
         (unsigned int)descriptor->channel_count,
         (unsigned long)funasr_pcm_bytes_for_ms(
@@ -934,22 +934,22 @@ static void funasr_transport_event_on_task(
         LOG_WITH_SID(
             entry->channel,
             APT_PRIO_INFO,
-            "transport metrics generation=%llu media_frames=%llu media_gap_samples=%llu media_gap_hist_ms=%s media_gap_p99_ms=%lld media_gap_max_ms=%lld valid_audio_bytes=%llu ring_high_water=%lu overrun_bytes=%lu overrun_events=%lu first_send_ms=%lld write_wait_max_ms=%lld abnormal_closes=%llu partial_reads=%llu rx_messages=%llu completion_failure=%d",
-            (unsigned long long)event->generation,
-            (unsigned long long)event->metrics.media_frames,
-            (unsigned long long)event->metrics.media_gap_samples,
+            "transport metrics generation=%lu media_frames=%lu media_gap_samples=%lu media_gap_hist_ms=%s media_gap_p99_ms=%ld media_gap_max_ms=%ld valid_audio_bytes=%lu ring_high_water=%lu overrun_bytes=%lu overrun_events=%lu first_send_ms=%ld write_wait_max_ms=%ld abnormal_closes=%lu partial_reads=%lu rx_messages=%lu completion_failure=%d",
+            (unsigned long)event->generation,
+            (unsigned long)event->metrics.media_frames,
+            (unsigned long)event->metrics.media_gap_samples,
             gap_histogram,
-            (long long)(event->metrics.media_gap_p99_us / 1000),
-            (long long)(event->metrics.media_gap_max_us / 1000),
-            (unsigned long long)event->metrics.valid_audio_bytes,
+            (long)(event->metrics.media_gap_p99_us / 1000),
+            (long)(event->metrics.media_gap_max_us / 1000),
+            (unsigned long)event->metrics.valid_audio_bytes,
             (unsigned long)event->metrics.tx_ring_high_water_bytes,
             (unsigned long)event->metrics.tx_ring_overrun_bytes,
             (unsigned long)event->metrics.tx_ring_overrun_events,
-            (long long)event->metrics.ws_first_send_ms,
-            (long long)event->metrics.ws_write_wait_max_ms,
-            (unsigned long long)event->metrics.abnormal_closes,
-            (unsigned long long)event->metrics.ws_rx_partial_reads,
-            (unsigned long long)event->metrics.ws_rx_messages,
+            (long)event->metrics.ws_first_send_ms,
+            (long)event->metrics.ws_write_wait_max_ms,
+            (unsigned long)event->metrics.abnormal_closes,
+            (unsigned long)event->metrics.ws_rx_partial_reads,
+            (unsigned long)event->metrics.ws_rx_messages,
             (int)event->metrics.completion_failure);
     }
     funasr_control_handle_event(

@@ -1953,7 +1953,6 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                 if (!cancel && input_started &&
                     !idle_endpoint_pending &&
                     tx_size == tx_offset &&
-                    funasr_tx_ring_size(transport->ring) == 0 &&
                     !end_frame_queued &&
                     last_audio_send_us != 0 &&
                     now_us - last_audio_send_us >=
