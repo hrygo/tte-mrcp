@@ -218,8 +218,9 @@ class Handler(socketserver.BaseRequestHandler):
             elif opcode == 0x1:
                 value = json.loads(payload.decode())
                 record["text_messages"].append(value)
-                if value.get("type") == "audio.start":
-                    record["audio_sample_rate"] = value.get("sample_rate")
+                # Note: audio.start is sent by the SERVER (fixture) to the client,
+                # not received from the client. The client sends session.config,
+                # input.text, and input.done.
                 if value.get("type") in {"input.done", "session.done"}:
                     return
             elif opcode == 0x2:
@@ -237,13 +238,15 @@ class Handler(socketserver.BaseRequestHandler):
         messages = (f'{{"type":"audio.start","sample_rate":{TTS_SAMPLE_RATE}}}'.encode(),
                     b'{"type":"audio.done"}', b'{"type":"session.done"}')
         self.request.sendall(encode_frame(0x1, messages[0]))
+        # Record the sample rate we sent (not received from client).
+        record["audio_sample_rate"] = TTS_SAMPLE_RATE
         audio = pcm24k()
         for offset in range(0, len(audio), AUDIO_FRAME_BYTES):
-            split_send(
-                self.request,
-                encode_frame(0x2, audio[offset:offset + AUDIO_FRAME_BYTES]),
-                mode in {"split", "slow"},
-            )
+            frame = encode_frame(0x2, audio[offset:offset + AUDIO_FRAME_BYTES])
+            split_send(self.request, frame, mode in {"split", "slow"})
+            # Record the audio frames we sent.
+            record["audio_frames"] += 1
+            record["audio_bytes"] += len(audio[offset:offset + AUDIO_FRAME_BYTES])
         self.request.sendall(encode_frame(0x1, messages[1]))
         self.request.sendall(encode_frame(0x1, messages[2]))
         record["outcome"] = "final-sent"
