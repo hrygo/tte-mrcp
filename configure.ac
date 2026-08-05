@@ -88,6 +88,8 @@ echo "UniMRCP Version: ${UNI_DOTTED_VERSION}"
 
 dnl Check for the APR and APR-util libraries.
 UNIMRCP_CHECK_APR
+dnl Older Linux/glibc releases provide clock_gettime in librt.
+AC_SEARCH_LIBS([clock_gettime], [rt])
 dnl Check for the Sofia-SIP library.
 UNIMRCP_CHECK_SOFIA
 

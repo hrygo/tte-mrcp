@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup><Filter Include="src"><UniqueIdentifier>{7A83B5F1-1D2E-4A37-9C51-020000000012}</UniqueIdentifier></Filter></ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="test_funasr_control.c"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="..\src\funasr_control.c"><Filter>src</Filter></ClCompile>
+  </ItemGroup>
+</Project>
