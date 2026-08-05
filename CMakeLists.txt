@@ -12,7 +12,7 @@ option (ENABLE_SERVER_LIB          "Enable UniMRCP server library"              
 option (ENABLE_SERVER_APP          "Enable UniMRCP server application"              ON)
 
 option (ENABLE_TTS_WEBSOCKET_PLUGIN    "Enable TTS WebSocket plugin"                 ON)
-option (ENABLE_DEMORECOG_PLUGIN    "Enable demo recognizer plugin"                  ON)
+option (ENABLE_ASR_WEBSOCKET_PLUGIN "Enable ASR WebSocket plugin"                 ON)
 option (ENABLE_DEMOVERIFIER_PLUGIN "Enable demo verifier plugin"                    ON)
 option (ENABLE_RECORDER_PLUGIN     "Enable recorder plugin"                         ON)
 
@@ -44,6 +44,12 @@ find_package (PkgConfig REQUIRED)
 pkg_check_modules (APR REQUIRED apr-1)
 pkg_check_modules (APRUTIL REQUIRED apr-util-1)
 pkg_check_modules (SOFIA REQUIRED sofia-sip-ua)
+
+# Keep the historical APU_* names consumed by UniMRCP subprojects while
+# sourcing the dependency data from the APR-util pkg-config probe above.
+set (APU_INCLUDE_DIRS ${APRUTIL_INCLUDE_DIRS})
+set (APU_LIBRARIES ${APRUTIL_LIBRARIES})
+set (APU_DEFINES ${APRUTIL_CFLAGS_OTHER})
 
 # Keep the compatibility variable names consumed by existing UniMRCP modules.
 set (SofiaSIP_FOUND ${SOFIA_FOUND})
@@ -132,8 +138,8 @@ add_subdirectory (modules/mrcp-sofiasip)
 add_subdirectory (modules/mrcp-unirtsp)
 
 # Sub-projects: plug-ins
-if (ENABLE_DEMORECOG_PLUGIN)
-add_subdirectory (plugins/demo-recog)
+if (ENABLE_ASR_WEBSOCKET_PLUGIN)
+add_subdirectory (plugins/asr-websocket)
 endif ()
 if (ENABLE_TTS_WEBSOCKET_PLUGIN)
 add_subdirectory (plugins/tts-websocket)

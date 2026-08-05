@@ -2,9 +2,9 @@
 <VisualStudioProject
 	ProjectType="Visual C++"
 	Version="8.00"
-	Name="demorecog"
+	Name="asr_websocket"
 	ProjectGUID="{B495B6D9-AF84-479D-B30A-313C16EF8BFD}"
-	RootNamespace="demorecog"
+	RootNamespace="asr_websocket"
 	Keyword="Win32Proj"
 	>
 	<Platforms>
@@ -291,7 +291,7 @@
 			Filter="cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx"
 			>
 			<File
-				RelativePath=".\src\demo_recog_engine.c"
+				RelativePath=".\src\asr_websocket_engine.c"
 				>
 			</File>
 			<File RelativePath=".\src\funasr_audio.c"></File>

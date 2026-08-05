@@ -313,13 +313,16 @@ def emit_config(source: Path, target: Path, host: str, port: int, path: str) -> 
         and (
             node.get("id") == "Demo-Recog-1"
             or node.get("name") == "demorecog"
+            or node.get("id") == "ASR-WebSocket-1"
+            or node.get("name") == "asr_websocket"
         )
     ]
     insert_at = list(plugin_factory).index(matches[0]) if matches else len(plugin_factory)
     for node in matches:
         plugin_factory.remove(node)
     engine = ET.Element(
-        "engine", {"id": "Demo-Recog-1", "name": "demorecog", "enable": "true"}
+        "engine",
+        {"id": "ASR-WebSocket-1", "name": "asr_websocket", "enable": "true"},
     )
     for name, value in (
         ("funasr-host", host),
@@ -328,6 +331,30 @@ def emit_config(source: Path, target: Path, host: str, port: int, path: str) -> 
     ):
         ET.SubElement(engine, "param", {"name": name, "value": value})
     plugin_factory.insert(insert_at, engine)
+
+    legacy_engine_names = {"Demo-Recog-1", "demorecog"}
+    mapping_matches: list[tuple[ET.Element, ET.Element]] = []
+    for parent in root.iter():
+        for node in list(parent):
+            if (
+                node.tag == "resource"
+                and node.get("id") == "speechrecog"
+                and node.get("engine") in legacy_engine_names | {"ASR-WebSocket-1"}
+            ):
+                mapping_matches.append((parent, node))
+    if mapping_matches:
+        mapping_parent, mapping = mapping_matches[0]
+        mapping.set("engine", "ASR-WebSocket-1")
+        for parent, node in mapping_matches[1:]:
+            parent.remove(node)
+    else:
+        resource_map = root.find(".//resource-engine-map")
+        if resource_map is not None:
+            ET.SubElement(
+                resource_map,
+                "resource",
+                {"id": "speechrecog", "engine": "ASR-WebSocket-1"},
+            )
     target.parent.mkdir(parents=True, exist_ok=True)
     tree.write(target, encoding="utf-8", xml_declaration=True)
 
@@ -516,20 +543,33 @@ class FixtureSelfTests(unittest.TestCase):
         self.assertEqual(encode_frame(0x9, b"x"), b"\x89\x01x")
         self.assertEqual(encode_frame(0x8), b"\x88\x00")
 
-    def test_emit_config_deduplicates_without_overwrite(self) -> None:
+    def test_emit_config_migrates_legacy_engine_to_canonical_name(self) -> None:
         xml = """<unimrcpserver><components><plugin-factory>
         <engine id="Demo-Recog-1" name="demorecog" enable="true"/>
         <engine id="Demo-Recog-1" name="demorecog" enable="true"/>
-        </plugin-factory></components></unimrcpserver>"""
+        </plugin-factory><resource-engine-map>
+        <resource id="speechrecog" engine="Demo-Recog-1"/>
+        <resource id="speechrecog" engine="demorecog"/>
+        </resource-engine-map></components></unimrcpserver>"""
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source.xml"
             target = Path(directory) / "target.xml"
             source.write_text(xml, encoding="utf-8")
             emit_config(source, target, "127.0.0.1", 8022, "/ws/audio")
             engines = ET.parse(target).getroot().findall(
-                ".//engine[@id='Demo-Recog-1']"
+                ".//engine[@id='ASR-WebSocket-1']"
             )
             self.assertEqual(len(engines), 1)
+            self.assertEqual(engines[0].get("name"), "asr_websocket")
+            self.assertEqual(
+                ET.parse(target).getroot().findall(".//engine[@name='demorecog']"),
+                [],
+            )
+            mappings = ET.parse(target).getroot().findall(
+                ".//resource[@id='speechrecog']"
+            )
+            self.assertEqual(len(mappings), 1)
+            self.assertEqual(mappings[0].get("engine"), "ASR-WebSocket-1")
             params = {p.get("name"): p.get("value") for p in engines[0]}
             self.assertEqual(params["funasr-path"], "/ws/audio")
             with self.assertRaises(ValueError):
@@ -555,7 +595,7 @@ class FixtureSelfTests(unittest.TestCase):
 
     def test_metrics_parser_and_histogram_aggregation(self) -> None:
         line = (
-            "zyASR: [session_id=s-2] transport metrics generation=2 "
+            "asr_websocket: [session_id=s-2] transport metrics generation=2 "
             "media_frames=50 media_gap_samples=49 media_gap_hist_ms=20:48,120:1 "
             "media_gap_p99_ms=120 media_gap_max_ms=120 valid_audio_bytes=32000 "
             "ring_high_water=6400 overrun_bytes=0 overrun_events=0 "

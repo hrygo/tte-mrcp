@@ -39,7 +39,7 @@ The project encapsulates SIP, RTSP, SDP, MRCPv2, and RTP/RTCP stacks and provide
 @subsection Plugins
 
 - tts-websocket        - Production WebSocket streaming TTS plugin.
-- demo-recog        - Implementation of an ASR plugin which simulates recognition.
+- asr-websocket     - Production FunASR WebSocket ASR plugin for the speechrecog resource.
 - demo-verif        - Implementation of an SVI plugin which simulates speaker verification.
 - mrcp-recorder     - Implementation of a recorder plugin.
 

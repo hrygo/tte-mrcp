@@ -11,7 +11,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="src\demo_recog_engine.c">
+    <ClCompile Include="src\asr_websocket_engine.c">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="src\funasr_audio.c"><Filter>src</Filter></ClCompile>

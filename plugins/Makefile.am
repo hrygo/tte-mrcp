@@ -6,8 +6,8 @@ if TTS_WEBSOCKET_PLUGIN
 SUBDIRS               += tts-websocket
 endif
 
-if DEMORECOG_PLUGIN
-SUBDIRS               += demo-recog
+if ASR_WEBSOCKET_PLUGIN
+SUBDIRS               += asr-websocket
 endif
 
 if DEMOVERIFIER_PLUGIN

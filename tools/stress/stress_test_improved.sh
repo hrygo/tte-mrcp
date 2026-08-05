@@ -25,7 +25,7 @@ SAMPLE_RATE=16000           # 默认采样率
 TTS_SAVE=false              # 是否保留每次的 TTS 录音
 TTS_VAR_DIR=""              # TTS 录音输出目录（默认 ROOT_DIR/var）
 ROUND_DELAY=0               # 轮间延迟（秒），默认不延迟
-SERVER_LOG=""               # demorecog 结构化 transport metrics 日志
+SERVER_LOG=""               # asr_websocket 结构化 transport metrics 日志
 FIXTURE_REPORT=""           # funasr_ws_fixture.py JSONL 报告
 PACING_JSON=""              # 可选的 machine-readable pacing 汇总
 WARMUP=0                    # 正式采样前的 ASR 预热请求数
@@ -61,7 +61,7 @@ while getopts "c:t:i:r:a:o:s:d:h-:" opt; do
             echo "  --tts-save        保留每次 TTS 生成的录音 (默认每次测试前清空)"
             echo "  --tts-var-dir     TTS 录音输出目录 (默认: ROOT_DIR/var)"
             echo "  --round-delay=秒数 每轮之间的等待秒数 (同 -d)"
-            echo "  --server-log=文件      demorecog transport metrics 日志（可选）"
+            echo "  --server-log=文件      asr_websocket transport metrics 日志（可选）"
             echo "  --fixture-report=文件  funasr_ws_fixture.py JSONL 报告（可选）"
             echo "  --pacing-json=文件     测试结束后生成 pacing JSON（可选）"
             echo "  --warmup=次数          ASR 正式采样前的串行预热次数（默认: 0）"

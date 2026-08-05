@@ -94,7 +94,7 @@ flowchart TB
 
     subgraph Plugins["MRCP 资源插件层"]
         TTS["tts_websocket\n正式 WebSocket TTS"]
-        Recog["demo-recog"]
+        Recog["asr-websocket"]
         Verify["demo-verifier"]
         Recorder["mrcp-recorder"]
     end
@@ -185,7 +185,7 @@ flowchart LR
 | `libs/mrcp`、`libs/mrcp-*` | MRCP 消息、client/server/engine、传输 | 协议状态和响应事件的核心层 |
 | `modules/mrcp-sofiasip`、`modules/mrcp-unirtsp` | SIP/RTSP 信令适配 | 端口、连接和 profile 变更需做联调 |
 | `plugins/tts-websocket` | 正式 WebSocket TTS MRCP 插件 | 仅此目录承载正式 TTS 业务代码 |
-| `plugins/demo-recog`、`plugins/demo-verifier`、`plugins/mrcp-recorder` | 其他资源插件 | `demo` 在这里表示示例/兼容名称，不迁移到 TTS 命名规则 |
+| `plugins/asr-websocket`、`plugins/demo-verifier`、`plugins/mrcp-recorder` | ASR WebSocket 与其他资源插件 | `asr-websocket` 是正式 FunASR ASR 插件；`demo-verifier` 保留历史示例/兼容名称 |
 | `platforms/libunimrcp-server` | 服务端装配和插件加载 | XML、engine、resource-map 变更必须检查这里 |
 | `platforms/unimrcp-server`、`platforms/umc`、`platforms/unimrcp-client` | 可执行程序和场景驱动 | `demo_*` 示例客户端名称保留 |
 | `conf` | 运行配置、场景和 profile | 以实际加载 XML 为准，检查 id 唯一性 |
@@ -206,6 +206,17 @@ flowchart LR
 - 动态库：`tts_websocket.so`
 - XML engine：`id="TTS-WebSocket-1" name="tts_websocket"`
 - HTTP 协议单测：`plugins/tts-websocket/tests/test_tts_websocket_http_parse.c`
+
+正式 ASR WebSocket 插件的 canonical 命名是：
+
+- 目录：`plugins/asr-websocket/`
+- C 源码：`plugins/asr-websocket/src/asr_websocket_engine.c`
+- Autotools/CMake 目标：`asr_websocket`
+- 动态库：`asr_websocket.so`
+- XML engine：`id="ASR-WebSocket-1" name="asr_websocket"`
+- FunASR endpoint 参数：`funasr-host`、`funasr-port`、`funasr-path`
+
+历史 `Demo-Recog-1` / `demorecog` 仅作为迁移输入兼容处理，不属于正式产品定位；活动配置、构建、诊断和文档使用 canonical 名称。
 
 `demo_*` 只允许出现在 UniMRCP 示例客户端或其他历史示例插件中。正式 TTS 插件代码不使用 `demo_synth_*`、`demosynth`、`Demo-Synth-1` 等旧命名。
 

@@ -90,7 +90,7 @@ POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
 @TTS_WEBSOCKET_PLUGIN_TRUE@am__append_1 = tts-websocket
-@DEMORECOG_PLUGIN_TRUE@am__append_2 = demo-recog
+@ASR_WEBSOCKET_PLUGIN_TRUE@am__append_2 = asr-websocket
 @DEMOVERIFIER_PLUGIN_TRUE@am__append_3 = demo-verifier
 @RECORDER_PLUGIN_TRUE@am__append_4 = mrcp-recorder
 subdir = plugins
@@ -168,7 +168,7 @@ am__define_uniq_tagged_files = \
   unique=`for i in $$list; do \
     if test -f "$$i"; then echo $$i; else echo $(srcdir)/$$i; fi; \
   done | $(am__uniquify_input)`
-DIST_SUBDIRS = tts-websocket demo-recog demo-verifier mrcp-recorder
+DIST_SUBDIRS = tts-websocket asr-websocket demo-verifier mrcp-recorder
 am__DIST_COMMON = $(srcdir)/Makefile.in
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
 am__relativize = \

@@ -1,19 +1,19 @@
 cmake_minimum_required (VERSION 2.8)
-project (demorecog)
+project (asr_websocket)
 
 # Set source files
-set (DEMO_RECOG_SOURCES
-	src/demo_recog_engine.c
+set (ASR_WEBSOCKET_SOURCES
+	src/asr_websocket_engine.c
 	src/funasr_audio.c
 	src/funasr_clock.c
 	src/funasr_control.c
 	src/funasr_json.c
 	src/funasr_ws_transport.c
 )
-source_group ("src" FILES ${DEMO_RECOG_SOURCES})
+source_group ("src" FILES ${ASR_WEBSOCKET_SOURCES})
 
 # Plug-in declaration
-add_library (${PROJECT_NAME} MODULE ${DEMO_RECOG_SOURCES}
+add_library (${PROJECT_NAME} MODULE ${ASR_WEBSOCKET_SOURCES}
 	$<TARGET_OBJECTS:mrcpengine>
 	$<TARGET_OBJECTS:mrcp>
 	$<TARGET_OBJECTS:mpf>
@@ -24,7 +24,6 @@ set_target_properties (${PROJECT_NAME} PROPERTIES FOLDER "plugins")
 # Input libraries
 target_link_libraries(${PROJECT_NAME}
 	${APU_LIBRARIES}
-	${APRUTIL_LIBRARIES}
 	${APR_LIBRARIES}
 )
 # Input system libraries
@@ -67,15 +66,25 @@ if (MSVC)
 endif (MSVC)
 
 # -- Unit tests for the plugin (optional) ---------------------------------
-option(BUILD_DEMORECOG_TESTS "Build demorecog tests" ON)
-if(BUILD_DEMORECOG_TESTS)
+option(BUILD_ASR_WEBSOCKET_TESTS "Build ASR WebSocket tests" ON)
+if(BUILD_ASR_WEBSOCKET_TESTS)
+	set(ASR_WEBSOCKET_TEST_INCLUDE_DIRS
+		${PROJECT_SOURCE_DIR}/src
+		${MRCP_ENGINE_INCLUDE_DIRS}
+		${MRCP_INCLUDE_DIRS}
+		${MPF_INCLUDE_DIRS}
+		${APR_TOOLKIT_INCLUDE_DIRS}
+		${APR_INCLUDE_DIRS}
+		${APU_INCLUDE_DIRS})
 	add_executable(test_resample tests/test_resample.c src/funasr_audio.c)
+	target_include_directories(test_resample PRIVATE ${ASR_WEBSOCKET_TEST_INCLUDE_DIRS})
 	set_target_properties(test_resample PROPERTIES FOLDER "tests")
-	add_test(NAME demorecog_resample COMMAND test_resample)
+	add_test(NAME asr_websocket_resample COMMAND test_resample)
 
 	add_executable(test_json_unescape tests/test_json_unescape.c src/funasr_json.c)
+	target_include_directories(test_json_unescape PRIVATE ${ASR_WEBSOCKET_TEST_INCLUDE_DIRS})
 	set_target_properties(test_json_unescape PROPERTIES FOLDER "tests")
-	add_test(NAME demorecog_json_unescape COMMAND test_json_unescape)
+	add_test(NAME asr_websocket_json_unescape COMMAND test_json_unescape)
 
 	add_executable(test_funasr_ws_transport
 		tests/test_funasr_ws_transport.c
@@ -83,9 +92,9 @@ if(BUILD_DEMORECOG_TESTS)
 		src/funasr_clock.c
 		src/funasr_json.c
 		src/funasr_ws_transport.c)
+	target_include_directories(test_funasr_ws_transport PRIVATE ${ASR_WEBSOCKET_TEST_INCLUDE_DIRS})
 	target_link_libraries(test_funasr_ws_transport
 		${APU_LIBRARIES}
-		${APRUTIL_LIBRARIES}
 		${APR_LIBRARIES})
 	if (WIN32)
 		target_link_libraries(test_funasr_ws_transport ws2_32 winmm)
@@ -96,11 +105,12 @@ if(BUILD_DEMORECOG_TESTS)
 		endif ()
 	endif ()
 	set_target_properties(test_funasr_ws_transport PROPERTIES FOLDER "tests")
-	add_test(NAME demorecog_funasr_ws_transport COMMAND test_funasr_ws_transport)
+	add_test(NAME asr_websocket_funasr_ws_transport COMMAND test_funasr_ws_transport)
 
 	add_executable(test_funasr_control
 		tests/test_funasr_control.c
 		src/funasr_control.c)
+	target_include_directories(test_funasr_control PRIVATE ${ASR_WEBSOCKET_TEST_INCLUDE_DIRS})
 	set_target_properties(test_funasr_control PROPERTIES FOLDER "tests")
-	add_test(NAME demorecog_funasr_control COMMAND test_funasr_control)
+	add_test(NAME asr_websocket_funasr_control COMMAND test_funasr_control)
 endif()

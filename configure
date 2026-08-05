@@ -645,8 +645,8 @@ RECORDER_PLUGIN_FALSE
 RECORDER_PLUGIN_TRUE
 DEMOVERIFIER_PLUGIN_FALSE
 DEMOVERIFIER_PLUGIN_TRUE
-DEMORECOG_PLUGIN_FALSE
-DEMORECOG_PLUGIN_TRUE
+ASR_WEBSOCKET_PLUGIN_FALSE
+ASR_WEBSOCKET_PLUGIN_TRUE
 TTS_WEBSOCKET_PLUGIN_FALSE
 TTS_WEBSOCKET_PLUGIN_TRUE
 UNIMRCP_SERVER_APP_FALSE
@@ -840,7 +840,7 @@ enable_asr_client
 enable_server_lib
 enable_server_app
 enable_tts_websocket_plugin
-enable_demorecog_plugin
+enable_asr_websocket_plugin
 enable_demoverifier_plugin
 enable_recorder_plugin
 enable_test_suites
@@ -1516,8 +1516,8 @@ Optional Features:
   --disable-server-app    exclude unimrcpserver app from build
   --disable-tts_websocket-plugin
                           exclude tts_websocket plugin from build
-  --disable-demorecog-plugin
-                          exclude demorecog plugin from build
+  --disable-asr_websocket-plugin
+                          exclude asr_websocket plugin from build
   --disable-demoverifier-plugin
                           exclude demoverifier plugin from build
   --disable-recorder-plugin
@@ -21400,23 +21400,23 @@ fi
 
 
 
-    # Check whether --enable-demorecog-plugin was given.
-if test ${enable_demorecog_plugin+y}
+    # Check whether --enable-asr_websocket-plugin was given.
+if test ${enable_asr_websocket_plugin+y}
 then :
-  enableval=$enable_demorecog_plugin; enable_demorecog_plugin="$enableval"
+  enableval=$enable_asr_websocket_plugin; enable_asr_websocket_plugin="$enableval"
 else case e in #(
-  e) enable_demorecog_plugin="yes" ;;
+  e) enable_asr_websocket_plugin="yes" ;;
 esac
 fi
 
 
 
- if test "${enable_demorecog_plugin}" = "yes"; then
-  DEMORECOG_PLUGIN_TRUE=
-  DEMORECOG_PLUGIN_FALSE='#'
+ if test "${enable_asr_websocket_plugin}" = "yes"; then
+  ASR_WEBSOCKET_PLUGIN_TRUE=
+  ASR_WEBSOCKET_PLUGIN_FALSE='#'
 else
-  DEMORECOG_PLUGIN_TRUE='#'
-  DEMORECOG_PLUGIN_FALSE=
+  ASR_WEBSOCKET_PLUGIN_TRUE='#'
+  ASR_WEBSOCKET_PLUGIN_FALSE=
 fi
 
 
@@ -21490,7 +21490,7 @@ else
 fi
 
 
-ac_config_files="$ac_config_files Makefile libs/Makefile libs/apr-toolkit/Makefile libs/mpf/Makefile libs/mrcp/Makefile libs/mrcp-signaling/Makefile libs/mrcpv2-transport/Makefile libs/mrcp-engine/Makefile libs/mrcp-server/Makefile libs/mrcp-client/Makefile libs/uni-rtsp/Makefile modules/Makefile modules/mrcp-sofiasip/Makefile modules/mrcp-unirtsp/Makefile plugins/Makefile plugins/mrcp-recorder/Makefile plugins/tts-websocket/Makefile plugins/demo-recog/Makefile plugins/demo-verifier/Makefile platforms/Makefile platforms/libunimrcp-server/Makefile platforms/libunimrcp-client/Makefile platforms/unimrcp-server/Makefile platforms/unimrcp-client/Makefile platforms/libasr-client/Makefile platforms/asr-client/Makefile platforms/umc/Makefile tests/Makefile tests/apttest/Makefile tests/mpftest/Makefile tests/mrcptest/Makefile tests/rtsptest/Makefile tests/strtablegen/Makefile build/Makefile build/pkgconfig/Makefile build/pkgconfig/unimrcpclient.pc build/pkgconfig/unimrcpserver.pc build/pkgconfig/unimrcpplugin.pc conf/Makefile data/Makefile docs/doxygen.conf"
+ac_config_files="$ac_config_files Makefile libs/Makefile libs/apr-toolkit/Makefile libs/mpf/Makefile libs/mrcp/Makefile libs/mrcp-signaling/Makefile libs/mrcpv2-transport/Makefile libs/mrcp-engine/Makefile libs/mrcp-server/Makefile libs/mrcp-client/Makefile libs/uni-rtsp/Makefile modules/Makefile modules/mrcp-sofiasip/Makefile modules/mrcp-unirtsp/Makefile plugins/Makefile plugins/mrcp-recorder/Makefile plugins/tts-websocket/Makefile plugins/asr-websocket/Makefile plugins/demo-verifier/Makefile platforms/Makefile platforms/libunimrcp-server/Makefile platforms/libunimrcp-client/Makefile platforms/unimrcp-server/Makefile platforms/unimrcp-client/Makefile platforms/libasr-client/Makefile platforms/asr-client/Makefile platforms/umc/Makefile tests/Makefile tests/apttest/Makefile tests/mpftest/Makefile tests/mrcptest/Makefile tests/rtsptest/Makefile tests/strtablegen/Makefile build/Makefile build/pkgconfig/Makefile build/pkgconfig/unimrcpclient.pc build/pkgconfig/unimrcpserver.pc build/pkgconfig/unimrcpplugin.pc conf/Makefile data/Makefile docs/doxygen.conf"
 
 
 cat >confcache <<\_ACEOF
@@ -21675,8 +21675,8 @@ if test -z "${TTS_WEBSOCKET_PLUGIN_TRUE}" && test -z "${TTS_WEBSOCKET_PLUGIN_FAL
   as_fn_error $? "conditional \"TTS_WEBSOCKET_PLUGIN\" was never defined.
 Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
-if test -z "${DEMORECOG_PLUGIN_TRUE}" && test -z "${DEMORECOG_PLUGIN_FALSE}"; then
-  as_fn_error $? "conditional \"DEMORECOG_PLUGIN\" was never defined.
+if test -z "${ASR_WEBSOCKET_PLUGIN_TRUE}" && test -z "${ASR_WEBSOCKET_PLUGIN_FALSE}"; then
+  as_fn_error $? "conditional \"ASR_WEBSOCKET_PLUGIN\" was never defined.
 Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 if test -z "${DEMOVERIFIER_PLUGIN_TRUE}" && test -z "${DEMOVERIFIER_PLUGIN_FALSE}"; then
@@ -22656,7 +22656,7 @@ do
     "plugins/Makefile") CONFIG_FILES="$CONFIG_FILES plugins/Makefile" ;;
     "plugins/mrcp-recorder/Makefile") CONFIG_FILES="$CONFIG_FILES plugins/mrcp-recorder/Makefile" ;;
     "plugins/tts-websocket/Makefile") CONFIG_FILES="$CONFIG_FILES plugins/tts-websocket/Makefile" ;;
-    "plugins/demo-recog/Makefile") CONFIG_FILES="$CONFIG_FILES plugins/demo-recog/Makefile" ;;
+    "plugins/asr-websocket/Makefile") CONFIG_FILES="$CONFIG_FILES plugins/asr-websocket/Makefile" ;;
     "plugins/demo-verifier/Makefile") CONFIG_FILES="$CONFIG_FILES plugins/demo-verifier/Makefile" ;;
     "platforms/Makefile") CONFIG_FILES="$CONFIG_FILES platforms/Makefile" ;;
     "platforms/libunimrcp-server/Makefile") CONFIG_FILES="$CONFIG_FILES platforms/libunimrcp-server/Makefile" ;;
@@ -23995,7 +23995,7 @@ echo UniMRCP server lib............ : $enable_server_lib
 echo UniMRCP server app............ : $enable_server_app
 echo
 echo TTS WebSocket plugin....... : $enable_tts_websocket_plugin
-echo Demo recognizer plugin........ : $enable_demorecog_plugin
+echo ASR WebSocket plugin........... : $enable_asr_websocket_plugin
 echo Demo verifier plugin.......... : $enable_demoverifier_plugin
 echo Recorder plugin............... : $enable_recorder_plugin
 echo
