@@ -688,7 +688,7 @@ On a Windows builder with repository dependencies configured, build `unimrcp-201
 
 - `build-linux` 在 ABI 基线容器（RHEL 7 / Rocky Linux 8）内完成 Autotools 构建、`make check`（kylin 行另跑 CMake/CTest 插件测试）与 ELF/GLIBC/`ldd` 审计。
 - `verify-linux` 在 Rocky Linux 8 容器内完成 `demorecog.so`/`tts_websocket.so` 加载、RTP/MRCP 建链冒烟和 1 次预热 + 20 并发 split-payload loopback，并断言零 overrun、非故障 p99 `<100 ms`、最大值 `<250 ms`。
-- [ ] **Step 4a（待执行）**：Actions 首次绿色运行后，把 pacing JSON、fixture JSONL、server log 与测试日志作为证据回填到验证报告；在此之前 Linux 仍记录为“未验证/首跑待回填”，不得改为“已验证”。
+- [x] **Step 4a（已执行）**：Actions run 30967036638 首次绿色运行；rhel7-x86_64 与 kylinv10-aarch64 的 `verify-linux` 各 20/20 会话成功、零 overrun、非故障 gap p99/max 10–11 ms。pacing JSON、fixture JSONL、server log 与测试日志已作为证据回填到验证报告，Linux 与端到端项改为“已验证”。
 
 - [ ] **Step 5: Run final hygiene checks**
 

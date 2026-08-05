@@ -24,6 +24,7 @@ macOS 上 CMake 与 Autotools 的插件本体和 4 个插件测试均实际编�
 - channel/engine close 使用 consumer task 上的 `WORKER_CLOSED` fence；worker 未退出时不释放 channel/engine pool。
 - 每会话汇总包含媒体帧数、有效音频字节、1 ms 分桶的 gap histogram 与 p99/max、ring high-water、overrun、首发延迟、最大写等待、异常关闭、partial read、消息数和完成失败原因。
 - 自然输入结束（真实 UMC 播完音频文件且不发 STOP）由 transport worker 在 `input_idle_timeout_us`（默认 1 s）无新音频后判定：冲刷尾部字节并发送空 binary 结束帧，然后等待服务端 final；该路径与 STOP 的空帧路径共用同一协议语义，使真实 UMC 的 20 并发 loopback 能够正常完成。
+- 插件日志统一使用 `%lu`/`%ld` 而非 `%llu`/`%lld`：APR 自带的 `apr_vsnprintf` 不实现 `ll` 长度修饰符，会把 `%llu` 按未知转换打印成字面 `%lu` 并使后续 varargs 错位，导致 transport metrics 行无法被聚合器解析。
 
 ## 3. 测试与实验事实
 
@@ -94,9 +95,9 @@ rtk bash tools/stress/stress_test_improved.sh -h
 | macOS 插件 Autotools 构建与 `make check` | 已验证 | 插件本体编译，测试 4/4 通过 |
 | macOS 完整 CMake build | 阻断 | 公共 `libs/apr-toolkit` / `libs/mpf` 未获得 APR-util include，`apr_xml.h` not found；Issue #2 插件目标尚未进入失败点 |
 | macOS 完整 Autotools `make check` | 阻断 | 已知公共层 `JB_TRACE/RTP_TRACE` 向 `mpf_null_trace()` 传参导致编译失败 |
-| 20 个真实 UMC ASR 会话 | CI 已定义，首跑待回填 | 由 `.github/workflows/build-linux.yml` 的 `verify-linux` job 在 Rocky Linux 8 容器内以 1 次预热 + 20 并发 split-payload loopback 执行；绿色运行后回填 pacing JSON 与阈值断言结果 |
+| 20 个真实 UMC ASR 会话 | 已验证 | Actions run [30967036638](https://github.com/hrygo/tte-mrcp/actions/runs/30967036638) 的 `verify-linux` 在两架构（x86_64/aarch64）各执行 1 次预热 + 20 并发 split-payload loopback：rhel7 20/20 成功、kylin 20/20 成功，两行均零 overrun、零 abnormal close，非故障 gap p99/max 为 10–11 ms（阈值 p99 `<100 ms`、max `<250 ms`） |
 | Windows Win32/x64 | 未验证 | 当前环境无 Windows/MSBuild；工程 XML 已解析，solution 已接入新源文件和测试项目 |
-| Linux 目标发行版 | CI 已定义，首跑待回填 | `build-linux` 在 ABI 基线容器（RHEL 7 / Rocky Linux 8）完成 Autotools 构建、`make check`（kylin 行含 CMake/CTest）与 ELF/GLIBC/ldd 审计；`verify-linux` 在 Rocky Linux 8 容器执行插件加载、RTP/MRCP 建链冒烟和 20 并发 ASR loopback，断言零 overrun、非故障 p99 `<100 ms`、最大值 `<250 ms`；Actions 首次绿色运行后回填证据 |
+| Linux 目标发行版 | 已验证 | `build-linux` 在 ABI 基线容器（RHEL 7 / Rocky Linux 8）完成 Autotools 构建、`make check`（demorecog 4/4，kylin 行另含 CMake/CTest 8/8）与 ELF/GLIBC/ldd 审计；`verify-linux` 在 Rocky Linux 8 容器完成插件加载、RTP/MRCP 建链冒烟和 20 并发 ASR loopback；两架构全部通过（见上） |
 | 生产灰度 | 线上未验证 | 未提供真实灰度流量与服务端日志 |
 
 上述两个完整构建阻断均位于未修改的公共层，不归因于本 Issue 的插件实现。本变更没有为绕过门禁而扩大到公共库修复。
@@ -113,8 +114,8 @@ rtk bash tools/stress/stress_test_improved.sh -h
 
 ## 6. 后续上线门禁
 
-合并前仍需在受支持的 Windows builder 上完成对应 solution 构建和插件加载；Linux 门禁已定义为 `.github/workflows/build-linux.yml`：
+合并前仍需在受支持的 Windows builder 上完成对应 solution 构建和插件加载；Linux 门禁已由 `.github/workflows/build-linux.yml` 在 Actions run [30967036638](https://github.com/hrygo/tte-mrcp/actions/runs/30967036638) 上通过：
 
 - `build-linux`：在 ABI 基线容器（RHEL 7 / Rocky Linux 8）内完成 Autotools 构建与 `make check`（kylin 行另跑 CMake/CTest 插件测试），并对打包产物执行 ELF/GLIBC 与 `ldd` 审计。
 - `verify-linux`：在 Rocky Linux 8 容器内启动 loopback fixture（split-payload 故障注入）与打包后的 `unimrcpserver`，确认 MRCPv2 profile 就绪、插件加载无失败，然后运行 1 次预热 + 20 个并发 UMC 会话，以 fixture JSONL 与插件结构化 summary 生成 pacing JSON。
-- 只有 Actions 首次绿色运行满足零 overrun、非故障样本 gap p99 `<100 ms`、最大值 `<250 ms`，且故障会话在 5 秒 deadline 内终止，才把 Linux 与端到端项改为通过。
+- 两架构实测均满足零 overrun、非故障样本 gap p99 `<100 ms`、最大值 `<250 ms`（实测 10–11 ms），端到端项与 Linux 项已改为“已验证”。
