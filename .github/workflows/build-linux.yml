@@ -526,6 +526,15 @@ jobs:
               f"p99={p99}ms max={maximum}ms overrun={report.get('overrun_events')}"
           )
           PY
+
+          # 10. Production-plugin E2E: packaged TTS and ASR binaries/plugins
+          # exchange real WebSocket frames with loopback doubles.  This is
+          # intentionally separate from the pacing gate so a passing stress
+          # run cannot mask a missing TTS plugin or a bad MRCP completion.
+          E2E_WORK_DIR="$GITHUB_WORKSPACE/websocket-e2e-results" \
+            PACKAGE_DIR="$package_dir" ROOT_DIR="$GITHUB_WORKSPACE" \
+            E2E_MODE=split \
+            bash "$GITHUB_WORKSPACE/tools/diagnostics/run_websocket_e2e.sh"
           CONTAINER_SCRIPT
 
       - name: Publish verify summary
@@ -557,4 +566,5 @@ jobs:
             fixture.jsonl
             pacing.json
             stress_results/
+            websocket-e2e-results/
           if-no-files-found: ignore
