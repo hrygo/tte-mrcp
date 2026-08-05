@@ -1081,7 +1081,7 @@ static void test_worker_keeps_media_enqueue_independent_of_partial_rx(
                collector.last_metrics.media_gap_p99_us == 20000);
     CHECK_TRUE("successful metrics have the neutral completion reason",
                collector.last_metrics.completion_failure ==
-                   FUNASR_FAILURE_INTERNAL);
+                   FUNASR_FAILURE_NONE);
 
     format.call_id = "worker-test-next";
     CHECK_TRUE("next generation starts immediately after terminal event",
@@ -1308,6 +1308,111 @@ static void test_worker_stop_drains_without_final(
     CHECK_TRUE("STOP worker closes",
                wait_for_collector(&collector, 2, 1) == TRUE);
     CHECK_TRUE("STOP worker joins",
+    funasr_transport_join_closed(transport) == APR_SUCCESS);
+}
+
+static void test_worker_natural_endpoint_flushes_short_input(
+    apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    static const char response_json[] = "{\"code\":0,\"text\":\"short\"}";
+    unsigned char response_frame[2 + sizeof(response_json) - 1];
+    unsigned char short_audio[100];
+    unsigned char decoded_audio[100];
+    funasr_transport_config_t config;
+    funasr_audio_format_t format;
+    funasr_transport_t *transport;
+    fake_io_t io;
+    event_collector_t collector;
+    apr_int64_t now_us = 6000000;
+    apr_size_t decoded_size;
+    int empty_frames;
+
+    memset(&io, 0, sizeof(io));
+    memset(&collector, 0, sizeof(collector));
+    apr_thread_mutex_create(&io.mutex, APR_THREAD_MUTEX_DEFAULT, pool);
+    apr_thread_mutex_create(
+        &collector.mutex,
+        APR_THREAD_MUTEX_DEFAULT,
+        pool);
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.clock.now_us = fake_now_us;
+    config.clock.obj = &now_us;
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+    config.io_vtable = &fake_vtable;
+    config.io_obj = &io;
+    transport = funasr_transport_create(pool, 46, &config);
+
+    memset(&format, 0, sizeof(format));
+    format.input_sample_rate = 16000;
+    format.output_sample_rate = 16000;
+    format.channel_count = 1;
+    format.sample_width = 2;
+    format.call_id = "natural-short-test";
+    CHECK_TRUE("natural endpoint generation begins",
+               funasr_transport_begin_generation(transport, 46, &format));
+    memset(short_audio, 0x61, sizeof(short_audio));
+    CHECK_TRUE("short input accepted",
+               funasr_transport_enqueue_pcm(
+                   transport,
+                   46,
+                   short_audio,
+                   sizeof(short_audio),
+                   now_us) == FUNASR_ENQUEUE_ACCEPTED);
+
+    CHECK_TRUE("short input is observed",
+               wait_for_collector(&collector, 4, 1));
+    now_us += FUNASR_INPUT_IDLE_TIMEOUT_US;
+    funasr_transport_wake(transport);
+    CHECK_TRUE("short input reaches natural EOS",
+               fake_io_wait_outbound(&io, sizeof(short_audio) + 4) == TRUE);
+    CHECK_TRUE("short input emits audio and one EOS",
+               fake_io_decode_binary(
+                   &io,
+                   decoded_audio,
+                   sizeof(decoded_audio),
+                   &decoded_size,
+                   &empty_frames) == TRUE);
+    CHECK_SIZE("short input is flushed", decoded_size, sizeof(short_audio));
+    CHECK_TRUE("short input bytes are preserved",
+               memcmp(decoded_audio, short_audio, sizeof(short_audio)) == 0);
+    CHECK_TRUE("natural endpoint emits one EOS", empty_frames == 1);
+    CHECK_TRUE("producer is stopped after natural EOS",
+               funasr_transport_enqueue_pcm(
+                   transport,
+                   46,
+                   short_audio,
+                   sizeof(short_audio),
+                   now_us) == FUNASR_ENQUEUE_NOT_STREAMING);
+
+    response_frame[0] = 0x81;
+    response_frame[1] = (unsigned char)(sizeof(response_json) - 1);
+    memcpy(response_frame + 2, response_json, sizeof(response_json) - 1);
+    fake_io_append_inbound(&io, response_frame, sizeof(response_frame));
+    funasr_transport_wake(transport);
+    CHECK_TRUE("natural endpoint final arrives",
+               wait_for_collector(&collector, 0, 1));
+    CHECK_TRUE("natural endpoint metrics arrive",
+               wait_for_collector(&collector, 5, 1));
+    CHECK_TRUE("successful natural endpoint has no failure",
+               collector.last_metrics.completion_failure ==
+                   FUNASR_FAILURE_NONE);
+
+    funasr_transport_request_close(transport);
+    CHECK_TRUE("natural endpoint worker closes",
+               wait_for_collector(&collector, 2, 1));
+    CHECK_TRUE("natural endpoint worker joins",
                funasr_transport_join_closed(transport) == APR_SUCCESS);
 }
 
@@ -1884,6 +1989,7 @@ int main(void)
     test_worker_keeps_media_enqueue_independent_of_partial_rx(pool);
     test_worker_queues_pong_behind_pending_audio(pool);
     test_worker_stop_drains_without_final(pool);
+    test_worker_natural_endpoint_flushes_short_input(pool);
     test_twenty_transport_workers_remain_independent(pool);
     test_worker_preserves_handshake_sticky_frame(pool);
     test_worker_reports_one_queue_overrun(pool);
