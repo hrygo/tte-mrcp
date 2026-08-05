@@ -835,6 +835,7 @@ void funasr_transport_config_init(funasr_transport_config_t *config)
     config->write_stall_timeout_us = FUNASR_WRITE_STALL_TIMEOUT_US;
     config->stop_drain_timeout_us = FUNASR_STOP_DRAIN_TIMEOUT_US;
     config->no_result_timeout_us = FUNASR_NO_RESULT_TIMEOUT_US;
+    config->input_idle_timeout_us = FUNASR_INPUT_IDLE_TIMEOUT_US;
     config->poll_timeout_us = FUNASR_POLL_TIMEOUT_MS * 1000;
     funasr_clock_default(&config->clock);
 }
@@ -1759,6 +1760,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
             apr_size_t final_text_size;
             apt_bool_t input_started;
             apt_bool_t end_frame_queued;
+            apt_bool_t idle_endpoint_pending;
             apt_bool_t final_received;
             apt_bool_t generation_failed;
             apt_bool_t generation_drained;
@@ -1780,6 +1782,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
             final_text_size = 0;
             input_started = FALSE;
             end_frame_queued = FALSE;
+            idle_endpoint_pending = FALSE;
             final_received = FALSE;
             generation_failed = FALSE;
             generation_drained = FALSE;
@@ -1931,6 +1934,61 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                 if (cancel && tx_size == tx_offset &&
                     funasr_tx_ring_size(transport->ring) == 0 &&
                     !end_frame_queued) {
+                    tx_size = funasr_ws_frame_encode(
+                        transport,
+                        FUNASR_WS_OPCODE_BINARY,
+                        NULL,
+                        0,
+                        tx_buffer,
+                        max_chunk + FUNASR_WS_FRAME_OVERHEAD);
+                    tx_offset = 0;
+                    tx_audio = FALSE;
+                    write_wait_started_us = now_us;
+                    end_frame_queued = TRUE;
+                }
+                /* Natural end of input: once no audio has been sent for
+                   input_idle_timeout_us, latch the endpoint decision, flush
+                   any trailing bytes and send the empty binary end-of-stream
+                   frame, then keep waiting for the final result. */
+                if (!cancel && input_started &&
+                    !idle_endpoint_pending &&
+                    tx_size == tx_offset &&
+                    funasr_tx_ring_size(transport->ring) == 0 &&
+                    !end_frame_queued &&
+                    last_audio_send_us != 0 &&
+                    now_us - last_audio_send_us >=
+                        transport->config.input_idle_timeout_us) {
+                    idle_endpoint_pending = TRUE;
+                }
+                if (!cancel && idle_endpoint_pending &&
+                    !end_frame_queued &&
+                    tx_size == tx_offset &&
+                    funasr_tx_ring_size(transport->ring) != 0) {
+                    apr_size_t amount = funasr_tx_ring_size(
+                        transport->ring);
+                    if (amount > max_chunk) {
+                        amount = max_chunk;
+                    }
+                    if (funasr_tx_ring_dequeue(
+                            transport->ring,
+                            frame_payload,
+                            &amount)) {
+                        tx_size = funasr_ws_frame_encode(
+                            transport,
+                            FUNASR_WS_OPCODE_BINARY,
+                            frame_payload,
+                            amount,
+                            tx_buffer,
+                            max_chunk + FUNASR_WS_FRAME_OVERHEAD);
+                        tx_offset = 0;
+                        tx_audio = TRUE;
+                        write_wait_started_us = now_us;
+                    }
+                }
+                if (!cancel && idle_endpoint_pending &&
+                    !end_frame_queued &&
+                    tx_size == tx_offset &&
+                    funasr_tx_ring_size(transport->ring) == 0) {
                     tx_size = funasr_ws_frame_encode(
                         transport,
                         FUNASR_WS_OPCODE_BINARY,
@@ -2168,6 +2226,10 @@ funasr_transport_t *funasr_transport_create(
     if (transport->config.no_result_timeout_us <= 0) {
         transport->config.no_result_timeout_us =
             FUNASR_NO_RESULT_TIMEOUT_US;
+    }
+    if (transport->config.input_idle_timeout_us <= 0) {
+        transport->config.input_idle_timeout_us =
+            FUNASR_INPUT_IDLE_TIMEOUT_US;
     }
     if (apr_thread_mutex_create(
             &transport->mutex,

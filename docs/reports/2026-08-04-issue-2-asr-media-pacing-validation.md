@@ -23,6 +23,7 @@ macOS 上 CMake 与 Autotools 的插件本体和 4 个插件测试均实际编�
 - WebSocket 握手期间的 STOP 使用 `stop_drain_timeout` 限制等待，正常快速握手仍可发送队尾与空结束帧；channel close 立即中断握手。
 - channel/engine close 使用 consumer task 上的 `WORKER_CLOSED` fence；worker 未退出时不释放 channel/engine pool。
 - 每会话汇总包含媒体帧数、有效音频字节、1 ms 分桶的 gap histogram 与 p99/max、ring high-water、overrun、首发延迟、最大写等待、异常关闭、partial read、消息数和完成失败原因。
+- 自然输入结束（真实 UMC 播完音频文件且不发 STOP）由 transport worker 在 `input_idle_timeout_us`（默认 1 s）无新音频后判定：冲刷尾部字节并发送空 binary 结束帧，然后等待服务端 final；该路径与 STOP 的空帧路径共用同一协议语义，使真实 UMC 的 20 并发 loopback 能够正常完成。
 
 ## 3. 测试与实验事实
 

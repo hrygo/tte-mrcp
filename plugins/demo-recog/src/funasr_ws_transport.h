@@ -30,6 +30,7 @@ typedef apr_uint64_t funasr_transport_id_t;
 #define FUNASR_WRITE_STALL_TIMEOUT_US    5000000LL
 #define FUNASR_STOP_DRAIN_TIMEOUT_US     5000000LL
 #define FUNASR_NO_RESULT_TIMEOUT_US     10000000LL
+#define FUNASR_INPUT_IDLE_TIMEOUT_US     1000000LL
 #define FUNASR_MEDIA_GAP_HISTOGRAM_BUCKETS 256U
 
 #define FUNASR_IO_READABLE 0x01
@@ -241,6 +242,7 @@ typedef struct funasr_transport_config_t {
     apr_interval_time_t write_stall_timeout_us;
     apr_interval_time_t stop_drain_timeout_us;
     apr_interval_time_t no_result_timeout_us;
+    apr_interval_time_t input_idle_timeout_us;
     apr_interval_time_t poll_timeout_us;
     funasr_clock_t clock;
     funasr_transport_event_sink_f event_sink;
