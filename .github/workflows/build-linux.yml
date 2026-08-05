@@ -342,7 +342,7 @@ jobs:
           set -o pipefail
 
           dnf -y install --setopt=install_weak_deps=False \
-            expect python3 file binutils procps-ng unzip nss-softokn-freebl
+            expect python3 file findutils binutils procps-ng unzip nss-softokn-freebl
           # nss-softokn-freebl: the rhel7 package bundles CentOS 7 libcrypt
           # (DT_NEEDED libfreebl3.so), which must resolve on the verify image
           # just like it does on the target RHEL 7 / Kylin systems.
@@ -417,7 +417,8 @@ jobs:
           # 5. Start unimrcpserver from the packaged tree (console log only)
           cd "$package_dir"
           LD_LIBRARY_PATH="$PACKAGE_LIB" bin/unimrcpserver \
-            -r "$package_dir" -l 6 -o 1 \
+            -r "$package_dir" -l 6 -o 1 -w \
+            < /dev/null \
             > "$GITHUB_WORKSPACE/server.log" 2>&1 &
           server_pid=$!
 
