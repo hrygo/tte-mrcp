@@ -95,6 +95,14 @@ done
 grep -q "Create MRCPv2 Profile" "$WORK_DIR/server.log" || fail "server did not become ready"
 kill -0 "$server_pid" 2>/dev/null || fail "unimrcpserver exited after becoming ready"
 grep -q "Failed to Load UniMRCP Server Document\|Failed to compose plugin path" "$WORK_DIR/server.log" && fail "plugin/config load failed"
+# A server that cannot bind its SIP/MRCP/RTSP sockets still logs
+# "MRCP Server Started", so the profile-ready check above is not
+# sufficient.  Detect the bind failures explicitly so a leftover
+# server from a previous run cannot silently poison the E2E gate.
+if grep -qE "Failed to Create Listening Socket|Failed to Run Sofia-SIP Task|Failed to Create NUA" \
+   "$WORK_DIR/server.log"; then
+  fail "server failed to bind signaling ports (stale server from a previous run?)"
+fi
 
 run_umc() {
   local kind="$1"

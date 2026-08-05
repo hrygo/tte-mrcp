@@ -527,6 +527,21 @@ jobs:
           )
           PY
 
+          # The stress-test server and fixture have served their purpose.
+          # The E2E gate below starts its own unimrcpserver and per-service
+          # fixtures on the same SIP/MRCP/RTSP ports, so the stress
+          # processes must be torn down first.  Without this the second
+          # server logs "Failed to Create Listening Socket" / "Failed to
+          # Run Sofia-SIP Task" and the UMC driver receives RESULT:NODATA.
+          # We keep the variables set: the EXIT trap will harmlessly try
+          # to kill them again at container exit (process already dead).
+          kill "$server_pid" "$fixture_pid" 2>/dev/null || true
+          wait "$server_pid" 2>/dev/null || true
+          wait "$fixture_pid" 2>/dev/null || true
+          # Reclaim the stress log so the E2E runner gets a clean server.log
+          # path; the file is recreated inside the loop per mode.
+          rm -f "$GITHUB_WORKSPACE/server.log"
+
           # 10. Production-plugin E2E: packaged TTS and ASR binaries/plugins
           # exchange real WebSocket frames with loopback doubles.  This is
           # intentionally separate from the pacing gate so a passing stress
