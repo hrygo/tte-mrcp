@@ -217,6 +217,9 @@ jobs:
             "$GITHUB_WORKSPACE/check-autotools-$TARGET.log" || true
 
           # CMake gate (kylinv10 row only): plugin tests via CTest.
+          # PR checks run on the merge ref, where the tts-websocket plugin
+          # registers http_parse/pcm/lifecycle/ws test executables in addition
+          # to the four demorecog tests; build every registered plugin target.
           if [ "$RUN_CMAKE_GATE" = true ]; then
             cmake -S "$GITHUB_WORKSPACE" -B "$GITHUB_WORKSPACE/build/ci-cmake" \
               -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -230,6 +233,8 @@ jobs:
               --target test_resample test_json_unescape \
                      test_funasr_ws_transport test_funasr_control \
                      test_tts_websocket_http_parse \
+                     test_tts_websocket_pcm test_tts_websocket_lifecycle \
+                     test_tts_websocket_ws \
               -j"$(getconf _NPROCESSORS_ONLN)" \
               > "$GITHUB_WORKSPACE/cmake-build-$TARGET.log" 2>&1 || {
                 tail -n 120 "$GITHUB_WORKSPACE/cmake-build-$TARGET.log"
