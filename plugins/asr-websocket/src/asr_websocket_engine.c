@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define RECOG_ENGINE_TASK_NAME "FunASR Recog Engine"
+#define RECOG_ENGINE_TASK_NAME "ASR WebSocket Engine"
 #define FUNASR_SERVER_HOST "40.20.85.37"
 #define FUNASR_SERVER_PORT 8888
 #define FUNASR_SERVER_PATH "/ws/audio"
@@ -24,7 +24,7 @@ typedef struct funasr_event_bridge_t funasr_event_bridge_t;
 typedef struct funasr_msg_t funasr_msg_t;
 
 #define LOG_WITH_SID(channel, priority, format, ...) \
-    apt_log(APT_LOG_MARK, priority, "zyASR: [session_id=%s] " format, \
+    apt_log(APT_LOG_MARK, priority, "asr_websocket: [session_id=%s] " format, \
         (channel) && (channel)->session_id ? (channel)->session_id : "N/A", \
         ##__VA_ARGS__)
 
@@ -276,7 +276,7 @@ static apt_bool_t funasr_engine_destroy(mrcp_engine_t *engine)
         apt_log(
             APT_LOG_MARK,
             APT_PRIO_ERROR,
-            "zyASR: refusing clean destroy with live transports");
+            "asr_websocket: refusing clean destroy with live transports");
         return FALSE;
     }
     if (funasr_engine->task) {
@@ -309,7 +309,7 @@ static apt_bool_t funasr_engine_open(mrcp_engine_t *engine)
     apt_log(
         APT_LOG_MARK,
         APT_PRIO_INFO,
-        "zyASR: transport worker endpoint configured host=%s port=%u path=%s",
+        "asr_websocket: transport worker endpoint configured host=%s port=%u path=%s",
         funasr_engine->server_host,
         (unsigned int)funasr_engine->server_port,
         funasr_engine->server_path);

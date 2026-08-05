@@ -13,7 +13,7 @@
 
 ## 诊断
 
-`tools/diagnostics/diagnose.sh` 检查 UniMRCP server、TTS/ASR 后端端口、插件文件和 SIP 单次连通性。可通过 `PLUGIN_DIR` 指定实际插件部署目录。
+`tools/diagnostics/diagnose.sh` 检查 UniMRCP server、TTS/ASR 后端端口、`tts_websocket.so`/`asr_websocket.so` 插件文件和 SIP 单次连通性。ASR endpoint 从 `conf/unimrcpserver.xml` 的 `funasr-host`、`funasr-port`、`funasr-path` 配置读取；可通过 `PLUGIN_DIR` 指定实际插件部署目录。
 
 ## 集成测试
 

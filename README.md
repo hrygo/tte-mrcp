@@ -117,10 +117,23 @@ macOS Homebrew 路径只允许出现在本机开发脚本和本地生成目录�
 
 `demo_*` 仅用于 UniMRCP 示例客户端，不用于正式插件。
 
+## 正式 ASR WebSocket 插件
+
+当前正式 ASR 插件名称为 `asr-websocket` / `asr_websocket`，负责将 MRCP `speechrecog` 资源接入 FunASR WebSocket 服务：
+
+- 源码目录：`plugins/asr-websocket/`
+- 插件动态库：`asr_websocket.so`（Windows 为对应 DLL）
+- 配置引擎：`ASR-WebSocket-1`，注册名 `asr_websocket`
+- endpoint 参数：`funasr-host`、`funasr-port`、`funasr-path`
+- 诊断入口：`tools/diagnostics/diagnose.sh`
+
+历史配置 `Demo-Recog-1` / `demorecog` 迁移为 `ASR-WebSocket-1` / `asr_websocket`；FunASR endpoint 参数不变。当前发布不提供旧动态库或 engine 的运行时别名：部署升级必须原子替换 XML 与插件库，不能用旧 XML 加载新安装。兼容窗口仅覆盖 loopback fixture 的旧输入迁移；旧名称从本发布版本起退出正式构建，不延长到后续 release。真实生产灰度和外部服务运行验收需由部署方人工确认，macOS 本地通过不代表 Windows/Linux 运行时已验证。
+
 ## 目录约定
 
 - `libs/`、`modules/`、`plugins/`、`platforms/`：运行时源码和框架模块；插件源码只从各自的 `src/` 编译。
 - `plugins/tts-websocket/`：正式 TTS WebSocket 插件；其构建目标和注册名均为 `tts_websocket`。
+- `plugins/asr-websocket/`：正式 ASR WebSocket 插件；其构建目标和注册名均为 `asr_websocket`。
 - `tests/`：框架测试和协议测试；`tests/integration/` 存放依赖已编译 UMC 的 Expect 集成测试。
 - `tools/stress/`：ASR/TTS 压测脚本；根目录同名脚本仅为兼容包装。
 - `tools/diagnostics/`：本机服务、端口和插件诊断脚本。

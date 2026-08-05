@@ -1,15 +1,15 @@
 AM_CPPFLAGS                = $(UNIMRCP_PLUGIN_INCLUDES) -I$(srcdir)/src
 
-plugin_LTLIBRARIES         = demorecog.la
+plugin_LTLIBRARIES         = asr_websocket.la
 
-demorecog_la_SOURCES       = \
-                             src/demo_recog_engine.c \
+asr_websocket_la_SOURCES   = \
+                             src/asr_websocket_engine.c \
                              src/funasr_audio.c src/funasr_audio.h \
                              src/funasr_clock.c src/funasr_clock.h \
                              src/funasr_control.c src/funasr_control.h \
                              src/funasr_json.c src/funasr_json.h \
                              src/funasr_ws_transport.c src/funasr_ws_transport.h
-demorecog_la_LDFLAGS       = $(UNIMRCP_PLUGIN_OPTS)
+asr_websocket_la_LDFLAGS   = $(UNIMRCP_PLUGIN_OPTS)
 
 check_PROGRAMS             = test_resample test_json_unescape \
                              test_funasr_ws_transport test_funasr_control

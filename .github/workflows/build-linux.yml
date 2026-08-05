@@ -207,8 +207,8 @@ jobs:
           audit_elf
 
           # ---- Plugin unit-test gates (target ABI container) ----
-          # Autotools gate: demorecog check_PROGRAMS (4 tests).
-          make -C "$GITHUB_WORKSPACE/build/ci/plugins/demo-recog" check \
+          # Autotools gate: asr_websocket check_PROGRAMS (4 tests).
+          make -C "$GITHUB_WORKSPACE/build/ci/plugins/asr-websocket" check \
             > "$GITHUB_WORKSPACE/check-autotools-$TARGET.log" 2>&1 || {
               tail -n 120 "$GITHUB_WORKSPACE/check-autotools-$TARGET.log"
               exit 1
@@ -219,11 +219,11 @@ jobs:
           # CMake gate (kylinv10 row only): plugin tests via CTest.
           # PR checks run on the merge ref, where the tts-websocket plugin
           # registers http_parse/pcm/lifecycle/ws test executables in addition
-          # to the four demorecog tests; build every registered plugin target.
+          # to the four asr_websocket tests; build every registered plugin target.
           if [ "$RUN_CMAKE_GATE" = true ]; then
             cmake -S "$GITHUB_WORKSPACE" -B "$GITHUB_WORKSPACE/build/ci-cmake" \
               -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-              -DBUILD_DEMORECOG_TESTS=ON \
+              -DBUILD_ASR_WEBSOCKET_TESTS=ON \
               -DBUILD_TTS_WEBSOCKET_TESTS=ON \
               > "$GITHUB_WORKSPACE/cmake-configure-$TARGET.log" 2>&1 || {
                 tail -n 120 "$GITHUB_WORKSPACE/cmake-configure-$TARGET.log"
@@ -242,7 +242,7 @@ jobs:
               }
             ctest --test-dir "$GITHUB_WORKSPACE/build/ci-cmake" \
               --output-on-failure \
-              -R '^(demorecog_|tts_websocket_)' \
+              -R '^(asr_websocket_|tts_websocket_)' \
               > "$GITHUB_WORKSPACE/ctest-$TARGET.log" 2>&1 || {
                 tail -n 120 "$GITHUB_WORKSPACE/ctest-$TARGET.log"
                 exit 1
@@ -287,7 +287,7 @@ jobs:
           if-no-files-found: error
 
   # Runtime verification of the packaged tree in a Linux container:
-  # plugin load, RTP/MRCP link smoke and the Issue #2 20-session loopback
+  # plugin load, RTP/MRCP link smoke and the 20-session ASR WebSocket loopback
   # fixture with machine-readable pacing thresholds.
   verify-linux:
     name: verify ${{ matrix.target }}
@@ -382,14 +382,36 @@ jobs:
             fi
           done
 
-          # 3. Emit loopback server config: exactly one Demo-Recog-1 -> fixture
+          # 3. Emit loopback server config: exactly one canonical ASR engine -> fixture
           python3 "$GITHUB_WORKSPACE/tools/diagnostics/funasr_ws_fixture.py" \
             --emit-config "$GITHUB_WORKSPACE/conf/unimrcpserver.xml" \
             "$GITHUB_WORKSPACE/verify-unimrcpserver.xml" \
             --host 127.0.0.1 --port 8022 --path /ws/asr
           cp "$GITHUB_WORKSPACE/verify-unimrcpserver.xml" \
              "$package_dir/conf/unimrcpserver.xml"
-          test "$(grep -c 'id="Demo-Recog-1"' "$package_dir/conf/unimrcpserver.xml")" -eq 1
+          python3 - "$package_dir/conf/unimrcpserver.xml" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse(sys.argv[1]).getroot()
+          engines = [
+              node for node in root.iter("engine")
+              if node.get("id") == "ASR-WebSocket-1"
+          ]
+          assert len(engines) == 1
+          assert engines[0].get("name") == "asr_websocket"
+          params = {node.get("name"): node.get("value") for node in engines[0]}
+          assert params["funasr-host"] == "127.0.0.1"
+          assert params["funasr-port"] == "8022"
+          assert params["funasr-path"] == "/ws/asr"
+          mappings = [
+              node for node in root.iter("resource")
+              if node.get("id") == "speechrecog"
+              and node.get("engine") is not None
+          ]
+          assert len(mappings) == 1
+          assert mappings[0].get("engine") == "ASR-WebSocket-1"
+          PY
 
           # 4. Start the loopback fixture with fault injection
           python3 "$GITHUB_WORKSPACE/tools/diagnostics/funasr_ws_fixture.py" \
@@ -472,7 +494,7 @@ jobs:
             --warmup=1 \
             --fault-connection="$FAULT_CONNECTION"
 
-          # 9. Assert Issue #2 pacing acceptance thresholds
+          # 9. Assert ASR WebSocket pacing acceptance thresholds
           python3 - "$GITHUB_WORKSPACE/pacing.json" "$CONCURRENCY" <<'PY'
           import json
           import sys

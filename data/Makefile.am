@@ -13,7 +13,7 @@ if TTS_WEBSOCKET_PLUGIN
 DATAFILES           += tts_websocket-16kHz.pcm tts_websocket-8kHz.pcm
 endif
 
-if DEMORECOG_PLUGIN
+if ASR_WEBSOCKET_PLUGIN
 DATAFILES           += result.xml
 endif
 

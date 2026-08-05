@@ -94,8 +94,8 @@ host_triplet = @host@
 @COMMON_CLIENT_DATA_TRUE@                       one-16kHz.pcm one-8kHz.pcm \
 @COMMON_CLIENT_DATA_TRUE@                       johnsmith-16kHz.pcm johnsmith-8kHz.pcm
 
-@TTS_WEBSOCKET_PLUGIN_TRUE@am__append_2 = demo-16kHz.pcm demo-8kHz.pcm
-@DEMORECOG_PLUGIN_TRUE@am__append_3 = result.xml
+@TTS_WEBSOCKET_PLUGIN_TRUE@am__append_2 = tts_websocket-16kHz.pcm tts_websocket-8kHz.pcm
+@ASR_WEBSOCKET_PLUGIN_TRUE@am__append_3 = result.xml
 @DEMOVERIFIER_PLUGIN_TRUE@am__append_4 = result-verification.xml
 subdir = data
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4

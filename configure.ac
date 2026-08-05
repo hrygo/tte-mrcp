@@ -194,10 +194,10 @@ UNI_PLUGIN_ENABLED(tts_websocket)
 
 AM_CONDITIONAL([TTS_WEBSOCKET_PLUGIN],[test "${enable_tts_websocket_plugin}" = "yes"])
 
-dnl Demo recognizer plugin.
-UNI_PLUGIN_ENABLED(demorecog)
+dnl ASR WebSocket plugin.
+UNI_PLUGIN_ENABLED(asr_websocket)
 
-AM_CONDITIONAL([DEMORECOG_PLUGIN],[test "${enable_demorecog_plugin}" = "yes"])
+AM_CONDITIONAL([ASR_WEBSOCKET_PLUGIN],[test "${enable_asr_websocket_plugin}" = "yes"])
 
 dnl Demo verifier plugin.
 UNI_PLUGIN_ENABLED(demoverifier)
@@ -237,7 +237,7 @@ AC_CONFIG_FILES([
     plugins/Makefile
     plugins/mrcp-recorder/Makefile
     plugins/tts-websocket/Makefile
-    plugins/demo-recog/Makefile
+    plugins/asr-websocket/Makefile
     plugins/demo-verifier/Makefile
     platforms/Makefile
     platforms/libunimrcp-server/Makefile
@@ -293,7 +293,7 @@ echo UniMRCP server lib............ : $enable_server_lib
 echo UniMRCP server app............ : $enable_server_app
 echo
 echo TTS WebSocket plugin....... : $enable_tts_websocket_plugin
-echo Demo recognizer plugin........ : $enable_demorecog_plugin
+echo ASR WebSocket plugin........... : $enable_asr_websocket_plugin
 echo Demo verifier plugin.......... : $enable_demoverifier_plugin
 echo Recorder plugin............... : $enable_recorder_plugin
 echo

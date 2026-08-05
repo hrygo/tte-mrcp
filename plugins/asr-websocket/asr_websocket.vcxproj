@@ -20,7 +20,7 @@
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{B495B6D9-AF84-479D-B30A-313C16EF8BFD}</ProjectGuid>
-    <RootNamespace>demorecog</RootNamespace>
+    <RootNamespace>asr_websocket</RootNamespace>
     <Keyword>Win32Proj</Keyword>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -109,7 +109,7 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="src\demo_recog_engine.c" />
+    <ClCompile Include="src\asr_websocket_engine.c" />
     <ClCompile Include="src\funasr_audio.c" />
     <ClCompile Include="src\funasr_clock.c" />
     <ClCompile Include="src\funasr_control.c" />

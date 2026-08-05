@@ -58,11 +58,11 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "mrcpengine", "libs\mrcp-eng
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "demosynth", "plugins\demo-synth\demosynth.vcxproj", "{92BFA534-C419-4EB2-AAA3-510653F38F08}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "demorecog", "plugins\demo-recog\demorecog.vcxproj", "{B495B6D9-AF84-479D-B30A-313C16EF8BFD}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "asr_websocket", "plugins\asr-websocket\asr_websocket.vcxproj", "{B495B6D9-AF84-479D-B30A-313C16EF8BFD}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "test_funasr_ws_transport", "plugins\demo-recog\tests\test_funasr_ws_transport.vcxproj", "{7A83B5F1-1D2E-4A37-9C51-020000000001}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "test_funasr_ws_transport", "plugins\asr-websocket\tests\test_funasr_ws_transport.vcxproj", "{7A83B5F1-1D2E-4A37-9C51-020000000001}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "test_funasr_control", "plugins\demo-recog\tests\test_funasr_control.vcxproj", "{7A83B5F1-1D2E-4A37-9C51-020000000002}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "test_funasr_control", "plugins\asr-websocket\tests\test_funasr_control.vcxproj", "{7A83B5F1-1D2E-4A37-9C51-020000000002}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "strtablegen", "tests\strtablegen\strtablegen.vcxproj", "{79EF9F1D-E211-4ED1-91D2-FC935AB3A872}"
 EndProject

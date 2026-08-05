@@ -125,14 +125,14 @@
         <param name="tts-host" value="40.20.85.37"/>
         <param name="tts-port" value="8091"/>
       </engine>
-      <engine id="Demo-Recog-1" name="demorecog" enable="true"/>
-      <engine id="Demo-Verifier-1" name="demoverifier" enable="true"/>
-      <engine id="Recorder-1" name="mrcprecorder" enable="true"/>
-      <engine id="Demo-Recog-1" name="demorecog" enable="true">
+      <engine id="ASR-WebSocket-1" name="asr_websocket" enable="true">
+        <!-- FunASR deployment endpoint; replace for the target environment. -->
         <param name="funasr-host" value="127.0.0.1"/>
         <param name="funasr-port" value="8022"/>
         <param name="funasr-path" value="/ws/asr"/>
       </engine>
+      <engine id="Demo-Verifier-1" name="demoverifier" enable="true"/>
+      <engine id="Recorder-1" name="mrcprecorder" enable="true"/>
 
       <!--
         Engines may have additional named ("max-channel-count") and generic (name/value) parameters.
@@ -192,12 +192,18 @@
       <!--
       <resource-engine-map>
         <resource id="speechsynth" engine="TTS-WebSocket-1"/>
-        <resource id="speechrecog" engine="Demo-Recog-1">
+        <resource id="speechrecog" engine="ASR-WebSocket-1">
           <attrib name="n1" value="v1"/>
           <attrib name="n2" value="v2"/>
         </resource>
       </resource-engine-map>
       -->
+      <resource-engine-map>
+        <resource id="speechsynth" engine="TTS-WebSocket-1"/>
+        <resource id="speechrecog" engine="ASR-WebSocket-1"/>
+        <resource id="speakverify" engine="Demo-Verifier-1"/>
+        <resource id="recorder" engine="Recorder-1"/>
+      </resource-engine-map>
     </mrcpv2-profile>
 
     <!-- MRCPv1 default profile -->

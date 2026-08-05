@@ -92,7 +92,7 @@ build_triplet = @build@
 host_triplet = @host@
 check_PROGRAMS = test_resample$(EXEEXT) test_json_unescape$(EXEEXT) \
 	test_funasr_ws_transport$(EXEEXT) test_funasr_control$(EXEEXT)
-subdir = plugins/demo-recog
+subdir = plugins/asr-websocket
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/build/acmacros/opencore_amr.m4 \
 	$(top_srcdir)/build/acmacros/vo_amrwbenc.m4 \
@@ -143,19 +143,20 @@ am__uninstall_files_from_dir = { \
   }
 am__installdirs = "$(DESTDIR)$(plugindir)"
 LTLIBRARIES = $(plugin_LTLIBRARIES)
-demorecog_la_LIBADD =
+asr_websocket_la_LIBADD =
 am__dirstamp = $(am__leading_dot)dirstamp
-am_demorecog_la_OBJECTS = src/demo_recog_engine.lo src/funasr_audio.lo \
-	src/funasr_clock.lo src/funasr_control.lo src/funasr_json.lo \
-	src/funasr_ws_transport.lo
-demorecog_la_OBJECTS = $(am_demorecog_la_OBJECTS)
+am_asr_websocket_la_OBJECTS = src/asr_websocket_engine.lo \
+	src/funasr_audio.lo src/funasr_clock.lo src/funasr_control.lo \
+	src/funasr_json.lo src/funasr_ws_transport.lo
+asr_websocket_la_OBJECTS = $(am_asr_websocket_la_OBJECTS)
 AM_V_lt = $(am__v_lt_@AM_V@)
 am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
 am__v_lt_0 = --silent
-am__v_lt_1 = 
-demorecog_la_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
-	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
-	$(demorecog_la_LDFLAGS) $(LDFLAGS) -o $@
+am__v_lt_1 =
+asr_websocket_la_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC \
+	$(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=link $(CCLD) \
+	$(AM_CFLAGS) $(CFLAGS) $(asr_websocket_la_LDFLAGS) $(LDFLAGS) \
+	-o $@
 am_test_funasr_control_OBJECTS =  \
 	tests/test_funasr_control-test_funasr_control.$(OBJEXT) \
 	src/test_funasr_control-funasr_control.$(OBJEXT)
@@ -187,15 +188,15 @@ am__v_P_1 = :
 AM_V_GEN = $(am__v_GEN_@AM_V@)
 am__v_GEN_ = $(am__v_GEN_@AM_DEFAULT_V@)
 am__v_GEN_0 = @echo "  GEN     " $@;
-am__v_GEN_1 = 
+am__v_GEN_1 =
 AM_V_at = $(am__v_at_@AM_V@)
 am__v_at_ = $(am__v_at_@AM_DEFAULT_V@)
 am__v_at_0 = @
-am__v_at_1 = 
-DEFAULT_INCLUDES = 
+am__v_at_1 =
+DEFAULT_INCLUDES =
 depcomp = $(SHELL) $(top_srcdir)/build/depcomp
 am__maybe_remake_depfiles = depfiles
-am__depfiles_remade = src/$(DEPDIR)/demo_recog_engine.Plo \
+am__depfiles_remade = src/$(DEPDIR)/asr_websocket_engine.Plo \
 	src/$(DEPDIR)/funasr_audio.Plo src/$(DEPDIR)/funasr_clock.Plo \
 	src/$(DEPDIR)/funasr_control.Plo src/$(DEPDIR)/funasr_json.Plo \
 	src/$(DEPDIR)/funasr_ws_transport.Plo \
@@ -220,7 +221,7 @@ LTCOMPILE = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
 AM_V_CC = $(am__v_CC_@AM_V@)
 am__v_CC_ = $(am__v_CC_@AM_DEFAULT_V@)
 am__v_CC_0 = @echo "  CC      " $@;
-am__v_CC_1 = 
+am__v_CC_1 =
 CCLD = $(CC)
 LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
 	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
@@ -228,11 +229,12 @@ LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
 AM_V_CCLD = $(am__v_CCLD_@AM_V@)
 am__v_CCLD_ = $(am__v_CCLD_@AM_DEFAULT_V@)
 am__v_CCLD_0 = @echo "  CCLD    " $@;
-am__v_CCLD_1 = 
-SOURCES = $(demorecog_la_SOURCES) $(test_funasr_control_SOURCES) \
+am__v_CCLD_1 =
+SOURCES = $(asr_websocket_la_SOURCES) $(test_funasr_control_SOURCES) \
 	$(test_funasr_ws_transport_SOURCES) \
 	$(test_json_unescape_SOURCES) $(test_resample_SOURCES)
-DIST_SOURCES = $(demorecog_la_SOURCES) $(test_funasr_control_SOURCES) \
+DIST_SOURCES = $(asr_websocket_la_SOURCES) \
+	$(test_funasr_control_SOURCES) \
 	$(test_funasr_ws_transport_SOURCES) \
 	$(test_json_unescape_SOURCES) $(test_resample_SOURCES)
 am__can_run_installinfo = \
@@ -443,7 +445,7 @@ TEST_LOG_COMPILE = $(TEST_LOG_COMPILER) $(AM_TEST_LOG_FLAGS) \
 	$(TEST_LOG_FLAGS)
 am__DIST_COMMON = $(srcdir)/Makefile.in $(top_srcdir)/build/depcomp \
 	$(top_srcdir)/build/rules/uniplugin.am \
-	$(top_srcdir)/build/test-driver
+	$(top_srcdir)/build/test-driver README.md
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
 ACLOCAL = @ACLOCAL@
 AMTAR = @AMTAR@
@@ -590,16 +592,16 @@ top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 vardir = @vardir@
 AM_CPPFLAGS = $(UNIMRCP_PLUGIN_INCLUDES) -I$(srcdir)/src
-plugin_LTLIBRARIES = demorecog.la
-demorecog_la_SOURCES = \
-                             src/demo_recog_engine.c \
+plugin_LTLIBRARIES = asr_websocket.la
+asr_websocket_la_SOURCES = \
+                             src/asr_websocket_engine.c \
                              src/funasr_audio.c src/funasr_audio.h \
                              src/funasr_clock.c src/funasr_clock.h \
                              src/funasr_control.c src/funasr_control.h \
                              src/funasr_json.c src/funasr_json.h \
                              src/funasr_ws_transport.c src/funasr_ws_transport.h
 
-demorecog_la_LDFLAGS = $(UNIMRCP_PLUGIN_OPTS)
+asr_websocket_la_LDFLAGS = $(UNIMRCP_PLUGIN_OPTS)
 TESTS = $(check_PROGRAMS)
 test_resample_SOURCES = tests/test_resample.c src/funasr_audio.c
 test_resample_CPPFLAGS = $(AM_CPPFLAGS)
@@ -642,9 +644,9 @@ $(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(top_srcdir)/build/rules/uniplugi
 	      exit 1;; \
 	  esac; \
 	done; \
-	echo ' cd $(top_srcdir) && $(AUTOMAKE) --foreign plugins/demo-recog/Makefile'; \
+	echo ' cd $(top_srcdir) && $(AUTOMAKE) --foreign plugins/asr-websocket/Makefile'; \
 	$(am__cd) $(top_srcdir) && \
-	  $(AUTOMAKE) --foreign plugins/demo-recog/Makefile
+	  $(AUTOMAKE) --foreign plugins/asr-websocket/Makefile
 Makefile: $(srcdir)/Makefile.in $(top_builddir)/config.status
 	@case '$?' in \
 	  *config.status*) \
@@ -706,7 +708,7 @@ src/$(am__dirstamp):
 src/$(DEPDIR)/$(am__dirstamp):
 	@$(MKDIR_P) src/$(DEPDIR)
 	@: >>src/$(DEPDIR)/$(am__dirstamp)
-src/demo_recog_engine.lo: src/$(am__dirstamp) \
+src/asr_websocket_engine.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
 src/funasr_audio.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
 src/funasr_clock.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
@@ -716,8 +718,8 @@ src/funasr_json.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
 src/funasr_ws_transport.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
 
-demorecog.la: $(demorecog_la_OBJECTS) $(demorecog_la_DEPENDENCIES) $(EXTRA_demorecog_la_DEPENDENCIES) 
-	$(AM_V_CCLD)$(demorecog_la_LINK) -rpath $(plugindir) $(demorecog_la_OBJECTS) $(demorecog_la_LIBADD) $(LIBS)
+asr_websocket.la: $(asr_websocket_la_OBJECTS) $(asr_websocket_la_DEPENDENCIES) $(EXTRA_asr_websocket_la_DEPENDENCIES)
+	$(AM_V_CCLD)$(asr_websocket_la_LINK) -rpath $(plugindir) $(asr_websocket_la_OBJECTS) $(asr_websocket_la_LIBADD) $(LIBS)
 tests/$(am__dirstamp):
 	@$(MKDIR_P) tests
 	@: >>tests/$(am__dirstamp)
@@ -729,7 +731,7 @@ tests/test_funasr_control-test_funasr_control.$(OBJEXT):  \
 src/test_funasr_control-funasr_control.$(OBJEXT): src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
 
-test_funasr_control$(EXEEXT): $(test_funasr_control_OBJECTS) $(test_funasr_control_DEPENDENCIES) $(EXTRA_test_funasr_control_DEPENDENCIES) 
+test_funasr_control$(EXEEXT): $(test_funasr_control_OBJECTS) $(test_funasr_control_DEPENDENCIES) $(EXTRA_test_funasr_control_DEPENDENCIES)
 	@rm -f test_funasr_control$(EXEEXT)
 	$(AM_V_CCLD)$(LINK) $(test_funasr_control_OBJECTS) $(test_funasr_control_LDADD) $(LIBS)
 tests/test_funasr_ws_transport-test_funasr_ws_transport.$(OBJEXT):  \
@@ -743,7 +745,7 @@ src/test_funasr_ws_transport-funasr_json.$(OBJEXT):  \
 src/test_funasr_ws_transport-funasr_ws_transport.$(OBJEXT):  \
 	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
 
-test_funasr_ws_transport$(EXEEXT): $(test_funasr_ws_transport_OBJECTS) $(test_funasr_ws_transport_DEPENDENCIES) $(EXTRA_test_funasr_ws_transport_DEPENDENCIES) 
+test_funasr_ws_transport$(EXEEXT): $(test_funasr_ws_transport_OBJECTS) $(test_funasr_ws_transport_DEPENDENCIES) $(EXTRA_test_funasr_ws_transport_DEPENDENCIES)
 	@rm -f test_funasr_ws_transport$(EXEEXT)
 	$(AM_V_CCLD)$(LINK) $(test_funasr_ws_transport_OBJECTS) $(test_funasr_ws_transport_LDADD) $(LIBS)
 tests/test_json_unescape-test_json_unescape.$(OBJEXT):  \
@@ -751,7 +753,7 @@ tests/test_json_unescape-test_json_unescape.$(OBJEXT):  \
 src/test_json_unescape-funasr_json.$(OBJEXT): src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
 
-test_json_unescape$(EXEEXT): $(test_json_unescape_OBJECTS) $(test_json_unescape_DEPENDENCIES) $(EXTRA_test_json_unescape_DEPENDENCIES) 
+test_json_unescape$(EXEEXT): $(test_json_unescape_OBJECTS) $(test_json_unescape_DEPENDENCIES) $(EXTRA_test_json_unescape_DEPENDENCIES)
 	@rm -f test_json_unescape$(EXEEXT)
 	$(AM_V_CCLD)$(LINK) $(test_json_unescape_OBJECTS) $(test_json_unescape_LDADD) $(LIBS)
 tests/test_resample-test_resample.$(OBJEXT): tests/$(am__dirstamp) \
@@ -759,7 +761,7 @@ tests/test_resample-test_resample.$(OBJEXT): tests/$(am__dirstamp) \
 src/test_resample-funasr_audio.$(OBJEXT): src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
 
-test_resample$(EXEEXT): $(test_resample_OBJECTS) $(test_resample_DEPENDENCIES) $(EXTRA_test_resample_DEPENDENCIES) 
+test_resample$(EXEEXT): $(test_resample_OBJECTS) $(test_resample_DEPENDENCIES) $(EXTRA_test_resample_DEPENDENCIES)
 	@rm -f test_resample$(EXEEXT)
 	$(AM_V_CCLD)$(LINK) $(test_resample_OBJECTS) $(test_resample_LDADD) $(LIBS)
 
@@ -772,7 +774,7 @@ mostlyclean-compile:
 distclean-compile:
 	-rm -f *.tab.c
 
-@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/demo_recog_engine.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/asr_websocket_engine.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/funasr_audio.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/funasr_clock.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/funasr_control.Plo@am__quote@ # am--include-marker
@@ -1328,7 +1330,7 @@ clean-am: clean-checkPROGRAMS clean-generic clean-libtool \
 	clean-pluginLTLIBRARIES mostlyclean-am
 
 distclean: distclean-am
-	-rm -f src/$(DEPDIR)/demo_recog_engine.Plo
+	-rm -f src/$(DEPDIR)/asr_websocket_engine.Plo
 	-rm -f src/$(DEPDIR)/funasr_audio.Plo
 	-rm -f src/$(DEPDIR)/funasr_clock.Plo
 	-rm -f src/$(DEPDIR)/funasr_control.Plo
@@ -1390,7 +1392,7 @@ install-ps-am:
 installcheck-am:
 
 maintainer-clean: maintainer-clean-am
-	-rm -f src/$(DEPDIR)/demo_recog_engine.Plo
+	-rm -f src/$(DEPDIR)/asr_websocket_engine.Plo
 	-rm -f src/$(DEPDIR)/funasr_audio.Plo
 	-rm -f src/$(DEPDIR)/funasr_clock.Plo
 	-rm -f src/$(DEPDIR)/funasr_control.Plo
