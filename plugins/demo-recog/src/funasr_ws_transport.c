@@ -1787,7 +1787,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
             generation_failed = FALSE;
             generation_drained = FALSE;
             tx_audio = FALSE;
-            terminal_failure = FUNASR_FAILURE_INTERNAL;
+            terminal_failure = FUNASR_FAILURE_NONE;
             funasr_ws_decoder_init(
                 &decoder,
                 frame_storage,
@@ -1858,6 +1858,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                 apt_bool_t media_failed;
                 funasr_transport_failure_e media_failure;
                 apr_int64_t now_us;
+                apr_int64_t last_media_us;
                 apr_int16_t events;
                 apr_status_t poll_status;
                 apr_size_t ring_size;
@@ -1875,6 +1876,9 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                     break;
                 }
                 now_us = funasr_clock_now_us(&transport->config.clock);
+                apr_thread_mutex_lock(transport->mutex);
+                last_media_us = transport->last_media_us;
+                apr_thread_mutex_unlock(transport->mutex);
                 if (media_failed) {
                     terminal_failure = media_failure;
                     generation_failed = TRUE;
@@ -1909,6 +1913,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                     tx_audio = FALSE;
                     write_wait_started_us = now_us;
                 } else if (tx_size == tx_offset &&
+                    !end_frame_queued &&
                     (ring_size >= transport->chunk_size ||
                      (cancel && ring_size != 0))) {
                     apr_size_t amount = transport->chunk_size;
@@ -1954,10 +1959,11 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                     !idle_endpoint_pending &&
                     tx_size == tx_offset &&
                     !end_frame_queued &&
-                    last_audio_send_us != 0 &&
-                    now_us - last_audio_send_us >=
+                    last_media_us != 0 &&
+                    now_us - last_media_us >=
                         transport->config.input_idle_timeout_us) {
                     idle_endpoint_pending = TRUE;
+                    funasr_tx_ring_stop_enqueue(transport->ring);
                 }
                 if (!cancel && idle_endpoint_pending &&
                     !end_frame_queued &&
@@ -2104,7 +2110,6 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                     break;
                 }
             }
-
             transport->io_vtable->close(transport->io_obj);
             {
                 apt_bool_t cancel;

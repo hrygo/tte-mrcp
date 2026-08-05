@@ -173,6 +173,7 @@ typedef enum funasr_transport_event_type_e {
 } funasr_transport_event_type_e;
 
 typedef enum funasr_transport_failure_e {
+    FUNASR_FAILURE_NONE,
     FUNASR_FAILURE_CONNECT,
     FUNASR_FAILURE_HANDSHAKE,
     FUNASR_FAILURE_PROTOCOL,
