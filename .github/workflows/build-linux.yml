@@ -531,10 +531,15 @@ jobs:
           # exchange real WebSocket frames with loopback doubles.  This is
           # intentionally separate from the pacing gate so a passing stress
           # run cannot mask a missing TTS plugin or a bad MRCP completion.
-          E2E_WORK_DIR="$GITHUB_WORKSPACE/websocket-e2e-results" \
-            PACKAGE_DIR="$package_dir" ROOT_DIR="$GITHUB_WORKSPACE" \
-            E2E_MODE=split \
-            bash "$GITHUB_WORKSPACE/tools/diagnostics/run_websocket_e2e.sh"
+          # Exercise normal framing, short reads, delayed framing, and the
+          # server-close path.  The close run is an expected protocol-fault
+          # scenario and must still produce explicit fixture outcomes.
+          for e2e_mode in normal split slow close; do
+            E2E_WORK_DIR="$GITHUB_WORKSPACE/websocket-e2e-results/$e2e_mode" \
+              PACKAGE_DIR="$package_dir" ROOT_DIR="$GITHUB_WORKSPACE" \
+              E2E_MODE="$e2e_mode" \
+              bash "$GITHUB_WORKSPACE/tools/diagnostics/run_websocket_e2e.sh"
+          done
           CONTAINER_SCRIPT
 
       - name: Publish verify summary

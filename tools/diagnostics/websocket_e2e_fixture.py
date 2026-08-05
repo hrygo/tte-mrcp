@@ -27,6 +27,13 @@ from pathlib import Path
 from typing import Any
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+# Keep the parser limit below the service's practical message size so malformed
+# length fields cannot make the fixture allocate unbounded memory.
+MAX_FRAME_SIZE = 2 * 1024 * 1024
+# 701 bytes deliberately crosses the plugin's receive and codec boundaries;
+# the final frame is shorter, exercising carry handling at the end of a stream.
+AUDIO_FRAME_BYTES = 701
+TTS_SAMPLE_RATE = 24000
 
 
 def websocket_accept(key: str) -> str:
@@ -59,14 +66,22 @@ def read_frame(sock: socket.socket) -> tuple[int, bytes]:
     if first & 0x70:
         raise ValueError("reserved WebSocket bits are set")
     opcode = first & 0x0F
+    if opcode not in {0x0, 0x1, 0x2, 0x8, 0x9, 0xA}:
+        raise ValueError(f"unsupported opcode 0x{opcode:x}")
+    if opcode >= 0x8 and not (first & 0x80):
+        raise ValueError("control frame is fragmented")
     size = second & 0x7F
     if size == 126:
         size = struct.unpack("!H", recv_exact(sock, 2))[0]
     elif size == 127:
         size = struct.unpack("!Q", recv_exact(sock, 8))[0]
-    if size > 2 * 1024 * 1024:
-        raise ValueError("frame too large")
+    if opcode >= 0x8 and size > 125:
+        raise ValueError("control frame payload exceeds 125 bytes")
+    if size > MAX_FRAME_SIZE:
+        raise ValueError(f"frame too large (>{MAX_FRAME_SIZE} bytes)")
     masked = bool(second & 0x80)
+    if not masked:
+        raise ValueError("client frame is not masked")
     mask = recv_exact(sock, 4) if masked else b""
     payload = bytearray(recv_exact(sock, size))
     if masked:
@@ -90,8 +105,11 @@ def split_send(sock: socket.socket, data: bytes, split: bool) -> None:
 
 
 def pcm24k(duration_ms: int = 240) -> bytes:
-    samples = int(24000 * duration_ms / 1000)
-    return b"".join(struct.pack("<h", int(9000 * math.sin(2 * math.pi * 440 * i / 24000))) for i in range(samples))
+    samples = int(TTS_SAMPLE_RATE * duration_ms / 1000)
+    return b"".join(
+        struct.pack("<h", int(9000 * math.sin(2 * math.pi * 440 * i / TTS_SAMPLE_RATE)))
+        for i in range(samples)
+    )
 
 
 def emit_config(source: Path, target: Path, host: str, tts_port: int, asr_port: int) -> None:
@@ -122,13 +140,21 @@ class FixtureState:
         self.lock = threading.Lock()
         self.next_id = 1
         self.completed = 0
+        self.fatal_error: OSError | None = None
 
     def record(self, value: dict[str, Any]) -> None:
         with self.lock:
+            line = json.dumps(value, sort_keys=True)
             if self.args.report:
-                with open(self.args.report, "a", encoding="utf-8") as stream:
-                    stream.write(json.dumps(value, sort_keys=True) + "\n")
-            print(json.dumps(value, sort_keys=True), flush=True)
+                try:
+                    with open(self.args.report, "a", encoding="utf-8") as stream:
+                        stream.write(line + "\n")
+                except OSError as error:
+                    self.fatal_error = error
+                    print(f"fixture report write failed: {error}", file=sys.stderr, flush=True)
+                    threading.Thread(target=self.args.server.shutdown, daemon=True).start()
+                    return
+            print(line, flush=True)
             self.completed += 1
             if self.args.once and self.completed >= self.args.once:
                 threading.Thread(target=self.args.server.shutdown, daemon=True).start()
@@ -148,11 +174,12 @@ class Handler(socketserver.BaseRequestHandler):
             "schema": "websocket-e2e-fixture-v1", "service": state.args.service,
             "connection_id": connection_id, "text_messages": [], "audio_frames": 0,
             "audio_bytes": 0, "ping_sent": False, "pong_received": False,
+            "audio_sample_rate": None,
             "outcome": "pending",
         }
         mode = state.args.mode
         try:
-            self.request.settimeout(20)
+            self.request.settimeout(state.args.timeout)
             header = bytearray()
             while b"\r\n\r\n" not in header:
                 header.extend(self.request.recv(1024))
@@ -164,7 +191,10 @@ class Handler(socketserver.BaseRequestHandler):
                 raise ValueError("invalid HTTP request")
             if state.args.service == "asr" and not request[1].startswith("/ws/asr"):
                 raise ValueError("unexpected ASR path")
-            key = next(line.split(b":", 1)[1].strip().decode() for line in lines if line.lower().startswith(b"sec-websocket-key:"))
+            key_lines = [line for line in lines if line.lower().startswith(b"sec-websocket-key:")]
+            if len(key_lines) != 1:
+                raise ValueError("missing or duplicate Sec-WebSocket-Key")
+            key = key_lines[0].split(b":", 1)[1].strip().decode("ascii")
             response = ("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
                         "Connection: Upgrade\r\nSec-WebSocket-Accept: " + websocket_accept(key) + "\r\n\r\n").encode()
             split_send(self.request, response, mode in {"split", "slow"})
@@ -173,7 +203,7 @@ class Handler(socketserver.BaseRequestHandler):
                 self._tts(state, record, mode)
             else:
                 self._asr(state, record, mode)
-        except (EOFError, OSError, ValueError, StopIteration) as error:
+        except (EOFError, socket.timeout, ConnectionResetError, BrokenPipeError, ValueError) as error:
             record["outcome"] = f"error:{type(error).__name__}:{error}"
         finally:
             state.record(record)
@@ -188,6 +218,8 @@ class Handler(socketserver.BaseRequestHandler):
             elif opcode == 0x1:
                 value = json.loads(payload.decode())
                 record["text_messages"].append(value)
+                if value.get("type") == "audio.start":
+                    record["audio_sample_rate"] = value.get("sample_rate")
                 if value.get("type") in {"input.done", "session.done"}:
                     return
             elif opcode == 0x2:
@@ -202,12 +234,16 @@ class Handler(socketserver.BaseRequestHandler):
             return
         self.request.sendall(encode_frame(0x9, b"fixture-ping"))
         record["ping_sent"] = True
-        messages = (b'{"type":"audio.start","sample_rate":24000}',
+        messages = (f'{{"type":"audio.start","sample_rate":{TTS_SAMPLE_RATE}}}'.encode(),
                     b'{"type":"audio.done"}', b'{"type":"session.done"}')
         self.request.sendall(encode_frame(0x1, messages[0]))
         audio = pcm24k()
-        for offset in range(0, len(audio), 701):
-            split_send(self.request, encode_frame(0x2, audio[offset:offset + 701]), mode in {"split", "slow"})
+        for offset in range(0, len(audio), AUDIO_FRAME_BYTES):
+            split_send(
+                self.request,
+                encode_frame(0x2, audio[offset:offset + AUDIO_FRAME_BYTES]),
+                mode in {"split", "slow"},
+            )
         self.request.sendall(encode_frame(0x1, messages[1]))
         self.request.sendall(encode_frame(0x1, messages[2]))
         record["outcome"] = "final-sent"
@@ -257,6 +293,61 @@ class SelfTests(unittest.TestCase):
         self.assertEqual(len(data) % 2, 0)
         self.assertGreater(max(abs(value[0]) for value in struct.iter_unpack("<h", data)), 1000)
 
+    def test_oversized_frame_is_rejected(self) -> None:
+        left, right = socket.socketpair()
+        try:
+            right.sendall(bytes((0x82, 127)) + struct.pack("!Q", MAX_FRAME_SIZE + 1))
+            with self.assertRaisesRegex(ValueError, "frame too large"):
+                read_frame(left)
+        finally:
+            left.close()
+            right.close()
+
+    def test_control_frame_with_reserved_bits_is_rejected(self) -> None:
+        left, right = socket.socketpair()
+        try:
+            right.sendall(bytes((0xC9, 0)))
+            with self.assertRaisesRegex(ValueError, "reserved"):
+                read_frame(left)
+        finally:
+            left.close()
+            right.close()
+
+    def test_control_frame_payload_limit_is_rejected(self) -> None:
+        left, right = socket.socketpair()
+        try:
+            right.sendall(bytes((0x89, 126)) + struct.pack("!H", 126))
+            with self.assertRaisesRegex(ValueError, "control frame payload"):
+                read_frame(left)
+        finally:
+            left.close()
+            right.close()
+
+    def test_unmasked_client_frame_is_rejected(self) -> None:
+        left, right = socket.socketpair()
+        try:
+            right.sendall(bytes((0x81, 1)) + b"x")
+            with self.assertRaisesRegex(ValueError, "not masked"):
+                read_frame(left)
+        finally:
+            left.close()
+            right.close()
+
+    def test_audio_fixture_contract_is_explicit(self) -> None:
+        data = pcm24k()
+        self.assertEqual(len(data), TTS_SAMPLE_RATE * 240 // 1000 * 2)
+        self.assertEqual(AUDIO_FRAME_BYTES, 701)
+
+    def test_timeout_is_a_distinct_fixture_failure(self) -> None:
+        left, right = socket.socketpair()
+        try:
+            left.settimeout(0.01)
+            with self.assertRaises(socket.timeout):
+                recv_exact(left, 1)
+        finally:
+            left.close()
+            right.close()
+
     def test_config_rewrites_both_endpoints(self) -> None:
         source = Path(tempfile.mktemp(suffix=".xml"))
         target = Path(tempfile.mktemp(suffix=".xml"))
@@ -279,6 +370,7 @@ def main() -> int:
     parser.add_argument("--mode", choices=("normal", "split", "slow", "close"), default="split")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--once", type=int, default=0)
+    parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument("--emit-config", nargs=2, metavar=("SOURCE", "TARGET"))
     parser.add_argument("--tts-port", type=int, default=8091)
     parser.add_argument("--asr-port", type=int, default=8022)
@@ -299,6 +391,8 @@ def main() -> int:
             server.serve_forever()
         except KeyboardInterrupt:
             pass
+    if server.state.fatal_error is not None:  # type: ignore[attr-defined]
+        return 2
     return 0
 
 
