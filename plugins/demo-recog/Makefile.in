@@ -90,6 +90,8 @@ PRE_UNINSTALL = :
 POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
+check_PROGRAMS = test_resample$(EXEEXT) test_json_unescape$(EXEEXT) \
+	test_funasr_ws_transport$(EXEEXT) test_funasr_control$(EXEEXT)
 subdir = plugins/demo-recog
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/build/acmacros/opencore_amr.m4 \
@@ -143,15 +145,41 @@ am__installdirs = "$(DESTDIR)$(plugindir)"
 LTLIBRARIES = $(plugin_LTLIBRARIES)
 demorecog_la_LIBADD =
 am__dirstamp = $(am__leading_dot)dirstamp
-am_demorecog_la_OBJECTS = src/demo_recog_engine.lo
+am_demorecog_la_OBJECTS = src/demo_recog_engine.lo src/funasr_audio.lo \
+	src/funasr_clock.lo src/funasr_control.lo src/funasr_json.lo \
+	src/funasr_ws_transport.lo
 demorecog_la_OBJECTS = $(am_demorecog_la_OBJECTS)
 AM_V_lt = $(am__v_lt_@AM_V@)
 am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
 am__v_lt_0 = --silent
-am__v_lt_1 =
+am__v_lt_1 = 
 demorecog_la_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
 	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
 	$(demorecog_la_LDFLAGS) $(LDFLAGS) -o $@
+am_test_funasr_control_OBJECTS =  \
+	tests/test_funasr_control-test_funasr_control.$(OBJEXT) \
+	src/test_funasr_control-funasr_control.$(OBJEXT)
+test_funasr_control_OBJECTS = $(am_test_funasr_control_OBJECTS)
+test_funasr_control_LDADD = $(LDADD)
+am_test_funasr_ws_transport_OBJECTS = tests/test_funasr_ws_transport-test_funasr_ws_transport.$(OBJEXT) \
+	src/test_funasr_ws_transport-funasr_audio.$(OBJEXT) \
+	src/test_funasr_ws_transport-funasr_clock.$(OBJEXT) \
+	src/test_funasr_ws_transport-funasr_json.$(OBJEXT) \
+	src/test_funasr_ws_transport-funasr_ws_transport.$(OBJEXT)
+test_funasr_ws_transport_OBJECTS =  \
+	$(am_test_funasr_ws_transport_OBJECTS)
+am__DEPENDENCIES_1 =
+test_funasr_ws_transport_DEPENDENCIES = $(am__DEPENDENCIES_1)
+am_test_json_unescape_OBJECTS =  \
+	tests/test_json_unescape-test_json_unescape.$(OBJEXT) \
+	src/test_json_unescape-funasr_json.$(OBJEXT)
+test_json_unescape_OBJECTS = $(am_test_json_unescape_OBJECTS)
+test_json_unescape_LDADD = $(LDADD)
+am_test_resample_OBJECTS =  \
+	tests/test_resample-test_resample.$(OBJEXT) \
+	src/test_resample-funasr_audio.$(OBJEXT)
+test_resample_OBJECTS = $(am_test_resample_OBJECTS)
+test_resample_LDADD = $(LDADD)
 AM_V_P = $(am__v_P_@AM_V@)
 am__v_P_ = $(am__v_P_@AM_DEFAULT_V@)
 am__v_P_0 = false
@@ -159,15 +187,29 @@ am__v_P_1 = :
 AM_V_GEN = $(am__v_GEN_@AM_V@)
 am__v_GEN_ = $(am__v_GEN_@AM_DEFAULT_V@)
 am__v_GEN_0 = @echo "  GEN     " $@;
-am__v_GEN_1 =
+am__v_GEN_1 = 
 AM_V_at = $(am__v_at_@AM_V@)
 am__v_at_ = $(am__v_at_@AM_DEFAULT_V@)
 am__v_at_0 = @
-am__v_at_1 =
-DEFAULT_INCLUDES =
+am__v_at_1 = 
+DEFAULT_INCLUDES = 
 depcomp = $(SHELL) $(top_srcdir)/build/depcomp
 am__maybe_remake_depfiles = depfiles
-am__depfiles_remade = src/$(DEPDIR)/demo_recog_engine.Plo
+am__depfiles_remade = src/$(DEPDIR)/demo_recog_engine.Plo \
+	src/$(DEPDIR)/funasr_audio.Plo src/$(DEPDIR)/funasr_clock.Plo \
+	src/$(DEPDIR)/funasr_control.Plo src/$(DEPDIR)/funasr_json.Plo \
+	src/$(DEPDIR)/funasr_ws_transport.Plo \
+	src/$(DEPDIR)/test_funasr_control-funasr_control.Po \
+	src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Po \
+	src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Po \
+	src/$(DEPDIR)/test_funasr_ws_transport-funasr_json.Po \
+	src/$(DEPDIR)/test_funasr_ws_transport-funasr_ws_transport.Po \
+	src/$(DEPDIR)/test_json_unescape-funasr_json.Po \
+	src/$(DEPDIR)/test_resample-funasr_audio.Po \
+	tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Po \
+	tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Po \
+	tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Po \
+	tests/$(DEPDIR)/test_resample-test_resample.Po
 am__mv = mv -f
 COMPILE = $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) \
 	$(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
@@ -178,7 +220,7 @@ LTCOMPILE = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
 AM_V_CC = $(am__v_CC_@AM_V@)
 am__v_CC_ = $(am__v_CC_@AM_DEFAULT_V@)
 am__v_CC_0 = @echo "  CC      " $@;
-am__v_CC_1 =
+am__v_CC_1 = 
 CCLD = $(CC)
 LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
 	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
@@ -186,9 +228,13 @@ LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
 AM_V_CCLD = $(am__v_CCLD_@AM_V@)
 am__v_CCLD_ = $(am__v_CCLD_@AM_DEFAULT_V@)
 am__v_CCLD_0 = @echo "  CCLD    " $@;
-am__v_CCLD_1 =
-SOURCES = $(demorecog_la_SOURCES)
-DIST_SOURCES = $(demorecog_la_SOURCES)
+am__v_CCLD_1 = 
+SOURCES = $(demorecog_la_SOURCES) $(test_funasr_control_SOURCES) \
+	$(test_funasr_ws_transport_SOURCES) \
+	$(test_json_unescape_SOURCES) $(test_resample_SOURCES)
+DIST_SOURCES = $(demorecog_la_SOURCES) $(test_funasr_control_SOURCES) \
+	$(test_funasr_ws_transport_SOURCES) \
+	$(test_json_unescape_SOURCES) $(test_resample_SOURCES)
 am__can_run_installinfo = \
   case $$AM_UPDATE_INFO_DIR in \
     n|no|NO) false;; \
@@ -211,8 +257,193 @@ am__define_uniq_tagged_files = \
   unique=`for i in $$list; do \
     if test -f "$$i"; then echo $$i; else echo $(srcdir)/$$i; fi; \
   done | $(am__uniquify_input)`
+am__tty_colors_dummy = \
+  mgn= red= grn= lgn= blu= brg= std=; \
+  am__color_tests=no
+am__tty_colors = { \
+  $(am__tty_colors_dummy); \
+  if test "X$(AM_COLOR_TESTS)" = Xno; then \
+    am__color_tests=no; \
+  elif test "X$(AM_COLOR_TESTS)" = Xalways; then \
+    am__color_tests=yes; \
+  elif test "X$$TERM" != Xdumb && { test -t 1; } 2>/dev/null; then \
+    am__color_tests=yes; \
+  fi; \
+  if test $$am__color_tests = yes; then \
+    red='[0;31m'; \
+    grn='[0;32m'; \
+    lgn='[1;32m'; \
+    blu='[1;34m'; \
+    mgn='[0;35m'; \
+    brg='[1m'; \
+    std='[m'; \
+  fi; \
+}
+am__recheck_rx = ^[ 	]*:recheck:[ 	]*
+am__global_test_result_rx = ^[ 	]*:global-test-result:[ 	]*
+am__copy_in_global_log_rx = ^[ 	]*:copy-in-global-log:[ 	]*
+# A command that, given a newline-separated list of test names on the
+# standard input, print the name of the tests that are to be re-run
+# upon "make recheck".
+am__list_recheck_tests = $(AWK) '{ \
+  recheck = 1; \
+  while ((rc = (getline line < ($$0 ".trs"))) != 0) \
+    { \
+      if (rc < 0) \
+        { \
+          if ((getline line2 < ($$0 ".log")) < 0) \
+	    recheck = 0; \
+          break; \
+        } \
+      else if (line ~ /$(am__recheck_rx)[nN][Oo]/) \
+        { \
+          recheck = 0; \
+          break; \
+        } \
+      else if (line ~ /$(am__recheck_rx)[yY][eE][sS]/) \
+        { \
+          break; \
+        } \
+    }; \
+  if (recheck) \
+    print $$0; \
+  close ($$0 ".trs"); \
+  close ($$0 ".log"); \
+}'
+# A command that, given a newline-separated list of test names on the
+# standard input, create the global log from their .trs and .log files.
+am__create_global_log = $(AWK) ' \
+function fatal(msg) \
+{ \
+  print "fatal: making $@: " msg | "cat >&2"; \
+  exit 1; \
+} \
+function rst_section(header) \
+{ \
+  print header; \
+  len = length(header); \
+  for (i = 1; i <= len; i = i + 1) \
+    printf "="; \
+  printf "\n\n"; \
+} \
+{ \
+  copy_in_global_log = 1; \
+  global_test_result = "RUN"; \
+  while ((rc = (getline line < ($$0 ".trs"))) != 0) \
+    { \
+      if (rc < 0) \
+         fatal("failed to read from " $$0 ".trs"); \
+      if (line ~ /$(am__global_test_result_rx)/) \
+        { \
+          sub("$(am__global_test_result_rx)", "", line); \
+          sub("[ 	]*$$", "", line); \
+          global_test_result = line; \
+        } \
+      else if (line ~ /$(am__copy_in_global_log_rx)[nN][oO]/) \
+        copy_in_global_log = 0; \
+    }; \
+  if (copy_in_global_log) \
+    { \
+      rst_section(global_test_result ": " $$0); \
+      while ((rc = (getline line < ($$0 ".log"))) != 0) \
+      { \
+        if (rc < 0) \
+          fatal("failed to read from " $$0 ".log"); \
+        print line; \
+      }; \
+      printf "\n"; \
+    }; \
+  close ($$0 ".trs"); \
+  close ($$0 ".log"); \
+}'
+# Restructured Text title.
+am__rst_title = { sed 's/.*/   &   /;h;s/./=/g;p;x;s/ *$$//;p;g' && echo; }
+# Solaris 10 'make', and several other traditional 'make' implementations,
+# pass "-e" to $(SHELL), and POSIX 2008 even requires this.  Work around it
+# by disabling -e (using the XSI extension "set +e") if it's set.
+am__sh_e_setup = case $$- in *e*) set +e;; esac
+# Default flags passed to test drivers.
+am__common_driver_flags = \
+  --color-tests "$$am__color_tests" \
+  $$am__collect_skipped_logs \
+  --enable-hard-errors "$$am__enable_hard_errors" \
+  --expect-failure "$$am__expect_failure"
+# To be inserted before the command running the test.  Creates the
+# directory for the log if needed.  Stores in $dir the directory
+# containing $f, in $tst the test, in $log the log.  Executes the
+# developer-defined test setup AM_TESTS_ENVIRONMENT (if any), and
+# passes TESTS_ENVIRONMENT.  Set up options for the wrapper that
+# will run the test scripts (or their associated LOG_COMPILER, if
+# thy have one).
+am__check_pre = \
+$(am__sh_e_setup);					\
+$(am__vpath_adj_setup) $(am__vpath_adj)			\
+$(am__tty_colors);					\
+srcdir=$(srcdir); export srcdir;			\
+case "$@" in						\
+  */*) am__odir=`echo "./$@" | sed 's|/[^/]*$$||'`;;	\
+    *) am__odir=.;; 					\
+esac;							\
+test "x$$am__odir" = x"." || test -d "$$am__odir" 	\
+  || $(MKDIR_P) "$$am__odir" || exit $$?;		\
+if test -f "./$$f"; then dir=./;			\
+elif test -f "$$f"; then dir=;				\
+else dir="$(srcdir)/"; fi;				\
+tst=$$dir$$f; log='$@'; 				\
+if test -n '$(IGNORE_SKIPPED_LOGS)'; then		\
+  am__collect_skipped_logs='--collect-skipped-logs no';	\
+else							\
+  am__collect_skipped_logs='';				\
+fi;							\
+if test -n '$(DISABLE_HARD_ERRORS)'; then		\
+  am__enable_hard_errors=no; 				\
+else							\
+  am__enable_hard_errors=yes; 				\
+fi; 							\
+case " $(XFAIL_TESTS) " in				\
+  *[\ \	]$$f[\ \	]* | *[\ \	]$$dir$$f[\ \	]*) \
+    am__expect_failure=yes;;				\
+  *)							\
+    am__expect_failure=no;;				\
+esac; 							\
+$(AM_TESTS_ENVIRONMENT) $(TESTS_ENVIRONMENT)
+# A shell command to get the names of the tests scripts with any registered
+# extension removed (i.e., equivalently, the names of the test logs, with
+# the '.log' extension removed).  The result is saved in the shell variable
+# '$bases'.  This honors runtime overriding of TESTS and TEST_LOGS.  Sadly,
+# we cannot use something simpler, involving e.g., "$(TEST_LOGS:.log=)",
+# since that might cause problem with VPATH rewrites for suffix-less tests.
+# See also 'test-harness-vpath-rewrite.sh' and 'test-trs-basic.sh'.
+am__set_TESTS_bases = \
+  bases='$(TEST_LOGS)'; \
+  bases=`for i in $$bases; do echo $$i; done | sed 's/\.log$$//'`; \
+  bases=`echo $$bases`
+AM_TESTSUITE_SUMMARY_HEADER = ' for $(PACKAGE_STRING)'
+RECHECK_LOGS = $(TEST_LOGS)
+AM_RECURSIVE_TARGETS = check recheck
+TEST_SUITE_LOG = test-suite.log
+TEST_EXTENSIONS = @EXEEXT@ .test
+LOG_DRIVER = $(SHELL) $(top_srcdir)/build/test-driver
+LOG_COMPILE = $(LOG_COMPILER) $(AM_LOG_FLAGS) $(LOG_FLAGS)
+am__set_b = \
+  case '$@' in \
+    */*) \
+      case '$*' in \
+        */*) b='$*';; \
+          *) b=`echo '$@' | sed 's/\.log$$//'`; \
+       esac;; \
+    *) \
+      b='$*';; \
+  esac
+am__test_logs1 = $(TESTS:=.log)
+am__test_logs2 = $(am__test_logs1:@EXEEXT@.log=.log)
+TEST_LOGS = $(am__test_logs2:.test.log=.log)
+TEST_LOG_DRIVER = $(SHELL) $(top_srcdir)/build/test-driver
+TEST_LOG_COMPILE = $(TEST_LOG_COMPILER) $(AM_TEST_LOG_FLAGS) \
+	$(TEST_LOG_FLAGS)
 am__DIST_COMMON = $(srcdir)/Makefile.in $(top_srcdir)/build/depcomp \
-	$(top_srcdir)/build/rules/uniplugin.am
+	$(top_srcdir)/build/rules/uniplugin.am \
+	$(top_srcdir)/build/test-driver
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
 ACLOCAL = @ACLOCAL@
 AMTAR = @AMTAR@
@@ -358,10 +589,31 @@ top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 vardir = @vardir@
-AM_CPPFLAGS = $(UNIMRCP_PLUGIN_INCLUDES)
+AM_CPPFLAGS = $(UNIMRCP_PLUGIN_INCLUDES) -I$(srcdir)/src
 plugin_LTLIBRARIES = demorecog.la
-demorecog_la_SOURCES = src/demo_recog_engine.c
+demorecog_la_SOURCES = \
+                             src/demo_recog_engine.c \
+                             src/funasr_audio.c src/funasr_audio.h \
+                             src/funasr_clock.c src/funasr_clock.h \
+                             src/funasr_control.c src/funasr_control.h \
+                             src/funasr_json.c src/funasr_json.h \
+                             src/funasr_ws_transport.c src/funasr_ws_transport.h
+
 demorecog_la_LDFLAGS = $(UNIMRCP_PLUGIN_OPTS)
+TESTS = $(check_PROGRAMS)
+test_resample_SOURCES = tests/test_resample.c src/funasr_audio.c
+test_resample_CPPFLAGS = $(AM_CPPFLAGS)
+test_json_unescape_SOURCES = tests/test_json_unescape.c src/funasr_json.c
+test_json_unescape_CPPFLAGS = $(AM_CPPFLAGS)
+test_funasr_ws_transport_SOURCES = \
+                             tests/test_funasr_ws_transport.c \
+                             src/funasr_audio.c src/funasr_clock.c \
+                             src/funasr_json.c src/funasr_ws_transport.c
+
+test_funasr_ws_transport_LDADD = $(UNIMRCP_APR_LIBS)
+test_funasr_ws_transport_CPPFLAGS = $(AM_CPPFLAGS)
+test_funasr_control_SOURCES = tests/test_funasr_control.c src/funasr_control.c
+test_funasr_control_CPPFLAGS = $(AM_CPPFLAGS)
 MAINTAINERCLEANFILES = Makefile.in
 
 # Includes
@@ -380,7 +632,7 @@ UNIMRCP_PLUGIN_OPTS = -module $(PLUGIN_LT_VERSION)
 all: all-am
 
 .SUFFIXES:
-.SUFFIXES: .c .lo .o .obj
+.SUFFIXES: .c .lo .log .o .obj .test .test$(EXEEXT) .trs
 $(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(top_srcdir)/build/rules/uniplugin.am $(am__configure_deps)
 	@for dep in $?; do \
 	  case '$(am__configure_deps)' in \
@@ -411,6 +663,10 @@ $(top_srcdir)/configure:  $(am__configure_deps)
 $(ACLOCAL_M4):  $(am__aclocal_m4_deps)
 	cd $(top_builddir) && $(MAKE) $(AM_MAKEFLAGS) am--refresh
 $(am__aclocal_m4_deps):
+
+clean-checkPROGRAMS:
+	$(am__rm_f) $(check_PROGRAMS)
+	test -z "$(EXEEXT)" || $(am__rm_f) $(check_PROGRAMS:$(EXEEXT)=)
 
 install-pluginLTLIBRARIES: $(plugin_LTLIBRARIES)
 	@$(NORMAL_INSTALL)
@@ -452,19 +708,87 @@ src/$(DEPDIR)/$(am__dirstamp):
 	@: >>src/$(DEPDIR)/$(am__dirstamp)
 src/demo_recog_engine.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
+src/funasr_audio.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+src/funasr_clock.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+src/funasr_control.lo: src/$(am__dirstamp) \
+	src/$(DEPDIR)/$(am__dirstamp)
+src/funasr_json.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+src/funasr_ws_transport.lo: src/$(am__dirstamp) \
+	src/$(DEPDIR)/$(am__dirstamp)
 
-demorecog.la: $(demorecog_la_OBJECTS) $(demorecog_la_DEPENDENCIES) $(EXTRA_demorecog_la_DEPENDENCIES)
+demorecog.la: $(demorecog_la_OBJECTS) $(demorecog_la_DEPENDENCIES) $(EXTRA_demorecog_la_DEPENDENCIES) 
 	$(AM_V_CCLD)$(demorecog_la_LINK) -rpath $(plugindir) $(demorecog_la_OBJECTS) $(demorecog_la_LIBADD) $(LIBS)
+tests/$(am__dirstamp):
+	@$(MKDIR_P) tests
+	@: >>tests/$(am__dirstamp)
+tests/$(DEPDIR)/$(am__dirstamp):
+	@$(MKDIR_P) tests/$(DEPDIR)
+	@: >>tests/$(DEPDIR)/$(am__dirstamp)
+tests/test_funasr_control-test_funasr_control.$(OBJEXT):  \
+	tests/$(am__dirstamp) tests/$(DEPDIR)/$(am__dirstamp)
+src/test_funasr_control-funasr_control.$(OBJEXT): src/$(am__dirstamp) \
+	src/$(DEPDIR)/$(am__dirstamp)
+
+test_funasr_control$(EXEEXT): $(test_funasr_control_OBJECTS) $(test_funasr_control_DEPENDENCIES) $(EXTRA_test_funasr_control_DEPENDENCIES) 
+	@rm -f test_funasr_control$(EXEEXT)
+	$(AM_V_CCLD)$(LINK) $(test_funasr_control_OBJECTS) $(test_funasr_control_LDADD) $(LIBS)
+tests/test_funasr_ws_transport-test_funasr_ws_transport.$(OBJEXT):  \
+	tests/$(am__dirstamp) tests/$(DEPDIR)/$(am__dirstamp)
+src/test_funasr_ws_transport-funasr_audio.$(OBJEXT):  \
+	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+src/test_funasr_ws_transport-funasr_clock.$(OBJEXT):  \
+	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+src/test_funasr_ws_transport-funasr_json.$(OBJEXT):  \
+	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+src/test_funasr_ws_transport-funasr_ws_transport.$(OBJEXT):  \
+	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+
+test_funasr_ws_transport$(EXEEXT): $(test_funasr_ws_transport_OBJECTS) $(test_funasr_ws_transport_DEPENDENCIES) $(EXTRA_test_funasr_ws_transport_DEPENDENCIES) 
+	@rm -f test_funasr_ws_transport$(EXEEXT)
+	$(AM_V_CCLD)$(LINK) $(test_funasr_ws_transport_OBJECTS) $(test_funasr_ws_transport_LDADD) $(LIBS)
+tests/test_json_unescape-test_json_unescape.$(OBJEXT):  \
+	tests/$(am__dirstamp) tests/$(DEPDIR)/$(am__dirstamp)
+src/test_json_unescape-funasr_json.$(OBJEXT): src/$(am__dirstamp) \
+	src/$(DEPDIR)/$(am__dirstamp)
+
+test_json_unescape$(EXEEXT): $(test_json_unescape_OBJECTS) $(test_json_unescape_DEPENDENCIES) $(EXTRA_test_json_unescape_DEPENDENCIES) 
+	@rm -f test_json_unescape$(EXEEXT)
+	$(AM_V_CCLD)$(LINK) $(test_json_unescape_OBJECTS) $(test_json_unescape_LDADD) $(LIBS)
+tests/test_resample-test_resample.$(OBJEXT): tests/$(am__dirstamp) \
+	tests/$(DEPDIR)/$(am__dirstamp)
+src/test_resample-funasr_audio.$(OBJEXT): src/$(am__dirstamp) \
+	src/$(DEPDIR)/$(am__dirstamp)
+
+test_resample$(EXEEXT): $(test_resample_OBJECTS) $(test_resample_DEPENDENCIES) $(EXTRA_test_resample_DEPENDENCIES) 
+	@rm -f test_resample$(EXEEXT)
+	$(AM_V_CCLD)$(LINK) $(test_resample_OBJECTS) $(test_resample_LDADD) $(LIBS)
 
 mostlyclean-compile:
 	-rm -f *.$(OBJEXT)
 	-rm -f src/*.$(OBJEXT)
 	-rm -f src/*.lo
+	-rm -f tests/*.$(OBJEXT)
 
 distclean-compile:
 	-rm -f *.tab.c
 
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/demo_recog_engine.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/funasr_audio.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/funasr_clock.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/funasr_control.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/funasr_json.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/funasr_ws_transport.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_control-funasr_control.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_ws_transport-funasr_json.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_ws_transport-funasr_ws_transport.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_json_unescape-funasr_json.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_resample-funasr_audio.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_resample-test_resample.Po@am__quote@ # am--include-marker
 
 $(am__depfiles_remade):
 	@$(MKDIR_P) $(@D)
@@ -495,6 +819,160 @@ am--depfiles: $(am__depfiles_remade)
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LTCOMPILE) -c -o $@ $<
+
+tests/test_funasr_control-test_funasr_control.o: tests/test_funasr_control.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_control_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_funasr_control-test_funasr_control.o -MD -MP -MF tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Tpo -c -o tests/test_funasr_control-test_funasr_control.o `test -f 'tests/test_funasr_control.c' || echo '$(srcdir)/'`tests/test_funasr_control.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Tpo tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_funasr_control.c' object='tests/test_funasr_control-test_funasr_control.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_control_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tests/test_funasr_control-test_funasr_control.o `test -f 'tests/test_funasr_control.c' || echo '$(srcdir)/'`tests/test_funasr_control.c
+
+tests/test_funasr_control-test_funasr_control.obj: tests/test_funasr_control.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_control_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_funasr_control-test_funasr_control.obj -MD -MP -MF tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Tpo -c -o tests/test_funasr_control-test_funasr_control.obj `if test -f 'tests/test_funasr_control.c'; then $(CYGPATH_W) 'tests/test_funasr_control.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_funasr_control.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Tpo tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_funasr_control.c' object='tests/test_funasr_control-test_funasr_control.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_control_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tests/test_funasr_control-test_funasr_control.obj `if test -f 'tests/test_funasr_control.c'; then $(CYGPATH_W) 'tests/test_funasr_control.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_funasr_control.c'; fi`
+
+src/test_funasr_control-funasr_control.o: src/funasr_control.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_control_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_funasr_control-funasr_control.o -MD -MP -MF src/$(DEPDIR)/test_funasr_control-funasr_control.Tpo -c -o src/test_funasr_control-funasr_control.o `test -f 'src/funasr_control.c' || echo '$(srcdir)/'`src/funasr_control.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_funasr_control-funasr_control.Tpo src/$(DEPDIR)/test_funasr_control-funasr_control.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_control.c' object='src/test_funasr_control-funasr_control.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_control_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_funasr_control-funasr_control.o `test -f 'src/funasr_control.c' || echo '$(srcdir)/'`src/funasr_control.c
+
+src/test_funasr_control-funasr_control.obj: src/funasr_control.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_control_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_funasr_control-funasr_control.obj -MD -MP -MF src/$(DEPDIR)/test_funasr_control-funasr_control.Tpo -c -o src/test_funasr_control-funasr_control.obj `if test -f 'src/funasr_control.c'; then $(CYGPATH_W) 'src/funasr_control.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_control.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_funasr_control-funasr_control.Tpo src/$(DEPDIR)/test_funasr_control-funasr_control.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_control.c' object='src/test_funasr_control-funasr_control.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_control_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_funasr_control-funasr_control.obj `if test -f 'src/funasr_control.c'; then $(CYGPATH_W) 'src/funasr_control.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_control.c'; fi`
+
+tests/test_funasr_ws_transport-test_funasr_ws_transport.o: tests/test_funasr_ws_transport.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_funasr_ws_transport-test_funasr_ws_transport.o -MD -MP -MF tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Tpo -c -o tests/test_funasr_ws_transport-test_funasr_ws_transport.o `test -f 'tests/test_funasr_ws_transport.c' || echo '$(srcdir)/'`tests/test_funasr_ws_transport.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Tpo tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_funasr_ws_transport.c' object='tests/test_funasr_ws_transport-test_funasr_ws_transport.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tests/test_funasr_ws_transport-test_funasr_ws_transport.o `test -f 'tests/test_funasr_ws_transport.c' || echo '$(srcdir)/'`tests/test_funasr_ws_transport.c
+
+tests/test_funasr_ws_transport-test_funasr_ws_transport.obj: tests/test_funasr_ws_transport.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_funasr_ws_transport-test_funasr_ws_transport.obj -MD -MP -MF tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Tpo -c -o tests/test_funasr_ws_transport-test_funasr_ws_transport.obj `if test -f 'tests/test_funasr_ws_transport.c'; then $(CYGPATH_W) 'tests/test_funasr_ws_transport.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_funasr_ws_transport.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Tpo tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_funasr_ws_transport.c' object='tests/test_funasr_ws_transport-test_funasr_ws_transport.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tests/test_funasr_ws_transport-test_funasr_ws_transport.obj `if test -f 'tests/test_funasr_ws_transport.c'; then $(CYGPATH_W) 'tests/test_funasr_ws_transport.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_funasr_ws_transport.c'; fi`
+
+src/test_funasr_ws_transport-funasr_audio.o: src/funasr_audio.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_funasr_ws_transport-funasr_audio.o -MD -MP -MF src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Tpo -c -o src/test_funasr_ws_transport-funasr_audio.o `test -f 'src/funasr_audio.c' || echo '$(srcdir)/'`src/funasr_audio.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Tpo src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_audio.c' object='src/test_funasr_ws_transport-funasr_audio.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_funasr_ws_transport-funasr_audio.o `test -f 'src/funasr_audio.c' || echo '$(srcdir)/'`src/funasr_audio.c
+
+src/test_funasr_ws_transport-funasr_audio.obj: src/funasr_audio.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_funasr_ws_transport-funasr_audio.obj -MD -MP -MF src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Tpo -c -o src/test_funasr_ws_transport-funasr_audio.obj `if test -f 'src/funasr_audio.c'; then $(CYGPATH_W) 'src/funasr_audio.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_audio.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Tpo src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_audio.c' object='src/test_funasr_ws_transport-funasr_audio.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_funasr_ws_transport-funasr_audio.obj `if test -f 'src/funasr_audio.c'; then $(CYGPATH_W) 'src/funasr_audio.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_audio.c'; fi`
+
+src/test_funasr_ws_transport-funasr_clock.o: src/funasr_clock.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_funasr_ws_transport-funasr_clock.o -MD -MP -MF src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Tpo -c -o src/test_funasr_ws_transport-funasr_clock.o `test -f 'src/funasr_clock.c' || echo '$(srcdir)/'`src/funasr_clock.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Tpo src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_clock.c' object='src/test_funasr_ws_transport-funasr_clock.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_funasr_ws_transport-funasr_clock.o `test -f 'src/funasr_clock.c' || echo '$(srcdir)/'`src/funasr_clock.c
+
+src/test_funasr_ws_transport-funasr_clock.obj: src/funasr_clock.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_funasr_ws_transport-funasr_clock.obj -MD -MP -MF src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Tpo -c -o src/test_funasr_ws_transport-funasr_clock.obj `if test -f 'src/funasr_clock.c'; then $(CYGPATH_W) 'src/funasr_clock.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_clock.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Tpo src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_clock.c' object='src/test_funasr_ws_transport-funasr_clock.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_funasr_ws_transport-funasr_clock.obj `if test -f 'src/funasr_clock.c'; then $(CYGPATH_W) 'src/funasr_clock.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_clock.c'; fi`
+
+src/test_funasr_ws_transport-funasr_json.o: src/funasr_json.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_funasr_ws_transport-funasr_json.o -MD -MP -MF src/$(DEPDIR)/test_funasr_ws_transport-funasr_json.Tpo -c -o src/test_funasr_ws_transport-funasr_json.o `test -f 'src/funasr_json.c' || echo '$(srcdir)/'`src/funasr_json.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_funasr_ws_transport-funasr_json.Tpo src/$(DEPDIR)/test_funasr_ws_transport-funasr_json.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_json.c' object='src/test_funasr_ws_transport-funasr_json.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_funasr_ws_transport-funasr_json.o `test -f 'src/funasr_json.c' || echo '$(srcdir)/'`src/funasr_json.c
+
+src/test_funasr_ws_transport-funasr_json.obj: src/funasr_json.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_funasr_ws_transport-funasr_json.obj -MD -MP -MF src/$(DEPDIR)/test_funasr_ws_transport-funasr_json.Tpo -c -o src/test_funasr_ws_transport-funasr_json.obj `if test -f 'src/funasr_json.c'; then $(CYGPATH_W) 'src/funasr_json.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_json.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_funasr_ws_transport-funasr_json.Tpo src/$(DEPDIR)/test_funasr_ws_transport-funasr_json.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_json.c' object='src/test_funasr_ws_transport-funasr_json.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_funasr_ws_transport-funasr_json.obj `if test -f 'src/funasr_json.c'; then $(CYGPATH_W) 'src/funasr_json.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_json.c'; fi`
+
+src/test_funasr_ws_transport-funasr_ws_transport.o: src/funasr_ws_transport.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_funasr_ws_transport-funasr_ws_transport.o -MD -MP -MF src/$(DEPDIR)/test_funasr_ws_transport-funasr_ws_transport.Tpo -c -o src/test_funasr_ws_transport-funasr_ws_transport.o `test -f 'src/funasr_ws_transport.c' || echo '$(srcdir)/'`src/funasr_ws_transport.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_funasr_ws_transport-funasr_ws_transport.Tpo src/$(DEPDIR)/test_funasr_ws_transport-funasr_ws_transport.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_ws_transport.c' object='src/test_funasr_ws_transport-funasr_ws_transport.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_funasr_ws_transport-funasr_ws_transport.o `test -f 'src/funasr_ws_transport.c' || echo '$(srcdir)/'`src/funasr_ws_transport.c
+
+src/test_funasr_ws_transport-funasr_ws_transport.obj: src/funasr_ws_transport.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_funasr_ws_transport-funasr_ws_transport.obj -MD -MP -MF src/$(DEPDIR)/test_funasr_ws_transport-funasr_ws_transport.Tpo -c -o src/test_funasr_ws_transport-funasr_ws_transport.obj `if test -f 'src/funasr_ws_transport.c'; then $(CYGPATH_W) 'src/funasr_ws_transport.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_ws_transport.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_funasr_ws_transport-funasr_ws_transport.Tpo src/$(DEPDIR)/test_funasr_ws_transport-funasr_ws_transport.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_ws_transport.c' object='src/test_funasr_ws_transport-funasr_ws_transport.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_funasr_ws_transport-funasr_ws_transport.obj `if test -f 'src/funasr_ws_transport.c'; then $(CYGPATH_W) 'src/funasr_ws_transport.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_ws_transport.c'; fi`
+
+tests/test_json_unescape-test_json_unescape.o: tests/test_json_unescape.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_json_unescape_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_json_unescape-test_json_unescape.o -MD -MP -MF tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Tpo -c -o tests/test_json_unescape-test_json_unescape.o `test -f 'tests/test_json_unescape.c' || echo '$(srcdir)/'`tests/test_json_unescape.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Tpo tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_json_unescape.c' object='tests/test_json_unescape-test_json_unescape.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_json_unescape_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tests/test_json_unescape-test_json_unescape.o `test -f 'tests/test_json_unescape.c' || echo '$(srcdir)/'`tests/test_json_unescape.c
+
+tests/test_json_unescape-test_json_unescape.obj: tests/test_json_unescape.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_json_unescape_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_json_unescape-test_json_unescape.obj -MD -MP -MF tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Tpo -c -o tests/test_json_unescape-test_json_unescape.obj `if test -f 'tests/test_json_unescape.c'; then $(CYGPATH_W) 'tests/test_json_unescape.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_json_unescape.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Tpo tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_json_unescape.c' object='tests/test_json_unescape-test_json_unescape.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_json_unescape_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tests/test_json_unescape-test_json_unescape.obj `if test -f 'tests/test_json_unescape.c'; then $(CYGPATH_W) 'tests/test_json_unescape.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_json_unescape.c'; fi`
+
+src/test_json_unescape-funasr_json.o: src/funasr_json.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_json_unescape_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_json_unescape-funasr_json.o -MD -MP -MF src/$(DEPDIR)/test_json_unescape-funasr_json.Tpo -c -o src/test_json_unescape-funasr_json.o `test -f 'src/funasr_json.c' || echo '$(srcdir)/'`src/funasr_json.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_json_unescape-funasr_json.Tpo src/$(DEPDIR)/test_json_unescape-funasr_json.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_json.c' object='src/test_json_unescape-funasr_json.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_json_unescape_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_json_unescape-funasr_json.o `test -f 'src/funasr_json.c' || echo '$(srcdir)/'`src/funasr_json.c
+
+src/test_json_unescape-funasr_json.obj: src/funasr_json.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_json_unescape_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_json_unescape-funasr_json.obj -MD -MP -MF src/$(DEPDIR)/test_json_unescape-funasr_json.Tpo -c -o src/test_json_unescape-funasr_json.obj `if test -f 'src/funasr_json.c'; then $(CYGPATH_W) 'src/funasr_json.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_json.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_json_unescape-funasr_json.Tpo src/$(DEPDIR)/test_json_unescape-funasr_json.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_json.c' object='src/test_json_unescape-funasr_json.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_json_unescape_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_json_unescape-funasr_json.obj `if test -f 'src/funasr_json.c'; then $(CYGPATH_W) 'src/funasr_json.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_json.c'; fi`
+
+tests/test_resample-test_resample.o: tests/test_resample.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_resample_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_resample-test_resample.o -MD -MP -MF tests/$(DEPDIR)/test_resample-test_resample.Tpo -c -o tests/test_resample-test_resample.o `test -f 'tests/test_resample.c' || echo '$(srcdir)/'`tests/test_resample.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_resample-test_resample.Tpo tests/$(DEPDIR)/test_resample-test_resample.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_resample.c' object='tests/test_resample-test_resample.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_resample_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tests/test_resample-test_resample.o `test -f 'tests/test_resample.c' || echo '$(srcdir)/'`tests/test_resample.c
+
+tests/test_resample-test_resample.obj: tests/test_resample.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_resample_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_resample-test_resample.obj -MD -MP -MF tests/$(DEPDIR)/test_resample-test_resample.Tpo -c -o tests/test_resample-test_resample.obj `if test -f 'tests/test_resample.c'; then $(CYGPATH_W) 'tests/test_resample.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_resample.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_resample-test_resample.Tpo tests/$(DEPDIR)/test_resample-test_resample.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_resample.c' object='tests/test_resample-test_resample.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_resample_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tests/test_resample-test_resample.obj `if test -f 'tests/test_resample.c'; then $(CYGPATH_W) 'tests/test_resample.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_resample.c'; fi`
+
+src/test_resample-funasr_audio.o: src/funasr_audio.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_resample_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_resample-funasr_audio.o -MD -MP -MF src/$(DEPDIR)/test_resample-funasr_audio.Tpo -c -o src/test_resample-funasr_audio.o `test -f 'src/funasr_audio.c' || echo '$(srcdir)/'`src/funasr_audio.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_resample-funasr_audio.Tpo src/$(DEPDIR)/test_resample-funasr_audio.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_audio.c' object='src/test_resample-funasr_audio.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_resample_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_resample-funasr_audio.o `test -f 'src/funasr_audio.c' || echo '$(srcdir)/'`src/funasr_audio.c
+
+src/test_resample-funasr_audio.obj: src/funasr_audio.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_resample_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_resample-funasr_audio.obj -MD -MP -MF src/$(DEPDIR)/test_resample-funasr_audio.Tpo -c -o src/test_resample-funasr_audio.obj `if test -f 'src/funasr_audio.c'; then $(CYGPATH_W) 'src/funasr_audio.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_audio.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_resample-funasr_audio.Tpo src/$(DEPDIR)/test_resample-funasr_audio.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_audio.c' object='src/test_resample-funasr_audio.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_resample_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_resample-funasr_audio.obj `if test -f 'src/funasr_audio.c'; then $(CYGPATH_W) 'src/funasr_audio.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_audio.c'; fi`
 
 mostlyclean-libtool:
 	-rm -f *.lo
@@ -555,6 +1033,215 @@ cscopelist-am: $(am__tagged_files)
 distclean-tags:
 	-rm -f TAGS ID GTAGS GRTAGS GSYMS GPATH tags
 
+# Recover from deleted '.trs' file; this should ensure that
+# "rm -f foo.log; make foo.trs" re-run 'foo.test', and re-create
+# both 'foo.log' and 'foo.trs'.  Break the recipe in two subshells
+# to avoid problems with "make -n".
+.log.trs:
+	rm -f $< $@
+	$(MAKE) $(AM_MAKEFLAGS) $<
+
+# Leading 'am--fnord' is there to ensure the list of targets does not
+# expand to empty, as could happen e.g. with make check TESTS=''.
+am--fnord $(TEST_LOGS) $(TEST_LOGS:.log=.trs): $(am__force_recheck)
+am--force-recheck:
+	@:
+$(TEST_SUITE_LOG): $(TEST_LOGS)
+	@$(am__set_TESTS_bases); \
+	am__f_ok () { test -f "$$1" && test -r "$$1"; }; \
+	redo_bases=`for i in $$bases; do \
+	              am__f_ok $$i.trs && am__f_ok $$i.log || echo $$i; \
+	            done`; \
+	if test -n "$$redo_bases"; then \
+	  redo_logs=`for i in $$redo_bases; do echo $$i.log; done`; \
+	  redo_results=`for i in $$redo_bases; do echo $$i.trs; done`; \
+	  if $(am__make_dryrun); then :; else \
+	    rm -f $$redo_logs && rm -f $$redo_results || exit 1; \
+	  fi; \
+	fi; \
+	if test -n "$$am__remaking_logs"; then \
+	  echo "fatal: making $(TEST_SUITE_LOG): possible infinite" \
+	       "recursion detected" >&2; \
+	elif test -n "$$redo_logs"; then \
+	  am__remaking_logs=yes $(MAKE) $(AM_MAKEFLAGS) $$redo_logs; \
+	fi; \
+	if $(am__make_dryrun); then :; else \
+	  st=0;  \
+	  errmsg="fatal: making $(TEST_SUITE_LOG): failed to create"; \
+	  for i in $$redo_bases; do \
+	    test -f $$i.trs && test -r $$i.trs \
+	      || { echo "$$errmsg $$i.trs" >&2; st=1; }; \
+	    test -f $$i.log && test -r $$i.log \
+	      || { echo "$$errmsg $$i.log" >&2; st=1; }; \
+	  done; \
+	  test $$st -eq 0 || exit 1; \
+	fi
+	@$(am__sh_e_setup); $(am__tty_colors); $(am__set_TESTS_bases); \
+	ws='[ 	]'; \
+	results=`for b in $$bases; do echo $$b.trs; done`; \
+	test -n "$$results" || results=/dev/null; \
+	all=`  grep "^$$ws*:test-result:"           $$results | wc -l`; \
+	pass=` grep "^$$ws*:test-result:$$ws*PASS"  $$results | wc -l`; \
+	fail=` grep "^$$ws*:test-result:$$ws*FAIL"  $$results | wc -l`; \
+	skip=` grep "^$$ws*:test-result:$$ws*SKIP"  $$results | wc -l`; \
+	xfail=`grep "^$$ws*:test-result:$$ws*XFAIL" $$results | wc -l`; \
+	xpass=`grep "^$$ws*:test-result:$$ws*XPASS" $$results | wc -l`; \
+	error=`grep "^$$ws*:test-result:$$ws*ERROR" $$results | wc -l`; \
+	if test `expr $$fail + $$xpass + $$error` -eq 0; then \
+	  success=true; \
+	else \
+	  success=false; \
+	fi; \
+	br='==================='; br=$$br$$br$$br$$br; \
+	result_count () \
+	{ \
+	    if test x"$$1" = x"--maybe-color"; then \
+	      maybe_colorize=yes; \
+	    elif test x"$$1" = x"--no-color"; then \
+	      maybe_colorize=no; \
+	    else \
+	      echo "$@: invalid 'result_count' usage" >&2; exit 4; \
+	    fi; \
+	    shift; \
+	    desc=$$1 count=$$2; \
+	    if test $$maybe_colorize = yes && test $$count -gt 0; then \
+	      color_start=$$3 color_end=$$std; \
+	    else \
+	      color_start= color_end=; \
+	    fi; \
+	    echo "$${color_start}# $$desc $$count$${color_end}"; \
+	}; \
+	create_testsuite_report () \
+	{ \
+	  result_count $$1 "TOTAL:" $$all   "$$brg"; \
+	  result_count $$1 "PASS: " $$pass  "$$grn"; \
+	  result_count $$1 "SKIP: " $$skip  "$$blu"; \
+	  result_count $$1 "XFAIL:" $$xfail "$$lgn"; \
+	  result_count $$1 "FAIL: " $$fail  "$$red"; \
+	  result_count $$1 "XPASS:" $$xpass "$$red"; \
+	  result_count $$1 "ERROR:" $$error "$$mgn"; \
+	}; \
+	output_system_information () \
+	{ \
+          echo;                                     \
+	  { uname -a | $(AWK) '{                    \
+  printf "System information (uname -a):";          \
+  for (i = 1; i < NF; ++i)                          \
+    {                                               \
+      if (i != 2)                                   \
+        printf " %s", $$i;                          \
+    }                                               \
+  printf "\n";                                      \
+}'; } 2>&1;                                         \
+	  if test -r /etc/os-release; then          \
+	    echo "Distribution information (/etc/os-release):"; \
+	    sed 8q /etc/os-release;                 \
+	  elif test -r /etc/issue; then             \
+	    echo "Distribution information (/etc/issue):";      \
+	    cat /etc/issue;                         \
+	  fi;                                       \
+	}; \
+	please_report () \
+	{ \
+echo "Some test(s) failed.  Please report this to $(PACKAGE_BUGREPORT),";    \
+echo "together with the test-suite.log file (gzipped) and your system";      \
+echo "information.  Thanks.";                                                \
+	}; \
+	{								\
+	  echo "$(PACKAGE_STRING): $(subdir)/$(TEST_SUITE_LOG)" |	\
+	    $(am__rst_title);						\
+	  create_testsuite_report --no-color;				\
+	  output_system_information;                                    \
+	  echo;								\
+	  echo ".. contents:: :depth: 2";				\
+	  echo;								\
+	  for b in $$bases; do echo $$b; done				\
+	    | $(am__create_global_log);					\
+	} >$(TEST_SUITE_LOG).tmp || exit 1;				\
+	mv $(TEST_SUITE_LOG).tmp $(TEST_SUITE_LOG);			\
+	if $$success; then						\
+	  col="$$grn";							\
+	 else								\
+	  col="$$red";							\
+	  test x"$$VERBOSE" = x || cat $(TEST_SUITE_LOG);		\
+	fi;								\
+	echo "$${col}$$br$${std}"; 					\
+	echo "$${col}Testsuite summary"$(AM_TESTSUITE_SUMMARY_HEADER)"$${std}";	\
+	echo "$${col}$$br$${std}"; 					\
+	create_testsuite_report --maybe-color;				\
+	echo "$$col$$br$$std";						\
+	if $$success; then :; else					\
+	  echo "$${col}See $(subdir)/$(TEST_SUITE_LOG) for debugging.$${std}";\
+	  if test -n "$(PACKAGE_BUGREPORT)"; then			\
+	    please_report | sed -e "s/^/$${col}/" -e s/'$$'/"$${std}"/; \
+	  fi;								\
+	  echo "$$col$$br$$std";					\
+	fi;								\
+	$$success || exit 1
+
+check-TESTS: $(check_PROGRAMS)
+	@$(am__rm_f) $(RECHECK_LOGS)
+	@$(am__rm_f) $(RECHECK_LOGS:.log=.trs)
+	@$(am__rm_f) $(TEST_SUITE_LOG)
+	@set +e; $(am__set_TESTS_bases); \
+	log_list=`for i in $$bases; do echo $$i.log; done`; \
+	log_list=`echo $$log_list`; \
+	$(MAKE) $(AM_MAKEFLAGS) $(TEST_SUITE_LOG) TEST_LOGS="$$log_list"; \
+	exit $$?;
+recheck: all $(check_PROGRAMS)
+	@$(am__rm_f) $(TEST_SUITE_LOG)
+	@set +e; $(am__set_TESTS_bases); \
+	bases=`for i in $$bases; do echo $$i; done \
+	         | $(am__list_recheck_tests)` || exit 1; \
+	log_list=`for i in $$bases; do echo $$i.log; done`; \
+	log_list=`echo $$log_list`; \
+	$(MAKE) $(AM_MAKEFLAGS) $(TEST_SUITE_LOG) \
+	        am__force_recheck=am--force-recheck \
+	        TEST_LOGS="$$log_list"; \
+	exit $$?
+test_resample.log: test_resample$(EXEEXT)
+	@p='test_resample$(EXEEXT)'; \
+	b='test_resample'; \
+	$(am__check_pre) $(LOG_DRIVER) --test-name "$$f" \
+	--log-file $$b.log --trs-file $$b.trs \
+	$(am__common_driver_flags) $(AM_LOG_DRIVER_FLAGS) $(LOG_DRIVER_FLAGS) -- $(LOG_COMPILE) \
+	"$$tst" $(AM_TESTS_FD_REDIRECT)
+test_json_unescape.log: test_json_unescape$(EXEEXT)
+	@p='test_json_unescape$(EXEEXT)'; \
+	b='test_json_unescape'; \
+	$(am__check_pre) $(LOG_DRIVER) --test-name "$$f" \
+	--log-file $$b.log --trs-file $$b.trs \
+	$(am__common_driver_flags) $(AM_LOG_DRIVER_FLAGS) $(LOG_DRIVER_FLAGS) -- $(LOG_COMPILE) \
+	"$$tst" $(AM_TESTS_FD_REDIRECT)
+test_funasr_ws_transport.log: test_funasr_ws_transport$(EXEEXT)
+	@p='test_funasr_ws_transport$(EXEEXT)'; \
+	b='test_funasr_ws_transport'; \
+	$(am__check_pre) $(LOG_DRIVER) --test-name "$$f" \
+	--log-file $$b.log --trs-file $$b.trs \
+	$(am__common_driver_flags) $(AM_LOG_DRIVER_FLAGS) $(LOG_DRIVER_FLAGS) -- $(LOG_COMPILE) \
+	"$$tst" $(AM_TESTS_FD_REDIRECT)
+test_funasr_control.log: test_funasr_control$(EXEEXT)
+	@p='test_funasr_control$(EXEEXT)'; \
+	b='test_funasr_control'; \
+	$(am__check_pre) $(LOG_DRIVER) --test-name "$$f" \
+	--log-file $$b.log --trs-file $$b.trs \
+	$(am__common_driver_flags) $(AM_LOG_DRIVER_FLAGS) $(LOG_DRIVER_FLAGS) -- $(LOG_COMPILE) \
+	"$$tst" $(AM_TESTS_FD_REDIRECT)
+.test.log:
+	@p='$<'; \
+	$(am__set_b); \
+	$(am__check_pre) $(TEST_LOG_DRIVER) --test-name "$$f" \
+	--log-file $$b.log --trs-file $$b.trs \
+	$(am__common_driver_flags) $(AM_TEST_LOG_DRIVER_FLAGS) $(TEST_LOG_DRIVER_FLAGS) -- $(TEST_LOG_COMPILE) \
+	"$$tst" $(AM_TESTS_FD_REDIRECT)
+@am__EXEEXT_TRUE@.test$(EXEEXT).log:
+@am__EXEEXT_TRUE@	@p='$<'; \
+@am__EXEEXT_TRUE@	$(am__set_b); \
+@am__EXEEXT_TRUE@	$(am__check_pre) $(TEST_LOG_DRIVER) --test-name "$$f" \
+@am__EXEEXT_TRUE@	--log-file $$b.log --trs-file $$b.trs \
+@am__EXEEXT_TRUE@	$(am__common_driver_flags) $(AM_TEST_LOG_DRIVER_FLAGS) $(TEST_LOG_DRIVER_FLAGS) -- $(TEST_LOG_COMPILE) \
+@am__EXEEXT_TRUE@	"$$tst" $(AM_TESTS_FD_REDIRECT)
+
 distdir: $(BUILT_SOURCES)
 	$(MAKE) $(AM_MAKEFLAGS) distdir-am
 
@@ -589,6 +1276,8 @@ distdir-am: $(DISTFILES)
 	  fi; \
 	done
 check-am: all-am
+	$(MAKE) $(AM_MAKEFLAGS) $(check_PROGRAMS)
+	$(MAKE) $(AM_MAKEFLAGS) check-TESTS
 check: check-am
 all-am: Makefile $(LTLIBRARIES)
 installdirs:
@@ -615,6 +1304,9 @@ install-strip:
 	    "INSTALL_PROGRAM_ENV=STRIPPROG='$(STRIP)'" install; \
 	fi
 mostlyclean-generic:
+	-$(am__rm_f) $(TEST_LOGS)
+	-$(am__rm_f) $(TEST_LOGS:.log=.trs)
+	-$(am__rm_f) $(TEST_SUITE_LOG)
 
 clean-generic:
 
@@ -623,6 +1315,8 @@ distclean-generic:
 	-test . = "$(srcdir)" || $(am__rm_f) $(CONFIG_CLEAN_VPATH_FILES)
 	-$(am__rm_f) src/$(DEPDIR)/$(am__dirstamp)
 	-$(am__rm_f) src/$(am__dirstamp)
+	-$(am__rm_f) tests/$(DEPDIR)/$(am__dirstamp)
+	-$(am__rm_f) tests/$(am__dirstamp)
 
 maintainer-clean-generic:
 	@echo "This command is intended for maintainers to use"
@@ -630,11 +1324,27 @@ maintainer-clean-generic:
 	-$(am__rm_f) $(MAINTAINERCLEANFILES)
 clean: clean-am
 
-clean-am: clean-generic clean-libtool clean-pluginLTLIBRARIES \
-	mostlyclean-am
+clean-am: clean-checkPROGRAMS clean-generic clean-libtool \
+	clean-pluginLTLIBRARIES mostlyclean-am
 
 distclean: distclean-am
 	-rm -f src/$(DEPDIR)/demo_recog_engine.Plo
+	-rm -f src/$(DEPDIR)/funasr_audio.Plo
+	-rm -f src/$(DEPDIR)/funasr_clock.Plo
+	-rm -f src/$(DEPDIR)/funasr_control.Plo
+	-rm -f src/$(DEPDIR)/funasr_json.Plo
+	-rm -f src/$(DEPDIR)/funasr_ws_transport.Plo
+	-rm -f src/$(DEPDIR)/test_funasr_control-funasr_control.Po
+	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Po
+	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Po
+	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_json.Po
+	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_ws_transport.Po
+	-rm -f src/$(DEPDIR)/test_json_unescape-funasr_json.Po
+	-rm -f src/$(DEPDIR)/test_resample-funasr_audio.Po
+	-rm -f tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Po
+	-rm -f tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Po
+	-rm -f tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Po
+	-rm -f tests/$(DEPDIR)/test_resample-test_resample.Po
 	-rm -f Makefile
 distclean-am: clean-am distclean-compile distclean-generic \
 	distclean-tags
@@ -681,6 +1391,22 @@ installcheck-am:
 
 maintainer-clean: maintainer-clean-am
 	-rm -f src/$(DEPDIR)/demo_recog_engine.Plo
+	-rm -f src/$(DEPDIR)/funasr_audio.Plo
+	-rm -f src/$(DEPDIR)/funasr_clock.Plo
+	-rm -f src/$(DEPDIR)/funasr_control.Plo
+	-rm -f src/$(DEPDIR)/funasr_json.Plo
+	-rm -f src/$(DEPDIR)/funasr_ws_transport.Plo
+	-rm -f src/$(DEPDIR)/test_funasr_control-funasr_control.Po
+	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Po
+	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Po
+	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_json.Po
+	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_ws_transport.Po
+	-rm -f src/$(DEPDIR)/test_json_unescape-funasr_json.Po
+	-rm -f src/$(DEPDIR)/test_resample-funasr_audio.Po
+	-rm -f tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Po
+	-rm -f tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Po
+	-rm -f tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Po
+	-rm -f tests/$(DEPDIR)/test_resample-test_resample.Po
 	-rm -f Makefile
 maintainer-clean-am: distclean-am maintainer-clean-generic
 
@@ -699,22 +1425,23 @@ ps-am:
 
 uninstall-am: uninstall-pluginLTLIBRARIES
 
-.MAKE: install-am install-strip
+.MAKE: check-am install-am install-strip
 
-.PHONY: CTAGS GTAGS TAGS all all-am am--depfiles check check-am clean \
-	clean-generic clean-libtool clean-pluginLTLIBRARIES \
-	cscopelist-am ctags ctags-am distclean distclean-compile \
-	distclean-generic distclean-libtool distclean-tags distdir dvi \
-	dvi-am html html-am info info-am install install-am \
-	install-data install-data-am install-dvi install-dvi-am \
-	install-exec install-exec-am install-html install-html-am \
-	install-info install-info-am install-man install-pdf \
-	install-pdf-am install-pluginLTLIBRARIES install-ps \
-	install-ps-am install-strip installcheck installcheck-am \
-	installdirs maintainer-clean maintainer-clean-generic \
-	mostlyclean mostlyclean-compile mostlyclean-generic \
-	mostlyclean-libtool pdf pdf-am ps ps-am tags tags-am uninstall \
-	uninstall-am uninstall-pluginLTLIBRARIES
+.PHONY: CTAGS GTAGS TAGS all all-am am--depfiles check check-TESTS \
+	check-am clean clean-checkPROGRAMS clean-generic clean-libtool \
+	clean-pluginLTLIBRARIES cscopelist-am ctags ctags-am distclean \
+	distclean-compile distclean-generic distclean-libtool \
+	distclean-tags distdir dvi dvi-am html html-am info info-am \
+	install install-am install-data install-data-am install-dvi \
+	install-dvi-am install-exec install-exec-am install-html \
+	install-html-am install-info install-info-am install-man \
+	install-pdf install-pdf-am install-pluginLTLIBRARIES \
+	install-ps install-ps-am install-strip installcheck \
+	installcheck-am installdirs maintainer-clean \
+	maintainer-clean-generic mostlyclean mostlyclean-compile \
+	mostlyclean-generic mostlyclean-libtool pdf pdf-am ps ps-am \
+	recheck tags tags-am uninstall uninstall-am \
+	uninstall-pluginLTLIBRARIES
 
 .PRECIOUS: Makefile
 

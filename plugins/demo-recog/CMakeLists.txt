@@ -4,6 +4,11 @@ project (demorecog)
 # Set source files
 set (DEMO_RECOG_SOURCES
 	src/demo_recog_engine.c
+	src/funasr_audio.c
+	src/funasr_clock.c
+	src/funasr_control.c
+	src/funasr_json.c
+	src/funasr_ws_transport.c
 )
 source_group ("src" FILES ${DEMO_RECOG_SOURCES})
 
@@ -19,6 +24,7 @@ set_target_properties (${PROJECT_NAME} PROPERTIES FOLDER "plugins")
 # Input libraries
 target_link_libraries(${PROJECT_NAME}
 	${APU_LIBRARIES}
+	${APRUTIL_LIBRARIES}
 	${APR_LIBRARIES}
 )
 # Input system libraries
@@ -26,6 +32,9 @@ if (WIN32)
 	target_link_libraries(${PROJECT_NAME} ws2_32 winmm)
 elseif (UNIX)
 	target_link_libraries(${PROJECT_NAME} m)
+	if (NOT APPLE)
+		target_link_libraries(${PROJECT_NAME} rt)
+	endif ()
 endif ()
 
 # Preprocessor definitions
@@ -40,12 +49,14 @@ add_definitions (
 # Include directories
 include_directories (
 	${PROJECT_SOURCE_DIR}/include
+	${PROJECT_SOURCE_DIR}/src
 	${MRCP_ENGINE_INCLUDE_DIRS}
 	${MRCP_INCLUDE_DIRS}
 	${MPF_INCLUDE_DIRS}
 	${APR_TOOLKIT_INCLUDE_DIRS}
 	${APR_INCLUDE_DIRS}
 	${APU_INCLUDE_DIRS}
+	${APRUTIL_INCLUDE_DIRS}
 )
 
 # Installation directives
@@ -58,8 +69,38 @@ endif (MSVC)
 # -- Unit tests for the plugin (optional) ---------------------------------
 option(BUILD_DEMORECOG_TESTS "Build demorecog tests" ON)
 if(BUILD_DEMORECOG_TESTS)
-	enable_testing()
-	add_executable(test_resample tests/test_resample.c)
+	add_executable(test_resample tests/test_resample.c src/funasr_audio.c)
 	set_target_properties(test_resample PROPERTIES FOLDER "tests")
 	add_test(NAME demorecog_resample COMMAND test_resample)
+
+	add_executable(test_json_unescape tests/test_json_unescape.c src/funasr_json.c)
+	set_target_properties(test_json_unescape PROPERTIES FOLDER "tests")
+	add_test(NAME demorecog_json_unescape COMMAND test_json_unescape)
+
+	add_executable(test_funasr_ws_transport
+		tests/test_funasr_ws_transport.c
+		src/funasr_audio.c
+		src/funasr_clock.c
+		src/funasr_json.c
+		src/funasr_ws_transport.c)
+	target_link_libraries(test_funasr_ws_transport
+		${APU_LIBRARIES}
+		${APRUTIL_LIBRARIES}
+		${APR_LIBRARIES})
+	if (WIN32)
+		target_link_libraries(test_funasr_ws_transport ws2_32 winmm)
+	elseif (UNIX)
+		target_link_libraries(test_funasr_ws_transport m)
+		if (NOT APPLE)
+			target_link_libraries(test_funasr_ws_transport rt)
+		endif ()
+	endif ()
+	set_target_properties(test_funasr_ws_transport PROPERTIES FOLDER "tests")
+	add_test(NAME demorecog_funasr_ws_transport COMMAND test_funasr_ws_transport)
+
+	add_executable(test_funasr_control
+		tests/test_funasr_control.c
+		src/funasr_control.c)
+	set_target_properties(test_funasr_control PROPERTIES FOLDER "tests")
+	add_test(NAME demorecog_funasr_control COMMAND test_funasr_control)
 endif()

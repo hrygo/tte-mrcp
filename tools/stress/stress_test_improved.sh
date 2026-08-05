@@ -25,6 +25,11 @@ SAMPLE_RATE=16000           # 默认采样率
 TTS_SAVE=false              # 是否保留每次的 TTS 录音
 TTS_VAR_DIR=""              # TTS 录音输出目录（默认 ROOT_DIR/var）
 ROUND_DELAY=0               # 轮间延迟（秒），默认不延迟
+SERVER_LOG=""               # demorecog 结构化 transport metrics 日志
+FIXTURE_REPORT=""           # funasr_ws_fixture.py JSONL 报告
+PACING_JSON=""              # 可选的 machine-readable pacing 汇总
+WARMUP=0                    # 正式采样前的 ASR 预热请求数
+FAULT_CONNECTION=1          # funasr_ws_fixture.py 的故障注入连接编号
 
 # 解析参数
 while getopts "c:t:i:r:a:o:s:d:h-:" opt; do
@@ -41,6 +46,8 @@ while getopts "c:t:i:r:a:o:s:d:h-:" opt; do
             echo "用法: $0 [-c 并发数] [-t 类型(asr/tts/all)] [-i 轮数] [-r 根目录]"
             echo "              [-a ASR音频目录] [-o ASR结果CSV] [-s 采样率] [-d 轮间延迟秒数]"
             echo "              [--tts-save] [--tts-var-dir 目录] [--round-delay=秒数]"
+            echo "              [--server-log=文件] [--fixture-report=文件] [--pacing-json=文件] [--warmup=次数]"
+            echo "              [--fault-connection=编号] 传入 fixture 故障连接编号 (默认 1)"
             echo ""
             echo "参数说明:"
             echo "  -c  并发数，每轮同时发起的请求数 (默认: 1)"
@@ -54,6 +61,11 @@ while getopts "c:t:i:r:a:o:s:d:h-:" opt; do
             echo "  --tts-save        保留每次 TTS 生成的录音 (默认每次测试前清空)"
             echo "  --tts-var-dir     TTS 录音输出目录 (默认: ROOT_DIR/var)"
             echo "  --round-delay=秒数 每轮之间的等待秒数 (同 -d)"
+            echo "  --server-log=文件      demorecog transport metrics 日志（可选）"
+            echo "  --fixture-report=文件  funasr_ws_fixture.py JSONL 报告（可选）"
+            echo "  --pacing-json=文件     测试结束后生成 pacing JSON（可选）"
+            echo "  --warmup=次数          ASR 正式采样前的串行预热次数（默认: 0）"
+            echo "  --fault-connection=编号 与 funasr_ws_fixture.py --fault-connection 保持一致"
             echo "  -h                显示此帮助信息"
             echo ""
             echo "===== 常用示例 ====="
@@ -102,6 +114,21 @@ while getopts "c:t:i:r:a:o:s:d:h-:" opt; do
                     ;;
                 round-delay=*)
                     ROUND_DELAY="${OPTARG#*=}"
+                    ;;
+                server-log=*)
+                    SERVER_LOG="${OPTARG#*=}"
+                    ;;
+                fixture-report=*)
+                    FIXTURE_REPORT="${OPTARG#*=}"
+                    ;;
+                pacing-json=*)
+                    PACING_JSON="${OPTARG#*=}"
+                    ;;
+                warmup=*)
+                    WARMUP="${OPTARG#*=}"
+                    ;;
+                fault-connection=*)
+                    FAULT_CONNECTION="${OPTARG#*=}"
                     ;;
                 *)
                     echo "未知选项: --$OPTARG"
@@ -153,6 +180,10 @@ if [[ "$TEST_TYPE" == "asr" || "$TEST_TYPE" == "all" ]]; then
     echo "ASR 音频源: $AUDIO_DIR"
     echo "ASR 结果:   $OUTPUT_CSV"
     echo "采样率:     ${SAMPLE_RATE}Hz"
+    if [[ "$WARMUP" -gt 0 ]]; then
+        echo "预热请求:   $WARMUP"
+    fi
+    echo "故障注入连接: $FAULT_CONNECTION"
 fi
 if [[ "$TEST_TYPE" == "tts" || "$TEST_TYPE" == "all" ]]; then
     echo "TTS 输出:   $TTS_VAR_DIR"
@@ -611,6 +642,29 @@ main() {
             mkdir -p "$(dirname "$OUTPUT_CSV")"
             echo "timestamp,iteration,audio_file,sample_rate,status,recognized_text,log_file" > "$OUTPUT_CSV"
 
+            if [[ "$WARMUP" -gt 0 ]]; then
+                audio_file="${asr_audio_files[0]}"
+                if ! cp "$audio_file" "$STRESS_INPUT_PCM"; then
+                    echo -e "${RED}✗ 预热音频复制失败: $audio_file -> $STRESS_INPUT_PCM${NC}"
+                    exit 1
+                fi
+                if [[ -d "$RESULT_DIR/worker_0/data" ]]; then
+                    cp "$audio_file" "$RESULT_DIR/worker_0/data/stress_test_input.pcm" || {
+                        echo -e "${RED}✗ 预热音频复制到 worker-0 失败${NC}"
+                        exit 1
+                    }
+                fi
+                echo -e "${CYAN}--- ASR 预热 (${WARMUP} 次，串行，不计入正式结果) ---${NC}"
+                for ((warmup_index=1; warmup_index<=WARMUP; warmup_index++)); do
+                    if ! run_test "asr" "warmup_${warmup_index}" 0; then
+                        echo -e "${YELLOW}预热 ${warmup_index} 未成功，继续正式采样${NC}"
+                    fi
+                    mv "$RESULT_DIR/asr_warmup_${warmup_index}.log" \
+                       "$RESULT_DIR/warmup_asr_${warmup_index}.log"
+                done
+                echo ""
+            fi
+
             for ((iter=1; iter<=ITERATIONS; iter++)); do
                 # 轮询选择音频文件（每轮所有并发 worker 使用同一音频）
                 file_index=$(( (iter - 1) % asr_file_count ))
@@ -757,6 +811,31 @@ main() {
         local tts_count
         tts_count=$(find "$TTS_VAR_DIR" -maxdepth 1 -name "synth-*.pcm" -type f 2>/dev/null | wc -l | tr -d ' ')
         echo "TTS 录音目录: $TTS_VAR_DIR (${tts_count} 个文件)"
+    fi
+    if [[ -n "$PACING_JSON" ]]; then
+        local fixture_tool="$ROOT_DIR/tools/diagnostics/funasr_ws_fixture.py"
+        local -a pacing_args=(
+            "$fixture_tool"
+            --aggregate
+            --pacing-json "$PACING_JSON"
+            --warmup "$WARMUP"
+        )
+        if [[ -n "$SERVER_LOG" ]]; then
+            pacing_args+=(--server-log "$SERVER_LOG")
+        fi
+        if [[ -n "$FIXTURE_REPORT" ]]; then
+            pacing_args+=(--fixture-report "$FIXTURE_REPORT")
+        fi
+        pacing_args+=(--fault-connection "$FAULT_CONNECTION")
+        if [[ ! -f "$fixture_tool" ]]; then
+            echo -e "${RED}✗ pacing 汇总工具不存在: $fixture_tool${NC}"
+            return 1
+        fi
+        if ! python3 "${pacing_args[@]}"; then
+            echo -e "${RED}✗ pacing JSON 生成失败${NC}"
+            return 1
+        fi
+        echo "Pacing JSON: $PACING_JSON"
     fi
     echo ""
     echo "提示: 查看失败原因: grep -i error $RESULT_DIR/*.log"

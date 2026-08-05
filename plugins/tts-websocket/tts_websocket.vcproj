@@ -289,6 +289,18 @@
 				RelativePath=".\src\tts_websocket_engine.c"
 				>
 			</File>
+			<File
+				RelativePath=".\src\tts_websocket_pcm.c"
+				>
+			</File>
+			<File
+				RelativePath=".\src\tts_websocket_lifecycle.c"
+				>
+			</File>
+			<File
+				RelativePath=".\src\tts_websocket_ws.c"
+				>
+			</File>
 		</Filter>
 	</Files>
 	<Globals>
