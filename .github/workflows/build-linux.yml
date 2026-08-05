@@ -416,7 +416,8 @@ jobs:
 
           # 5. Start unimrcpserver from the packaged tree (console log only)
           cd "$package_dir"
-          LD_LIBRARY_PATH="$PACKAGE_LIB" bin/unimrcpserver \
+          stdbuf -oL -eL env LD_LIBRARY_PATH="$PACKAGE_LIB" \
+            bin/unimrcpserver \
             -r "$package_dir" -l 6 -o 1 -w \
             < /dev/null \
             > "$GITHUB_WORKSPACE/server.log" 2>&1 &
