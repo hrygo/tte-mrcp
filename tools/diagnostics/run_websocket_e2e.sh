@@ -174,7 +174,10 @@ for path, service in zip(sys.argv[2:], ("tts", "asr")):
                 raise SystemExit(f"tts: missing {required} in {types}")
         if record["audio_sample_rate"] != 24000:
             raise SystemExit(f"tts: unexpected sample rate {record['audio_sample_rate']}")
-        if record["audio_frames"] < 2 or record["audio_bytes"] <= 24000:
+        # The mock fixture generates 240ms of audio (11520 bytes at 24kHz).
+        # The threshold ensures the fixture sent a meaningful amount of audio
+        # without requiring a specific duration.  5000 bytes ≈ 100ms minimum.
+        if record["audio_frames"] < 2 or record["audio_bytes"] <= 5000:
             raise SystemExit(
                 f"tts: insufficient audio evidence frames={record['audio_frames']} bytes={record['audio_bytes']}"
             )
