@@ -8,6 +8,7 @@ set profile [lindex $argv 1]
 set root_dir [lindex $argv 2]
 set worker_id [lindex $argv 3]
 set stop_after_start [lindex $argv 4]
+set result "UNKNOWN"
 
 if {$worker_id == ""} {
     set worker_id 0
@@ -221,10 +222,26 @@ if {$result == "SUCCESS"} {
 sleep 1
 
 # 发送退出命令
-send "exit\r"
+set cleanup_timeout 0
+if {[catch {send "exit\r"}]} {
+    set cleanup_timeout 1
+} else {
+    # UMC shutdown can lag behind a completed MRCP request under concurrent
+    # load.  The protocol result is already final, so bound only this cleanup
+    # wait and do not turn a healthy request into RESULT:TIMEOUT.
+    set saved_timeout $timeout
+    set timeout 5
+    expect {
+        eof {}
+        timeout {set cleanup_timeout 1}
+    }
+    set timeout $saved_timeout
+}
 
-# 等待 umc 退出
-expect eof
+# Release the Expect channel if UMC is still draining its shutdown tasks.
+if {$cleanup_timeout} {
+    catch {close}
+}
 
 # 输出结果 (包含 NLSML 识别文本)
 if {$nlsml_text != ""} {
