@@ -17,7 +17,7 @@
 #   -c  并发 Worker 数 (默认: 5)
 #   -r  UniMRCP 根目录 (默认: 脚本所在仓库根目录)
 #   -a  ASR 音频源目录，type=asr 时需要 (默认: ROOT_DIR/data)
-#   --cycles N  每个 Worker 的连续循环轮数 (默认: 5)
+#   --cycles=N  每个 Worker 的连续循环轮数 (默认: 5)
 #
 # 环境变量：
 #   SERVER_LOG  若设置，额外检查此日志文件中是否含崩溃信号
@@ -63,6 +63,7 @@ done
 RESULT_DIR="$ROOT_DIR/rapid_stop_results"
 EXP_SCRIPT="$ROOT_DIR/tests/integration/umc_test.exp"
 STRESS_INPUT_PCM="$ROOT_DIR/data/stress_test_input.pcm"
+UMC_BIN="${UMC_BIN:-$ROOT_DIR/platforms/umc/umc}"
 
 if [[ -z "$AUDIO_DIR" ]]; then
     AUDIO_DIR="$ROOT_DIR/data"
@@ -75,6 +76,11 @@ mkdir -p "$RESULT_DIR"
 # --------------------------------------------------------------------------
 if [[ ! -f "$EXP_SCRIPT" ]]; then
     echo "Error: expect script not found: $EXP_SCRIPT" >&2
+    exit 1
+fi
+
+if [[ ! -x "$UMC_BIN" ]]; then
+    echo "Error: umc binary not found or not executable: $UMC_BIN" >&2
     exit 1
 fi
 
@@ -104,7 +110,8 @@ echo "Root:        $ROOT_DIR"
 echo "====================================="
 
 # --------------------------------------------------------------------------
-# 准备 Worker 隔离环境（独立 SIP/RTP 端口）
+# 准备 Worker 隔离环境（独立 SIP/RTP 端口）。umc_test.exp 根据 worker
+# root 推导 UMC 路径，因此每个 worker 必须包含可执行文件、配置和数据。
 # 端口分配与 stress_test_improved.sh 一致：
 #   SIP  port = 8062 + worker_id
 #   RTP  min  = 4000 + worker_id * 200
@@ -112,20 +119,28 @@ echo "====================================="
 # --------------------------------------------------------------------------
 for ((w = 0; w < CONCURRENCY; w++)); do
     wdir="$RESULT_DIR/worker_${w}"
-    mkdir -p "$wdir"
-    cp -r "$ROOT_DIR/conf" "$wdir/"
+    mkdir -p "$wdir/conf/umc-scenarios" "$wdir/conf/client-profiles" \
+        "$wdir/data" "$wdir/var" "$wdir/platforms/umc"
+
+    ln -sf "$UMC_BIN" "$wdir/platforms/umc/umc"
+    for f in "$ROOT_DIR/conf/umc-scenarios/"* "$ROOT_DIR/conf/client-profiles/"*; do
+        [[ -f "$f" ]] || continue
+        ln -sf "$f" "$wdir/conf/$(basename "$(dirname "$f")")/$(basename "$f")"
+    done
+    for f in "$ROOT_DIR/data/"*; do
+        [[ -f "$f" ]] || continue
+        ln -sf "$f" "$wdir/data/$(basename "$f")"
+    done
 
     sip_port=$((8062 + w))
     rtp_min=$((4000 + w * 200))
     rtp_max=$((rtp_min + 199))
 
-    # GNU sed / BSD sed 兼容写法
-    sed -i.bak \
+    sed \
         -e "s|<sip-port>[0-9]*</sip-port>|<sip-port>${sip_port}</sip-port>|g" \
         -e "s|<rtp-port-min>[0-9]*</rtp-port-min>|<rtp-port-min>${rtp_min}</rtp-port-min>|g" \
         -e "s|<rtp-port-max>[0-9]*</rtp-port-max>|<rtp-port-max>${rtp_max}</rtp-port-max>|g" \
-        "$wdir/conf/unimrcpclient.xml" 2>/dev/null || true
-    rm -f "$wdir/conf/unimrcpclient.xml.bak"
+        "$ROOT_DIR/conf/unimrcpclient.xml" > "$wdir/conf/unimrcpclient.xml"
 
     if [[ "$TEST_TYPE" == "asr" ]] && [[ -n "${audio_file:-}" ]]; then
         mkdir -p "$wdir/data"
@@ -146,13 +161,23 @@ run_worker() {
     for ((cycle = 1; cycle <= CYCLES; cycle++)); do
         local log="$wdir/cycle_${cycle}.log"
 
-        timeout "$TIMEOUT_PER_CYCLE" \
-            "$EXP_SCRIPT" "$SCENARIO" "uni2" "$wdir" "$worker_id" \
-            > "$log" 2>&1
-        local rc=$?
+        local rc=0
+        if timeout "$TIMEOUT_PER_CYCLE" \
+            "$EXP_SCRIPT" "$SCENARIO" "uni2" "$wdir" "$worker_id" stop \
+            > "$log" 2>&1; then
+            rc=0
+        else
+            rc=$?
+        fi
 
         if [[ $rc -eq 0 ]]; then
-            ok=$((ok + 1))
+            if grep -Eq 'RESULT:(SUCCESS|MRCP_ERROR)' "$log" && \
+                grep -Eq 'SPEAK-COMPLETE|RECOGNITION-COMPLETE' "$log"; then
+                ok=$((ok + 1))
+            else
+                echo "FAIL: worker=$worker_id cycle=$cycle did not receive completion" >&2
+                failed=$((failed + 1))
+            fi
         elif [[ $rc -eq 124 ]]; then
             echo "TIMEOUT: worker=$worker_id cycle=$cycle (possible deadlock)" >&2
             timeout_count=$((timeout_count + 1))

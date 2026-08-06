@@ -610,8 +610,9 @@ jobs:
           #     TTS sessions never trigger the ASR engine.
           python3 "$GITHUB_WORKSPACE/tools/diagnostics/websocket_e2e_fixture.py" \
             --emit-config "$GITHUB_WORKSPACE/conf/unimrcpserver.xml" \
-              "$package_dir/conf/unimrcpserver.xml" \
+              "$GITHUB_WORKSPACE/tts-unimrcpserver.xml" \
             --host 127.0.0.1 --tts-port 18091 --asr-port 18022
+          cp "$GITHUB_WORKSPACE/tts-unimrcpserver.xml" "$package_dir/conf/unimrcpserver.xml"
 
           python3 "$GITHUB_WORKSPACE/tools/diagnostics/websocket_e2e_fixture.py" \
             --service tts --host 127.0.0.1 --port 18091 --mode normal \
@@ -708,8 +709,9 @@ jobs:
           #     Port allocation is by worker_id so no SIP/RTP conflicts occur.
           python3 "$GITHUB_WORKSPACE/tools/diagnostics/websocket_e2e_fixture.py" \
             --emit-config "$GITHUB_WORKSPACE/conf/unimrcpserver.xml" \
-              "$package_dir/conf/unimrcpserver.xml" \
+              "$GITHUB_WORKSPACE/mixed-unimrcpserver.xml" \
             --host 127.0.0.1 --tts-port 18091 --asr-port 18022
+          cp "$GITHUB_WORKSPACE/mixed-unimrcpserver.xml" "$package_dir/conf/unimrcpserver.xml"
 
           python3 "$GITHUB_WORKSPACE/tools/diagnostics/websocket_e2e_fixture.py" \
             --service tts --host 127.0.0.1 --port 18091 --mode normal \
@@ -775,8 +777,9 @@ jobs:
           #     Validates no deadlock (timeout), no server crash, and no resource leak.
           python3 "$GITHUB_WORKSPACE/tools/diagnostics/websocket_e2e_fixture.py" \
             --emit-config "$GITHUB_WORKSPACE/conf/unimrcpserver.xml" \
-              "$package_dir/conf/unimrcpserver.xml" \
+              "$GITHUB_WORKSPACE/rapid-unimrcpserver.xml" \
             --host 127.0.0.1 --tts-port 18091 --asr-port 18022
+          cp "$GITHUB_WORKSPACE/rapid-unimrcpserver.xml" "$package_dir/conf/unimrcpserver.xml"
 
           python3 "$GITHUB_WORKSPACE/tools/diagnostics/websocket_e2e_fixture.py" \
             --service tts --host 127.0.0.1 --port 18091 --mode normal \
@@ -817,9 +820,11 @@ jobs:
           sleep 2
 
           cd "$GITHUB_WORKSPACE"
+          UMC_BIN="$GITHUB_WORKSPACE/platforms/umc/umc" \
           SERVER_LOG="$GITHUB_WORKSPACE/rapid_server.log" \
             bash tools/stress/rapid_stop_test.sh \
               -t tts -c 5 -r "$GITHUB_WORKSPACE" --cycles=5
+          UMC_BIN="$GITHUB_WORKSPACE/platforms/umc/umc" \
           SERVER_LOG="$GITHUB_WORKSPACE/rapid_server.log" \
             bash tools/stress/rapid_stop_test.sh \
               -t asr -c 5 -r "$GITHUB_WORKSPACE" --cycles=5 \

@@ -7,6 +7,7 @@ set test_type [lindex $argv 0]
 set profile [lindex $argv 1]
 set root_dir [lindex $argv 2]
 set worker_id [lindex $argv 3]
+set stop_after_start [lindex $argv 4]
 
 if {$worker_id == ""} {
     set worker_id 0
@@ -35,6 +36,13 @@ if {$test_type == "synth"} {
     send "run synth $profile\r"
 } elseif {$test_type == "recog"} {
     send "run recog $profile\r"
+}
+
+# The rapid-stop stress gate starts a real session and then stops the session
+# by its UMC id. Normal runs retain the complete-session behavior.
+if {$stop_after_start == "stop"} {
+    after 100
+    send "stop 1\r"
 }
 
 set nlsml_text ""

@@ -824,6 +824,10 @@ main() {
         echo ""
         echo -e "${GREEN}Mixed 测试完成: ${mixed_success} 成功 / ${mixed_fail} 失败${NC}"
         echo ""
+
+        if [[ "$mixed_fail" -gt 0 ]]; then
+            return 1
+        fi
     fi
 
     # ========================================================================
