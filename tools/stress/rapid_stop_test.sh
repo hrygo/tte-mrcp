@@ -171,7 +171,9 @@ run_worker() {
         fi
 
         if [[ $rc -eq 0 ]]; then
-            if grep -Eq 'RESULT:(SUCCESS|MRCP_ERROR)' "$log" && \
+            if grep -q 'RESULT:STOPPED' "$log"; then
+                ok=$((ok + 1))
+            elif grep -Eq 'RESULT:(SUCCESS|MRCP_ERROR)' "$log" && \
                 grep -Eq 'SPEAK-COMPLETE|RECOGNITION-COMPLETE' "$log"; then
                 ok=$((ok + 1))
             else
