@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 将根目录明确的备份文件和本机生成目录移入现有本地归档区，同时保留所有有效构建输入、源码、测试和兼容入口。
+**Goal:** 将根目录明确的备份文件和本机生成目录移入现有本地归档区，同时保留所有有效构建输入、源码和测试入口。
 
 **Architecture:** 采用可恢复移动而不是删除：`configure~` 归入 `legacy/root/`，`build/local/` 归入 `generated/build/local/`。根目录 `build/` 的 Autotools 源码输入和其他工程入口保持原位，归档目录继续由 `.gitignore` 隔离。
 
@@ -12,7 +12,7 @@
 
 - 当前 C/C++ 源码、构建文件和 `conf/` 配置是事实来源。
 - 不移动 `build/` 根目录的 Autotools 源码输入。
-- 不移动根目录兼容包装脚本。
+- 保留仍在使用的根目录工程入口；已迁移到 `tools/` 的重复压测副本不属于保留入口。
 - 归档优先于删除，保留原相对路径和恢复说明。
 - 所有 shell 命令使用 `rtk` 前缀；文件编辑使用 `apply_patch`。
 - 当前 `.git` 已按用户明确要求删除，不执行提交、分支或 Git 状态操作。
@@ -143,7 +143,7 @@ Expected: 只保留文档中描述本地构建目录的有效说明，不出现�
 Run:
 
 ```sh
-rtk bash -n diagnose.sh stress_test.sh stress_test_improved.sh stress_test_simple.sh shell/*.sh tools/diagnostics/*.sh tools/stress/*.sh
+rtk bash -n diagnose.sh stress_test.sh stress_test_simple.sh shell/*.sh tools/diagnostics/*.sh tools/stress/*.sh
 rtk python3 - <<'PY'
 import ast
 from pathlib import Path

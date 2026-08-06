@@ -37,7 +37,7 @@ cd build/local
 ```
 
 0724:性能压测
-3. `tools/stress/stress_test_improved.sh` — 主要增强（根目录 `stress_test_improved.sh` 仍保留兼容入口）
+3. `tools/stress/stress_test_improved.sh` — 当前推荐的增强版压测入口
 新增参数：
 
 参数	说明	默认值
@@ -137,7 +137,7 @@ macOS Homebrew 路径只允许出现在本机开发脚本和本地生成目录�
 - `plugins/tts-websocket/`：正式 TTS WebSocket 插件；其构建目标和注册名均为 `tts_websocket`。
 - `plugins/asr-websocket/`：正式 ASR WebSocket 插件；其构建目标和注册名均为 `asr_websocket`。
 - `tests/`：框架测试和协议测试；`tests/integration/` 存放依赖已编译 UMC 的 Expect 集成测试。
-- `tools/stress/`：ASR/TTS 压测脚本；根目录同名脚本仅为兼容包装。
+- `tools/stress/`：ASR/TTS 压测脚本，统一从该目录调用。
 - `tools/diagnostics/`：本机服务、端口和插件诊断脚本。
 - `conf/`、`data/`：可审查的运行配置和测试输入数据。
 - `shell/`：服务启停、健康检查和日志维护脚本。

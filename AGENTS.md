@@ -191,7 +191,7 @@ flowchart LR
 | `conf` | 运行配置、场景和 profile | 以实际加载 XML 为准，检查 id 唯一性 |
 | `build` | Autotools 必需的源码输入（宏、规则、pkg-config 模板） | `build/local` 才是本地生成目录，不要误删根目录源码输入 |
 | `tools/dev` | 分平台依赖、环境和构建入口 | 现有 macOS 入口；Windows/Linux 入口独立命名，不写入全局配置 |
-| `tools/stress`、`tools/diagnostics` | 压测和诊断 | 根目录同名脚本仅保留兼容包装 |
+| `tools/stress`、`tools/diagnostics` | 压测和诊断 | 压测与诊断入口统一位于对应工具目录 |
 | `tests` | 框架测试、协议测试、集成测试 | 集成测试可能依赖已编译 UMC 和外部服务 |
 | `docs/reports`、`docs/superpowers` | 报告、设计和实施记录 | 必须标注证据来源和当前性 |
 | `.archive` | 低价值历史副本和生成物归档 | 不进入源码发现和图谱事实判断 |
@@ -264,7 +264,7 @@ MRCP SPEAK
 | 插件加载/资源映射 | `platforms/libunimrcp-server`、`conf` | engine id 唯一、动态库存在、resource-engine-map |
 | Autotools | `configure.ac`、`Makefile.am`、`build/acmacros` | `./bootstrap`、`./configure`、条件变量和安装路径 |
 | CMake | 根 `CMakeLists.txt` 和对应子目录 | `pkg-config`、Apple Silicon 前缀、CMake policy |
-| 压测/诊断 | `tools/stress`、`tools/diagnostics` | 根目录兼容包装、输出目录、日志敏感信息 |
+| 压测/诊断 | `tools/stress`、`tools/diagnostics` | 工具目录入口、输出目录、日志敏感信息 |
 | 工程治理 | `AGENTS.md`、`.gitignore`、`.archive` | 图谱索引、README、归档清单 |
 
 局部插件问题不直接修改公共库；跨层修复以 `trace_path` 的调用链和边界证据为依据。

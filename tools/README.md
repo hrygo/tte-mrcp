@@ -9,7 +9,7 @@
 - `stress_test_simple.sh`：简化压测。
 - `stress_test.py`：Python 并发压测。
 
-这些脚本默认把脚本所在仓库作为根目录，也支持显式 `-r`/`--root-dir` 覆盖。根目录同名脚本仍可继续调用。
+这些脚本默认把脚本所在仓库作为根目录，也支持显式 `-r`/`--root-dir` 覆盖。压测入口统一从 `tools/stress/` 调用。
 
 ## 诊断
 
