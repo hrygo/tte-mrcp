@@ -2544,7 +2544,7 @@ static apt_bool_t tts_websocket_stream_close(mpf_audio_stream_t *stream)
 /* Start an explicit end-of-stream sequence.
  *
  * POSTROLL keeps the RTP timeline alive until a client-side jitter buffer has
- * played the real tail. RTP_DRAIN then returns MEDIA_FRAME_TYPE_NONE for the
+ * played the real tail. RTP_DRAIN emits explicit PCMU silence frames for the
  * worst-case number of packetizer ticks. The drain stage is required because
  * MPF calls the source before the RTP sink: an event sent from the first empty
  * EOF callback can otherwise overtake a partial final RTP packet.
@@ -2677,6 +2677,13 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 		goto stream_read_done;
 	}
 	if(synth_channel->stream_output_state == TTS_WEBSOCKET_OUTPUT_RTP_DRAIN) {
+		/* MPF's RTP packetizer may use a NONE frame to flush a partial packet,
+		 * but it still copies codec_frame.buffer/size in that path. Supplying a
+		 * real, initialized audio frame prevents stale callback-buffer bytes from
+		 * becoming RTP payload. */
+		tts_websocket_pcm_fill_silence(frame->codec_frame.buffer, frame_size);
+		frame->type |= MEDIA_FRAME_TYPE_AUDIO;
+		synth_channel->stream_silence_frame_count++;
 		if(synth_channel->stream_drain_ticks_left > 0) {
 			synth_channel->stream_drain_ticks_left--;
 		}

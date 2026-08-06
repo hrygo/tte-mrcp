@@ -57,3 +57,10 @@ size_t tts_websocket_pcm_accumulate(
     *carry_len = remaining;
     return produced;
 }
+
+void tts_websocket_pcm_fill_silence(unsigned char *buffer, size_t size)
+{
+    if (buffer && size > 0) {
+        memset(buffer, 0xFF, size);
+    }
+}
