@@ -51,7 +51,7 @@ while getopts "c:t:i:r:a:o:s:d:h-:" opt; do
             echo ""
             echo "参数说明:"
             echo "  -c  并发数，每轮同时发起的请求数 (默认: 1)"
-            echo "  -t  测试类型: asr | tts | all (默认: all)"
+            echo "  -t  测试类型: asr | tts | all | mixed (默认: all)\n             mixed: 偶数 worker → TTS，奇数 worker → ASR，同轮同时并发"
             echo "  -i  轮数，总共执行多少轮并发 (默认: 10)"
             echo "  -r  UniMRCP 根目录 (默认: 脚本所在仓库根目录)"
             echo "  -a  ASR 音频源目录，包含 .pcm 文件 (默认: ROOT_DIR/data)"
@@ -176,7 +176,7 @@ echo "根目录:     $ROOT_DIR"
 if [[ "$ROUND_DELAY" -gt 0 ]]; then
     echo "轮间延迟:   ${ROUND_DELAY}s"
 fi
-if [[ "$TEST_TYPE" == "asr" || "$TEST_TYPE" == "all" ]]; then
+if [[ "$TEST_TYPE" == "asr" || "$TEST_TYPE" == "all" || "$TEST_TYPE" == "mixed" ]]; then
     echo "ASR 音频源: $AUDIO_DIR"
     echo "ASR 结果:   $OUTPUT_CSV"
     echo "采样率:     ${SAMPLE_RATE}Hz"
@@ -185,9 +185,14 @@ if [[ "$TEST_TYPE" == "asr" || "$TEST_TYPE" == "all" ]]; then
     fi
     echo "故障注入连接: $FAULT_CONNECTION"
 fi
-if [[ "$TEST_TYPE" == "tts" || "$TEST_TYPE" == "all" ]]; then
+if [[ "$TEST_TYPE" == "tts" || "$TEST_TYPE" == "all" || "$TEST_TYPE" == "mixed" ]]; then
     echo "TTS 输出:   $TTS_VAR_DIR"
     echo "保留录音:   $([ "$TTS_SAVE" = true ] && echo '是' || echo '否 (每次清空)')"
+fi
+if [[ "$TEST_TYPE" == "mixed" ]]; then
+    tts_workers=$(( (CONCURRENCY + 1) / 2 ))
+    asr_workers=$(( CONCURRENCY / 2 ))
+    echo "Mixed 模式:  偶数 Worker × ${tts_workers} → TTS，奇数 Worker × ${asr_workers} → ASR"
 fi
 echo "=========================================="
 
@@ -739,6 +744,85 @@ main() {
 
             echo -e "${GREEN}ASR 测试完成，结果已写入: $OUTPUT_CSV${NC}"
         fi
+        echo ""
+    fi
+
+    # ========================================================================
+    # Mixed TTS+ASR 并发测试
+    # ========================================================================
+    if [[ "$TEST_TYPE" == "mixed" ]]; then
+        echo -e "${CYAN}--- Mixed TTS+ASR 测试 (偶数→TTS 奇数→ASR) ---${NC}"
+
+        # 设置 TTS 录音目录
+        mkdir -p "$TTS_VAR_DIR"
+        if [[ "$TTS_SAVE" != true ]]; then
+            rm -f "$TTS_VAR_DIR"/synth-*.pcm 2>/dev/null
+        fi
+        echo "TTS 录音输出目录: $TTS_VAR_DIR"
+
+        # 加载 ASR 音频文件（供奇数 Worker 使用）
+        local -a mixed_asr_files=()
+        local mixed_has_audio=false
+        if get_audio_files "$AUDIO_DIR" mixed_asr_files 2>/dev/null; then
+            mixed_has_audio=true
+            # 把第一个音频复制到共享路径和各奇数 Worker 的 data 目录
+            local mixed_audio="${mixed_asr_files[0]}"
+            cp "$mixed_audio" "$STRESS_INPUT_PCM"
+            for ((w = 1; w < CONCURRENCY; w += 2)); do
+                local wdata="$RESULT_DIR/worker_${w}/data"
+                if [[ -d "$wdata" ]]; then
+                    cp "$mixed_audio" "$wdata/stress_test_input.pcm" || true
+                fi
+            done
+            echo "ASR 音频: $(basename "$mixed_audio")"
+        else
+            echo -e "${YELLOW}无法加载 ASR 音频，奇数 Worker 的 ASR 会话可能失败${NC}"
+        fi
+        echo ""
+
+        local mixed_success=0
+        local mixed_fail=0
+
+        for ((iter = 1; iter <= ITERATIONS; iter++)); do
+            local tts_cnt=$(( (CONCURRENCY + 1) / 2 ))
+            local asr_cnt=$(( CONCURRENCY / 2 ))
+            echo -e "${CYAN}--- Mixed 第 ${iter}/${ITERATIONS} 轮 (TTS×${tts_cnt} + ASR×${asr_cnt}) ---${NC}"
+
+            pids=()
+            for ((worker = 0; worker < CONCURRENCY; worker++)); do
+                ((current_test++))
+                if (( worker % 2 == 0 )); then
+                    run_test "tts" "mixed_${worker}_${iter}" "$worker" >/dev/null &
+                else
+                    run_test "asr" "mixed_${worker}_${iter}" "$worker" >/dev/null &
+                fi
+                pids+=($!)
+            done
+
+            for pid in "${pids[@]}"; do
+                wait "$pid"
+                if [[ $? -eq 0 ]]; then
+                    ((mixed_success++))
+                    ((success_count++))
+                else
+                    ((mixed_fail++))
+                    ((fail_count++))
+                fi
+            done
+
+            echo -e "${GREEN}  第 ${iter} 轮完成 (成功: ${mixed_success} 失败: ${mixed_fail})${NC}"
+
+            if [[ "$ROUND_DELAY" -gt 0 ]] && [[ $iter -lt $ITERATIONS ]]; then
+                sleep "$ROUND_DELAY"
+            fi
+        done
+
+        if $mixed_has_audio; then
+            rm -f "$STRESS_INPUT_PCM"
+        fi
+
+        echo ""
+        echo -e "${GREEN}Mixed 测试完成: ${mixed_success} 成功 / ${mixed_fail} 失败${NC}"
         echo ""
     fi
 
