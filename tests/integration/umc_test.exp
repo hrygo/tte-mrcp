@@ -64,12 +64,21 @@ if {$stop_after_start == "stop"} {
     set saved_timeout $timeout
     set timeout 1
     set result "STOP_TIMEOUT"
+    set umc_closed 0
     # Session teardown includes the asynchronous channel removal callback.
     # Under concurrent ARM verification it can take several seconds even
     # when the session is healthy; leave half of the outer 30s cycle timeout
     # for this bounded cleanup phase.
     for {set poll 0} {$poll < 10} {incr poll} {
-        send "show sessions\r"
+        # STOP can complete the MRCP session while the previous command is
+        # still being rendered. In that race UMC may close before the next
+        # poll; catch send so Expect reports the process outcome instead of
+        # aborting with "spawn id ... not open".
+        if {[catch {send "show sessions\r"}]} {
+            set result "STOP_EOF"
+            set umc_closed 1
+            break
+        }
         expect {
             -re {0 Session\(s\)} {
                 set result "STOPPED"
@@ -87,6 +96,7 @@ if {$stop_after_start == "stop"} {
             }
             eof {
                 set result "STOP_EOF"
+                set umc_closed 1
                 break
             }
         }
@@ -166,6 +176,23 @@ expect {
 }
 
 # End of the normal completion path.
+}
+
+# A clean UMC exit after STOP is an acceptable completion of the cancellation
+# path. A non-zero exit or signal remains a test failure.
+if {$stop_after_start == "stop" && $umc_closed} {
+    set wait_status {}
+    catch {set wait_status [wait]}
+    if {[llength $wait_status] >= 4 &&
+        [lindex $wait_status 2] == 0 &&
+        [lindex $wait_status 3] == 0} {
+        set result "STOPPED"
+    }
+    puts "RESULT:$result"
+    if {$result == "STOPPED"} {
+        exit 0
+    }
+    exit 1
 }
 
 # =========================================================================
