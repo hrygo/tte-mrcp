@@ -20,7 +20,7 @@ the rootdir path. For instance,
 <dirlayout>
   <confdir>conf</confdir>
   <plugindir>plugin</plugindir>
-  <logdir>log</logdir>
+  <logdir>/home/logs/tte-mrcp</logdir>
   <datadir>data</datadir>
   <vardir>var</vardir>
 </dirlayout>
