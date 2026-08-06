@@ -273,6 +273,9 @@ static const char* json_get_type(const char *json, apr_size_t len, char *type_bu
 static apt_bool_t websocket_handshake(websocket_connection_t *connection, const char *host, apr_port_t port, const char *path, apr_pool_t *pool);
 static apt_bool_t websocket_send_text(apr_socket_t *sock, const char *text, apr_size_t len, apr_pool_t *pool);
 static apt_bool_t websocket_send_close(apr_socket_t *sock, apr_pool_t *pool);
+static apr_socket_t *tts_websocket_detach_stream_socket(
+	tts_websocket_channel_t *synth_channel,
+	apr_socket_t *expected);
 static apr_ssize_t websocket_recv_message(websocket_connection_t *connection, char *buffer, apr_size_t buffer_size, apt_bool_t *is_text_frame);
 static apr_status_t websocket_socket_read(void *context, char *buffer, apr_size_t *size);
 static apt_bool_t websocket_socket_send_control(void *context, unsigned char opcode, const unsigned char *payload, apr_size_t payload_len);
@@ -1036,8 +1039,9 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 		apr_thread_mutex_unlock(synth_channel->stream_buffer_mutex);
 	}
 
-	/* 关闭socket — 仅当 cleanup 还未关闭时才执行（cleanup 可能已抢先关闭以中断 recv） */
-	if(sock && synth_channel->stream_socket) {
+	/* 只有成功摘取 socket 的路径拥有关闭权。cleanup 可能已经关闭并
+	 * 摘取了 socket 来中断 recv；不再通过裸指针检查与它竞争发送/关闭。 */
+	if(tts_websocket_detach_stream_socket(synth_channel, sock)) {
 		/* ========== 修复：发送 WebSocket 关闭帧，优雅地关闭连接 ========== */
 		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] ========== Closing WebSocket connection (stream thread finishing) ==========");
 		websocket_send_close(sock, pool);
@@ -1045,11 +1049,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 		/* 短暂延迟，让关闭帧发送出去 */
 		apr_sleep(10000);  /* 10ms */
 
-			apr_socket_close(sock);
-			synth_channel->stream_socket = NULL;
-			if(synth_channel->stream_ws) {
-				synth_channel->stream_ws->sock = NULL;
-			}
+		apr_socket_close(sock);
 		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] WebSocket connection closed by stream thread");
 	} else if(sock) {
 		/* cleanup 已抢先关闭 socket，无需重复操作 */
@@ -1093,6 +1093,30 @@ static void tts_websocket_stream_pool_destroy(tts_websocket_channel_t *synth_cha
 	apr_pool_destroy(synth_channel->stream_pool);
 	synth_channel->stream_pool = NULL;
 	synth_channel->stream_ws = NULL;
+}
+
+/* Detach the socket under the buffer mutex so cleanup and the worker have a
+ * single owner for the send-close/close sequence. */
+static apr_socket_t *tts_websocket_detach_stream_socket(
+	tts_websocket_channel_t *synth_channel,
+	apr_socket_t *expected)
+{
+	apr_socket_t *sock = NULL;
+
+	if(!synth_channel || !synth_channel->stream_buffer_mutex) {
+		return NULL;
+	}
+	apr_thread_mutex_lock(synth_channel->stream_buffer_mutex);
+	if(synth_channel->stream_socket &&
+		(!expected || synth_channel->stream_socket == expected)) {
+		sock = synth_channel->stream_socket;
+		synth_channel->stream_socket = NULL;
+		if(synth_channel->stream_ws && synth_channel->stream_ws->sock == sock) {
+			synth_channel->stream_ws->sock = NULL;
+		}
+	}
+	apr_thread_mutex_unlock(synth_channel->stream_buffer_mutex);
+	return sock;
 }
 
 /**
@@ -1850,17 +1874,17 @@ static void tts_websocket_channel_cleanup_audio(tts_websocket_channel_t *synth_c
 
 		/* 3. 先关闭 socket — 使 WS 线程的 apr_socket_recv 立即返回错误，
 		 *    线程快速退出，避免 join 长时间阻塞 */
-		if(synth_channel->stream_socket) {
-			LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[CLEANUP] Closing socket to interrupt WS thread recv...");
-			if(synth_channel->channel && synth_channel->channel->pool) {
-				websocket_send_close(synth_channel->stream_socket, synth_channel->channel->pool);
+		{
+			apr_socket_t *sock = tts_websocket_detach_stream_socket(
+				synth_channel, NULL);
+			if(sock) {
+				LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[CLEANUP] Closing socket to interrupt WS thread recv...");
+				if(synth_channel->channel && synth_channel->channel->pool) {
+					websocket_send_close(sock, synth_channel->channel->pool);
+				}
+				apr_sleep(10000);  /* 10ms — 让关闭帧发送出去 */
+				apr_socket_close(sock);
 			}
-			apr_sleep(10000);  /* 10ms — 让关闭帧发送出去 */
-			apr_socket_close(synth_channel->stream_socket);
-			if(synth_channel->stream_ws) {
-				synth_channel->stream_ws->sock = NULL;
-			}
-			synth_channel->stream_socket = NULL;
 		}
 
 		/* 4. 等待线程完成 — 此时 socket 已关闭，recv 已中断，join 立即返回 */
@@ -1875,17 +1899,17 @@ static void tts_websocket_channel_cleanup_audio(tts_websocket_channel_t *synth_c
 	}
 
 	/* socket 已在上面关闭，此处仅防御性检查 */
-	if(synth_channel->stream_socket) {
-		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[CLEANUP] Socket still exists (unexpected), closing...");
-		if(synth_channel->channel && synth_channel->channel->pool) {
-			websocket_send_close(synth_channel->stream_socket, synth_channel->channel->pool);
+	{
+		apr_socket_t *sock = tts_websocket_detach_stream_socket(
+			synth_channel, NULL);
+		if(sock) {
+			LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[CLEANUP] Socket still exists (unexpected), closing...");
+			if(synth_channel->channel && synth_channel->channel->pool) {
+				websocket_send_close(sock, synth_channel->channel->pool);
+			}
+			apr_sleep(10000);
+			apr_socket_close(sock);
 		}
-		apr_sleep(10000);
-		apr_socket_close(synth_channel->stream_socket);
-		if(synth_channel->stream_ws) {
-			synth_channel->stream_ws->sock = NULL;
-		}
-		synth_channel->stream_socket = NULL;
 	}
 
 	/* worker 已退出，此处仅做失败路径的幂等兜底关闭。 */

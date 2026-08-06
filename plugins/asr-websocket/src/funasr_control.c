@@ -97,7 +97,7 @@ apt_bool_t funasr_control_handle_event(
     }
 
     if (event->type == FUNASR_EVENT_WORKER_CLOSED) {
-        if (!control->close_pending || control->worker_closed) {
+        if (control->worker_closed) {
             return TRUE;
         }
         if (vtable->join_closed(obj) != APR_SUCCESS) {
