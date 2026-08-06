@@ -125,7 +125,7 @@
         <param name="tts-host" value="40.20.85.38"/>
         <param name="tts-port" value="9092"/>
         <param name="rtp-ptime-ms" value="20"/>
-        <param name="recording-enabled" value="true"/>
+        <param name="recording-enabled" value="false"/>
         <param name="completion-postroll-ms" value="600"/>
       </engine>
       <engine id="ASR-WebSocket-1" name="asr_websocket" enable="true">
