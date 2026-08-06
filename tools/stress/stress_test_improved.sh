@@ -109,6 +109,14 @@ while getopts "c:t:i:r:a:o:s:d:h-:" opt; do
                 tts-save)
                     TTS_SAVE=true
                     ;;
+                tts-var-dir)
+                    if [[ "$OPTIND" -gt "$#" ]]; then
+                        echo "选项 --tts-var-dir 需要一个目录参数" >&2
+                        exit 1
+                    fi
+                    TTS_VAR_DIR="${!OPTIND}"
+                    OPTIND=$((OPTIND + 1))
+                    ;;
                 tts-var-dir=*)
                     TTS_VAR_DIR="${OPTARG#*=}"
                     ;;
