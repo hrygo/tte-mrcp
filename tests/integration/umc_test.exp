@@ -12,7 +12,11 @@ if {$worker_id == ""} {
     set worker_id 0
 }
 
-set umc_bin "$root_dir/platforms/umc/umc"
+if {[info exists env(UMC_BIN)] && $env(UMC_BIN) != ""} {
+    set umc_bin $env(UMC_BIN)
+} else {
+    set umc_bin "$root_dir/platforms/umc/umc"
+}
 
 # 启动 umc (使用 -l 6 INFO 级别，确保 NLSML 识别结果可见)
 spawn $umc_bin -r $root_dir -l 6 -o 1
