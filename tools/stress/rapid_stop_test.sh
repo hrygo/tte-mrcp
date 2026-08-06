@@ -185,7 +185,14 @@ run_worker() {
             timeout_count=$((timeout_count + 1))
             failed=$((failed + 1))
         else
+            echo "FAIL: worker=$worker_id cycle=$cycle exited with status $rc" >&2
             failed=$((failed + 1))
+        fi
+
+        if [[ $rc -ne 0 ]] || ! grep -Eq 'RESULT:(STOPPED|SUCCESS|MRCP_ERROR)' "$log"; then
+            echo "--- rapid-stop worker=$worker_id cycle=$cycle log ---" >&2
+            tail -n 80 "$log" >&2 || true
+            echo "--- end rapid-stop worker=$worker_id cycle=$cycle log ---" >&2
         fi
     done
 
@@ -233,16 +240,15 @@ if [[ -n "${SERVER_LOG:-}" ]] && [[ -f "$SERVER_LOG" ]]; then
 fi
 
 # --------------------------------------------------------------------------
-# 清理 Worker 环境
-# --------------------------------------------------------------------------
-rm -rf "$RESULT_DIR"/worker_* 2>/dev/null || true
-
-# --------------------------------------------------------------------------
 # 最终结果
 # --------------------------------------------------------------------------
 if [[ $total_failed -gt 0 ]]; then
     echo "FAIL: ${total_failed}/${CONCURRENCY} workers had failures" >&2
     exit 1
 fi
+
+# Keep failed worker directories above for diagnostics; successful runs do not
+# need to upload the per-cycle UMC transcripts.
+rm -rf "$RESULT_DIR"/worker_* 2>/dev/null || true
 
 echo "PASS: rapid stop test complete (type=${TEST_TYPE} workers=${CONCURRENCY} cycles=${CYCLES})"
