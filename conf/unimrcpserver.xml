@@ -122,14 +122,16 @@
     <!-- Factory of plugins (MRCP engines) -->
     <plugin-factory>
       <engine id="TTS-WebSocket-1" name="tts_websocket" enable="true">
-        <param name="tts-host" value="40.20.85.37"/>
-        <param name="tts-port" value="8091"/>
+        <param name="tts-host" value="40.20.85.38"/>
+        <param name="tts-port" value="9092"/>
+        <param name="rtp-ptime-ms" value="20"/>
+        <param name="recording-enabled" value="true"/>
+        <param name="completion-postroll-ms" value="600"/>
       </engine>
       <engine id="ASR-WebSocket-1" name="asr_websocket" enable="true">
-        <!-- FunASR deployment endpoint; replace for the target environment. -->
-        <param name="funasr-host" value="127.0.0.1"/>
-        <param name="funasr-port" value="8022"/>
-        <param name="funasr-path" value="/ws/asr"/>
+        <param name="funasr-host" value="40.19.92.194"/>
+        <param name="funasr-port" value="9080"/>
+        <param name="funasr-path" value="/asr-service/ws/audio"/>
       </engine>
       <engine id="Demo-Verifier-1" name="demoverifier" enable="true"/>
       <engine id="Recorder-1" name="mrcprecorder" enable="true"/>
