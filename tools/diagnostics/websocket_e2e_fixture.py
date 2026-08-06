@@ -104,6 +104,19 @@ def split_send(sock: socket.socket, data: bytes, split: bool) -> None:
         sock.sendall(data)
 
 
+def wait_for_peer_close(sock: socket.socket, timeout: float = 1.0) -> None:
+    """Keep the fixture open long enough for the peer to consume final data."""
+    previous_timeout = sock.gettimeout()
+    sock.settimeout(timeout)
+    try:
+        while sock.recv(4096):
+            pass
+    except (socket.timeout, ConnectionResetError):
+        pass
+    finally:
+        sock.settimeout(previous_timeout)
+
+
 def pcm24k(duration_ms: int = 240) -> bytes:
     samples = int(TTS_SAMPLE_RATE * duration_ms / 1000)
     return b"".join(
@@ -278,6 +291,7 @@ class Handler(socketserver.BaseRequestHandler):
                 payload = json.dumps({"code": 0, "text": "fixture-asr"}, separators=(",", ":")).encode()
                 split_send(self.request, encode_frame(0x1, payload), mode in {"split", "slow"})
                 record["outcome"] = "final-sent"
+                wait_for_peer_close(self.request)
                 return
 
 
@@ -347,6 +361,18 @@ class SelfTests(unittest.TestCase):
             left.settimeout(0.01)
             with self.assertRaises(socket.timeout):
                 recv_exact(left, 1)
+        finally:
+            left.close()
+            right.close()
+
+    def test_wait_for_peer_close_allows_final_frame_to_drain(self) -> None:
+        left, right = socket.socketpair()
+        try:
+            left.sendall(b"final")
+            right.settimeout(0.1)
+            self.assertEqual(right.recv(5), b"final")
+            right.sendall(b"close")
+            wait_for_peer_close(left, timeout=0.1)
         finally:
             left.close()
             right.close()
