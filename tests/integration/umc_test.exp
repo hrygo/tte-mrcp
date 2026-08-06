@@ -7,6 +7,7 @@ set test_type [lindex $argv 0]
 set profile [lindex $argv 1]
 set root_dir [lindex $argv 2]
 set worker_id [lindex $argv 3]
+set stop_after_start [lindex $argv 4]
 
 if {$worker_id == ""} {
     set worker_id 0
@@ -37,8 +38,47 @@ if {$test_type == "synth"} {
     send "run recog $profile\r"
 }
 
+# The rapid-stop stress gate starts a real session and then stops the session
+# by its UMC id. STOP is a cancellation path: MRCP returns a STOP response
+# and does not emit SPEAK-COMPLETE or RECOGNITION-COMPLETE.
+if {$stop_after_start == "stop"} {
+    set saved_timeout $timeout
+    set timeout 5
+    expect {
+        -re {\[1\]} {}
+        timeout {
+            puts "RESULT:STOP_TIMEOUT"
+            exit 1
+        }
+    }
+    set timeout $saved_timeout
+    send "stop 1\r"
+}
+
 set nlsml_text ""
 set rtp_received 0
+
+if {$stop_after_start == "stop"} {
+    # The UMC session is terminated asynchronously after the STOP response.
+    # Keep this bounded so the caller still detects a real deadlock.
+    set saved_timeout $timeout
+    set timeout 1
+    set result "STOP_TIMEOUT"
+    for {set poll 0} {$poll < 5} {incr poll} {
+        send "show sessions\r"
+        expect {
+            -re {0 Session\(s\)} {
+                set result "STOPPED"
+                break
+            }
+            timeout {
+                # The next poll gives the asynchronous terminate callback time
+                # to remove the session from UMC's table.
+            }
+        }
+    }
+    set timeout $saved_timeout
+} else {
 
 # =========================================================================
 # Phase 1: 等待 RECOGNITION-COMPLETE / SPEAK-COMPLETE 或错误
@@ -109,6 +149,9 @@ expect {
             set result "NODATA"
         }
     }
+}
+
+# End of the normal completion path.
 }
 
 # =========================================================================

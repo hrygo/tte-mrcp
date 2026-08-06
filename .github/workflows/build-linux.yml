@@ -604,7 +604,247 @@ jobs:
           # path; the file is recreated inside the loop per mode.
           rm -f "$GITHUB_WORKSPACE/server.log"
 
-          # 10. Production-plugin E2E: packaged TTS and ASR binaries/plugins
+          # 10. TTS 20-concurrent stress test
+          #     websocket_e2e_fixture.py --emit-config patches both TTS and ASR engine
+          #     endpoints in the server XML.  Only the TTS mock is started because
+          #     TTS sessions never trigger the ASR engine.
+          python3 "$GITHUB_WORKSPACE/tools/diagnostics/websocket_e2e_fixture.py" \
+            --emit-config "$GITHUB_WORKSPACE/conf/unimrcpserver.xml" \
+              "$GITHUB_WORKSPACE/tts-unimrcpserver.xml" \
+            --host 127.0.0.1 --tts-port 18091 --asr-port 18022
+          cp "$GITHUB_WORKSPACE/tts-unimrcpserver.xml" "$package_dir/conf/unimrcpserver.xml"
+
+          python3 "$GITHUB_WORKSPACE/tools/diagnostics/websocket_e2e_fixture.py" \
+            --service tts --host 127.0.0.1 --port 18091 --mode normal \
+            --report "$GITHUB_WORKSPACE/tts_fixture.jsonl" \
+            > "$GITHUB_WORKSPACE/tts_fixture.log" 2>&1 &
+          tts_fixture_pid=$!
+
+          for i in $(seq 1 15); do
+            if grep -q '"event": "listening"' "$GITHUB_WORKSPACE/tts_fixture.log" 2>/dev/null; then
+              break
+            fi
+            if ! kill -0 "$tts_fixture_pid" 2>/dev/null; then
+              echo "TTS fixture exited early" >&2
+              cat "$GITHUB_WORKSPACE/tts_fixture.log" >&2 || true
+              exit 1
+            fi
+            sleep 1
+          done
+          grep -q '"event": "listening"' "$GITHUB_WORKSPACE/tts_fixture.log"
+
+          cd "$package_dir"
+          stdbuf -oL -eL env LD_LIBRARY_PATH="$PACKAGE_LIB" \
+            bin/unimrcpserver -r "$package_dir" -l 6 -o 1 -w \
+            < /dev/null > "$GITHUB_WORKSPACE/tts_server.log" 2>&1 &
+          tts_server_pid=$!
+
+          tts_ready=0
+          for i in $(seq 1 60); do
+            if grep -q "Create MRCPv2 Profile" "$GITHUB_WORKSPACE/tts_server.log" 2>/dev/null; then
+              tts_ready=1; break
+            fi
+            if ! kill -0 "$tts_server_pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          if [ "$tts_ready" != 1 ]; then
+            echo "tts_server did not become ready" >&2
+            tail -n 120 "$GITHUB_WORKSPACE/tts_server.log" >&2 || true
+            exit 1
+          fi
+          sleep 2
+
+          cd "$GITHUB_WORKSPACE"
+          bash tools/stress/stress_test_improved.sh \
+            -t tts -c "$CONCURRENCY" -i 1 \
+            -r "$GITHUB_WORKSPACE" \
+            --tts-save --tts-var-dir "$GITHUB_WORKSPACE/var"
+
+          # Assert TTS fixture outcomes: every session must complete with audio
+          python3 - "$GITHUB_WORKSPACE/tts_fixture.jsonl" "$CONCURRENCY" << 'PY'
+          import json, sys
+          fixture_path, expected = sys.argv[1], int(sys.argv[2])
+          sessions = []
+          with open(fixture_path) as f:
+              for line in f:
+                  line = line.strip()
+                  if line:
+                      sessions.append(json.loads(line))
+          tts = [s for s in sessions if s.get("service") == "tts"]
+          problems = []
+          if len(tts) < expected:
+              problems.append(f"tts_sessions={len(tts)} < {expected}")
+          bad = [s for s in tts if s.get("outcome") != "final-sent"]
+          if bad:
+              outcomes = [s.get("outcome") for s in bad]
+              problems.append(f"{len(bad)} sessions had outcome != final-sent: {outcomes}")
+          no_audio = [s for s in tts if s.get("audio_bytes", 0) == 0]
+          if no_audio:
+              problems.append(f"{len(no_audio)} sessions sent 0 audio bytes")
+          if problems:
+              print(json.dumps(tts, ensure_ascii=False, indent=2))
+              raise SystemExit("\n".join(problems))
+          total_bytes = sum(s.get("audio_bytes", 0) for s in tts)
+          print(
+              "TTS stress gate OK: "
+              f"sessions={len(tts)} total_audio_bytes={total_bytes}"
+          )
+          PY
+
+          kill "$tts_server_pid" "$tts_fixture_pid" 2>/dev/null || true
+          for wait_i in 1 2 3 4 5; do
+            kill -0 "$tts_server_pid" 2>/dev/null \
+              || kill -0 "$tts_fixture_pid" 2>/dev/null \
+              || break
+            sleep 1
+          done
+          kill -0 "$tts_server_pid" 2>/dev/null && kill -9 "$tts_server_pid" 2>/dev/null || true
+          kill -0 "$tts_fixture_pid" 2>/dev/null && kill -9 "$tts_fixture_pid" 2>/dev/null || true
+          wait "$tts_server_pid" 2>/dev/null || true
+          wait "$tts_fixture_pid" 2>/dev/null || true
+          rm -f "$GITHUB_WORKSPACE/tts_server.log"
+
+          # 11. Mixed TTS+ASR 20-concurrent stress test (10 TTS + 10 ASR simultaneously)
+          #     stress_test_improved.sh -t mixed: even worker IDs -> TTS, odd -> ASR.
+          #     Port allocation is by worker_id so no SIP/RTP conflicts occur.
+          python3 "$GITHUB_WORKSPACE/tools/diagnostics/websocket_e2e_fixture.py" \
+            --emit-config "$GITHUB_WORKSPACE/conf/unimrcpserver.xml" \
+              "$GITHUB_WORKSPACE/mixed-unimrcpserver.xml" \
+            --host 127.0.0.1 --tts-port 18091 --asr-port 18022
+          cp "$GITHUB_WORKSPACE/mixed-unimrcpserver.xml" "$package_dir/conf/unimrcpserver.xml"
+
+          python3 "$GITHUB_WORKSPACE/tools/diagnostics/websocket_e2e_fixture.py" \
+            --service tts --host 127.0.0.1 --port 18091 --mode normal \
+            > "$GITHUB_WORKSPACE/mixed_tts_fixture.log" 2>&1 &
+          mixed_tts_pid=$!
+
+          python3 "$GITHUB_WORKSPACE/tools/diagnostics/websocket_e2e_fixture.py" \
+            --service asr --host 127.0.0.1 --port 18022 --mode normal \
+            > "$GITHUB_WORKSPACE/mixed_asr_fixture.log" 2>&1 &
+          mixed_asr_pid=$!
+
+          for i in $(seq 1 15); do
+            grep -q '"event": "listening"' "$GITHUB_WORKSPACE/mixed_tts_fixture.log" 2>/dev/null \
+              && grep -q '"event": "listening"' "$GITHUB_WORKSPACE/mixed_asr_fixture.log" 2>/dev/null \
+              && break
+            sleep 1
+          done
+
+          cd "$package_dir"
+          stdbuf -oL -eL env LD_LIBRARY_PATH="$PACKAGE_LIB" \
+            bin/unimrcpserver -r "$package_dir" -l 6 -o 1 -w \
+            < /dev/null > "$GITHUB_WORKSPACE/mixed_server.log" 2>&1 &
+          mixed_server_pid=$!
+
+          mixed_ready=0
+          for i in $(seq 1 60); do
+            if grep -q "Create MRCPv2 Profile" "$GITHUB_WORKSPACE/mixed_server.log" 2>/dev/null; then
+              mixed_ready=1; break
+            fi
+            if ! kill -0 "$mixed_server_pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          if [ "$mixed_ready" != 1 ]; then
+            echo "mixed_server did not become ready" >&2
+            tail -n 120 "$GITHUB_WORKSPACE/mixed_server.log" >&2 || true
+            exit 1
+          fi
+          sleep 2
+
+          cd "$GITHUB_WORKSPACE"
+          bash tools/stress/stress_test_improved.sh \
+            -t mixed -c "$CONCURRENCY" -i 1 \
+            -r "$GITHUB_WORKSPACE" \
+            -a "$GITHUB_WORKSPACE/data" \
+            --tts-save --tts-var-dir "$GITHUB_WORKSPACE/var"
+
+          kill "$mixed_server_pid" "$mixed_tts_pid" "$mixed_asr_pid" 2>/dev/null || true
+          for wait_i in 1 2 3 4 5; do
+            kill -0 "$mixed_server_pid" 2>/dev/null \
+              || kill -0 "$mixed_tts_pid" 2>/dev/null \
+              || kill -0 "$mixed_asr_pid" 2>/dev/null \
+              || break
+            sleep 1
+          done
+          for _spid in "$mixed_server_pid" "$mixed_tts_pid" "$mixed_asr_pid"; do
+            kill -0 "$_spid" 2>/dev/null && kill -9 "$_spid" 2>/dev/null || true
+          done
+          wait "$mixed_server_pid" "$mixed_tts_pid" "$mixed_asr_pid" 2>/dev/null || true
+          rm -f "$GITHUB_WORKSPACE/mixed_server.log"
+
+          # 12. Rapid successive session test (resource-cleanup and anti-deadlock gate)
+          #     rapid_stop_test.sh: 5 workers x 5 cycles of complete sessions back-to-back.
+          #     Validates no deadlock (timeout), no server crash, and no resource leak.
+          python3 "$GITHUB_WORKSPACE/tools/diagnostics/websocket_e2e_fixture.py" \
+            --emit-config "$GITHUB_WORKSPACE/conf/unimrcpserver.xml" \
+              "$GITHUB_WORKSPACE/rapid-unimrcpserver.xml" \
+            --host 127.0.0.1 --tts-port 18091 --asr-port 18022
+          cp "$GITHUB_WORKSPACE/rapid-unimrcpserver.xml" "$package_dir/conf/unimrcpserver.xml"
+
+          python3 "$GITHUB_WORKSPACE/tools/diagnostics/websocket_e2e_fixture.py" \
+            --service tts --host 127.0.0.1 --port 18091 --mode normal \
+            > "$GITHUB_WORKSPACE/rapid_tts_fixture.log" 2>&1 &
+          rapid_tts_pid=$!
+
+          python3 "$GITHUB_WORKSPACE/tools/diagnostics/websocket_e2e_fixture.py" \
+            --service asr --host 127.0.0.1 --port 18022 --mode normal \
+            > "$GITHUB_WORKSPACE/rapid_asr_fixture.log" 2>&1 &
+          rapid_asr_pid=$!
+
+          for i in $(seq 1 15); do
+            grep -q '"event": "listening"' "$GITHUB_WORKSPACE/rapid_tts_fixture.log" 2>/dev/null \
+              && grep -q '"event": "listening"' "$GITHUB_WORKSPACE/rapid_asr_fixture.log" 2>/dev/null \
+              && break
+            sleep 1
+          done
+
+          cd "$package_dir"
+          stdbuf -oL -eL env LD_LIBRARY_PATH="$PACKAGE_LIB" \
+            bin/unimrcpserver -r "$package_dir" -l 6 -o 1 -w \
+            < /dev/null > "$GITHUB_WORKSPACE/rapid_server.log" 2>&1 &
+          rapid_server_pid=$!
+
+          rapid_ready=0
+          for i in $(seq 1 60); do
+            if grep -q "Create MRCPv2 Profile" "$GITHUB_WORKSPACE/rapid_server.log" 2>/dev/null; then
+              rapid_ready=1; break
+            fi
+            if ! kill -0 "$rapid_server_pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          if [ "$rapid_ready" != 1 ]; then
+            echo "rapid_server did not become ready" >&2
+            tail -n 120 "$GITHUB_WORKSPACE/rapid_server.log" >&2 || true
+            exit 1
+          fi
+          sleep 2
+
+          cd "$GITHUB_WORKSPACE"
+          UMC_BIN="$GITHUB_WORKSPACE/platforms/umc/umc" \
+          SERVER_LOG="$GITHUB_WORKSPACE/rapid_server.log" \
+            bash tools/stress/rapid_stop_test.sh \
+              -t tts -c 5 -r "$GITHUB_WORKSPACE" --cycles=5
+          UMC_BIN="$GITHUB_WORKSPACE/platforms/umc/umc" \
+          SERVER_LOG="$GITHUB_WORKSPACE/rapid_server.log" \
+            bash tools/stress/rapid_stop_test.sh \
+              -t asr -c 5 -r "$GITHUB_WORKSPACE" --cycles=5 \
+              -a "$GITHUB_WORKSPACE/data"
+
+          kill "$rapid_server_pid" "$rapid_tts_pid" "$rapid_asr_pid" 2>/dev/null || true
+          for wait_i in 1 2 3 4 5; do
+            kill -0 "$rapid_server_pid" 2>/dev/null \
+              || kill -0 "$rapid_tts_pid" 2>/dev/null \
+              || kill -0 "$rapid_asr_pid" 2>/dev/null \
+              || break
+            sleep 1
+          done
+          for _spid in "$rapid_server_pid" "$rapid_tts_pid" "$rapid_asr_pid"; do
+            kill -0 "$_spid" 2>/dev/null && kill -9 "$_spid" 2>/dev/null || true
+          done
+          wait "$rapid_server_pid" "$rapid_tts_pid" "$rapid_asr_pid" 2>/dev/null || true
+          rm -f "$GITHUB_WORKSPACE/rapid_server.log"
+
+          # 13. Production-plugin E2E: packaged TTS and ASR binaries/plugins
           # exchange real WebSocket frames with loopback doubles.  This is
           # intentionally separate from the pacing gate so a passing stress
           # run cannot mask a missing TTS plugin or a bad MRCP completion.
@@ -629,8 +869,11 @@ jobs:
             echo "- Package: \`${{ matrix.zip_name }}\`"
             echo "- Verify image: \`${{ matrix.verify_image }}\`"
             echo "- 20 concurrent ASR sessions + 1 warmup, split-payload fault on connection 2"
+            echo "- 20 concurrent TTS sessions (outcome + audio-bytes gate)"
+            echo "- 20 concurrent mixed TTS+ASR sessions (10+10 interleaved)"
+            echo "- Rapid successive session test (5 workers x 5 cycles, TTS + ASR)"
             echo
-            echo "### Pacing report"
+            echo "### ASR Pacing report"
             echo '```json'
             cat pacing.json
             echo '```'
@@ -646,7 +889,14 @@ jobs:
             fixture.log
             fixture.jsonl
             pacing.json
+            tts_fixture.jsonl
+            tts_fixture.log
+            mixed_tts_fixture.log
+            mixed_asr_fixture.log
+            rapid_tts_fixture.log
+            rapid_asr_fixture.log
             stress_results/
+            rapid_stop_results/
             websocket-e2e-results/
           if-no-files-found: ignore
 

@@ -223,6 +223,12 @@ bool SynthSession::OnMessageReceive(mrcp_channel_t* pMrcpChannel, mrcp_message_t
 				Terminate();
 			}
 		}
+		else if(pMrcpMessage->start_line.method_id == SYNTHESIZER_STOP)
+		{
+			/* STOP completes the active session without a SPEAK-COMPLETE event. */
+			if(pMrcpMessage->start_line.request_state == MRCP_REQUEST_STATE_COMPLETE)
+				Terminate();
+		}
 		else 
 		{
 			/* received unexpected response */
