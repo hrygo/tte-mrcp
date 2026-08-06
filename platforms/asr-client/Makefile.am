@@ -4,7 +4,7 @@ AM_CPPFLAGS            = -I$(top_srcdir)/platforms/libasr-client/include \
 bin_PROGRAMS           = asrclient
 
 asrclient_SOURCES      = src/main.c
-asrclient_LDADD        = $(top_builddir)/platforms/libasr-client/libasrclient.la $(UNIMRCP_CLIENTAPP_TINGYUN_LIBADD)
+asrclient_LDADD        = $(top_builddir)/platforms/libasr-client/libasrclient.la $(TINGYUN_LIBADD)
 asrclient_LDFLAGS      = $(UNIMRCP_CLIENTAPP_OPTS)
 
 include $(top_srcdir)/build/rules/uniclientapp.am

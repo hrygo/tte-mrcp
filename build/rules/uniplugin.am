@@ -13,9 +13,3 @@ UNIMRCP_PLUGIN_INCLUDES    = -I$(top_srcdir)/libs/mrcp-engine/include \
 
 # Linker options (LDFLAGS)
 UNIMRCP_PLUGIN_OPTS        = -module $(PLUGIN_LT_VERSION)
-
-# Conditional TingYun APM static library (set by UNI_TINGYUN_APM).
-UNIMRCP_PLUGIN_TINGYUN_LIBADD =
-if TINGYUN_ENABLED
-UNIMRCP_PLUGIN_TINGYUN_LIBADD = $(TINGYUN_LIBADD)
-endif

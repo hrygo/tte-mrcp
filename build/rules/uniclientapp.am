@@ -18,12 +18,6 @@ UNIMRCP_CLIENTAPP_INCLUDES = -I$(top_srcdir)/platforms/libunimrcp-client/include
 # Libraries (LDADD)
 UNIMRCP_CLIENTAPP_LIBS     = $(top_builddir)/platforms/libunimrcp-client/libunimrcpclient.la
 
-# Conditional TingYun APM static library (set by UNI_TINGYUN_APM).
-UNIMRCP_CLIENTAPP_TINGYUN_LIBADD =
-if TINGYUN_ENABLED
-UNIMRCP_CLIENTAPP_TINGYUN_LIBADD = $(TINGYUN_LIBADD)
-endif
-
 # Linker options (LDFLAGS)
 UNIMRCP_CLIENTAPP_OPTS     =
 if ISMAC
