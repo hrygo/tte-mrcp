@@ -266,6 +266,30 @@ static void test_close_fence_is_only_close_release(void)
     CHECK_TRUE("duplicate fence suppressed", sink.joins == 1);
 }
 
+static void test_unexpected_close_fence_releases_transport(void)
+{
+    funasr_control_t control;
+    fake_sink_t sink;
+    funasr_transport_event_t event;
+
+    memset(&sink, 0, sizeof(sink));
+    funasr_control_init(&control);
+    funasr_control_begin_generation(&control, 7);
+    event = event_make(7, FUNASR_EVENT_WORKER_CLOSED);
+
+    CHECK_TRUE("unexpected close fence handled",
+               funasr_control_handle_event(&control, &event, &fake_vtable, &sink));
+    CHECK_TRUE("unexpected close joins worker", sink.joins == 1);
+    CHECK_TRUE("unexpected close marks worker closed", control.worker_closed);
+    CHECK_TRUE("unexpected close releases transport", sink.close_responses == 1);
+    CHECK_TRUE("unexpected close does not request a second close",
+               sink.close_requests == 0);
+    CHECK_TRUE("duplicate unexpected close fence suppressed",
+               funasr_control_handle_event(&control, &event, &fake_vtable, &sink));
+    CHECK_TRUE("unexpected close joins once", sink.joins == 1);
+    CHECK_TRUE("unexpected close releases once", sink.close_responses == 1);
+}
+
 int main(void)
 {
     test_final_before_stop();
@@ -274,6 +298,7 @@ int main(void)
     test_stop_wins_failure_race();
     test_stop_during_terminal_commit_responds();
     test_close_fence_is_only_close_release();
+    test_unexpected_close_fence_releases_transport();
     if (failures != 0) {
         fprintf(stderr, "%d control assertion(s) failed\n", failures);
         return 1;
