@@ -64,16 +64,30 @@ if {$stop_after_start == "stop"} {
     set saved_timeout $timeout
     set timeout 1
     set result "STOP_TIMEOUT"
-    for {set poll 0} {$poll < 5} {incr poll} {
+    # Session teardown includes the asynchronous channel removal callback.
+    # Under concurrent ARM verification it can take several seconds even
+    # when the session is healthy; leave half of the outer 30s cycle timeout
+    # for this bounded cleanup phase.
+    for {set poll 0} {$poll < 10} {incr poll} {
         send "show sessions\r"
         expect {
             -re {0 Session\(s\)} {
                 set result "STOPPED"
                 break
             }
+            -re {>}$ {
+                # The command completed while the session was still being
+                # removed.  Poll again only after the prompt is back so
+                # commands cannot overtake one another in the UMC console.
+                exp_continue
+            }
             timeout {
                 # The next poll gives the asynchronous terminate callback time
                 # to remove the session from UMC's table.
+            }
+            eof {
+                set result "STOP_EOF"
+                break
             }
         }
     }
