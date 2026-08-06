@@ -18,6 +18,8 @@ option (ENABLE_RECORDER_PLUGIN     "Enable recorder plugin"                     
 
 option (ENABLE_AMR_CODEC           "Enable AMR Codec"                               OFF)
 
+option (ENABLE_TINGYUN_APM         "Enable TingYun APM instrumentation"             ON)
+
 option (ENABLE_TEST_SUITES         "Enable test suites"                             OFF)
 
 # Organize targets into folders
@@ -59,6 +61,40 @@ if (ENABLE_AMR_CODEC)
 	find_package (OpenCoreAMR REQUIRED)
 	find_package (VoAMRWBEnc REQUIRED)
 endif()
+
+# TingYun APM C SDK (auto-disabled on unsupported platforms).
+# libs/tingyun/lib/ currently ships static libraries for:
+#   x86_64  + glibc -> libtingyun_sdk.a
+#   x86     + glibc -> libtingyun_sdk.x86.a
+#   x86_64  + musl  -> libtingyun_musl.x64.a
+set (TINGYUN_FOUND FALSE)
+set (TINGYUN_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/libs/tingyun/include")
+set (TINGYUN_LIB_DIR     "${CMAKE_SOURCE_DIR}/libs/tingyun/lib")
+if (ENABLE_TINGYUN_APM)
+	set (_tingyun_lib "")
+	if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+		if (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+			# Prefer musl build only when the compiler targets musl.
+			# Default path uses glibc; users can override by editing this block.
+			set (_tingyun_lib "libtingyun_sdk.a")
+		elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "i.86|x86")
+			set (_tingyun_lib "libtingyun_sdk.x86.a")
+		endif ()
+	endif ()
+	if (_tingyun_lib AND EXISTS "${TINGYUN_INCLUDE_DIR}/tingyun.h"
+			AND EXISTS "${TINGYUN_LIB_DIR}/${_tingyun_lib}")
+		set (TINGYUN_FOUND TRUE)
+		set (TINGYUN_LIBRARY "${TINGYUN_LIB_DIR}/${_tingyun_lib}")
+		# Propagate preprocessor symbol to every target in this directory scope.
+		add_compile_definitions (TINGYUN_ENABLED=1)
+		message (STATUS "TingYun APM: enabled (${_tingyun_lib})")
+	elseif (ENABLE_TINGYUN_APM)
+		message (STATUS "TingYun APM: requested but SDK files not found for "
+				"${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}; disabling")
+		set (ENABLE_TINGYUN_APM OFF)
+	endif ()
+	unset (_tingyun_lib)
+endif ()
 
 # Set API definitions
 set (APR_TOOLKIT_DEFINES -DAPT_STATIC_LIB)

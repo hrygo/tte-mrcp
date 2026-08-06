@@ -75,6 +75,12 @@ include_directories (
 	${APU_INCLUDE_DIRS}
 )
 
+# TingYun APM static library (conditional).
+if (ENABLE_TINGYUN_APM AND TINGYUN_FOUND)
+	include_directories (${TINGYUN_INCLUDE_DIR})
+	target_link_libraries(${PROJECT_NAME} ${TINGYUN_LIBRARY})
+endif ()
+
 # Installation directives
 install (TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
 if (MSVC)

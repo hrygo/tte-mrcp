@@ -33,6 +33,9 @@
 #include "tts_websocket_ws.h"
 #include "apt_consumer_task.h"
 #include "apt_log.h"
+#ifdef TINGYUN_ENABLED
+#include "tingyun.h"
+#endif
 #include <apr_network_io.h>
 #include <apr_errno.h>
 #include <apr_thread_proc.h>
@@ -236,6 +239,18 @@ struct tts_websocket_channel_t {
 	FILE    *record_file;
 	/** 录音输出文件（原始24kHz PCM格式，TTS服务端原始返回） */
 	FILE    *record_file_orig;
+
+#ifdef TINGYUN_ENABLED
+	/* ========== 听云 APM 埋点字段 ========== */
+	/** 当前 SPEAK 请求的事务 ID（每次 SPEAK 创建一个 Action） */
+	TActionId                ty_action;
+	/** WebSocket 连接到 TTS 服务的外部组件（外部调用追踪） */
+	TComponentId             ty_ws_component;
+	/** 流式音频处理线程的内部组件（性能分解） */
+	TComponentId             ty_stream_component;
+	/** 埋点字段是否已初始化（避免重复销毁） */
+	int                      ty_initialized;
+#endif
 
 };
 typedef enum {
@@ -619,6 +634,17 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 		apr_thread_exit(thd, 0);
 		return NULL;
 	}
+
+#ifdef TINGYUN_ENABLED
+	/* 创建流式处理内部组件：追踪 WebSocket 消息接收、PCM 重采样、ring buffer 写入的性能。
+	 * 组件挂在当前 SPEAK 的 Action 下，听云控制台可看到 Action → WS ExternalComponent + Stream Component 的分解。 */
+	if(synth_channel->ty_initialized && TingYunValidId(&synth_channel->ty_action)) {
+		synth_channel->ty_stream_component = ACreateComponent(&synth_channel->ty_action);
+		if(TingYunValidId(&synth_channel->ty_stream_component)) {
+			LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[TINGYUN] Stream component created");
+		}
+	}
+#endif
 
 	/* 记录开始时间（发送input.done后的时间） */
 	start_time = apr_time_now();
@@ -1068,6 +1094,30 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[RECORD] Original audio file closed");
 	}
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Stream thread exiting, stream_complete=%d", synth_channel->stream_complete);
+#ifdef TINGYUN_ENABLED
+	/* 流式线程退出：完成流式处理组件和 WebSocket 外部调用组件。
+	 * Action 本身由 cleanup_audio 在线程 join 后统一销毁。 */
+	if(synth_channel->ty_initialized) {
+		const char *ty_stream_error = NULL;
+		if(synth_channel->stream_error) {
+			ty_stream_error = "stream-thread-error";
+		}
+		if(TingYunValidId(&synth_channel->ty_stream_component)) {
+			if(ty_stream_error) {
+				ComponentSetError(&synth_channel->ty_stream_component, ty_stream_error);
+			}
+			ComponentFinish(&synth_channel->ty_stream_component);
+			memset(&synth_channel->ty_stream_component, 0, sizeof(synth_channel->ty_stream_component));
+		}
+		if(TingYunValidId(&synth_channel->ty_ws_component)) {
+			if(ty_stream_error) {
+				ComponentSetError(&synth_channel->ty_ws_component, ty_stream_error);
+			}
+			ComponentFinish(&synth_channel->ty_ws_component);
+			memset(&synth_channel->ty_ws_component, 0, sizeof(synth_channel->ty_ws_component));
+		}
+	}
+#endif
 	/* 销毁线程私有临时pool，释放所有本轮session累积的临时分配 */
 	if(frame_pool) {
 		apr_pool_destroy(frame_pool);
@@ -1328,9 +1378,35 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 		2097152);
 	if(!websocket_handshake(synth_channel->stream_ws, tts_engine->tts_server_host, tts_engine->tts_server_port, "/v1/audio/speech/stream", pool)) {
 		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] WebSocket handshake failed");
+#ifdef TINGYUN_ENABLED
+		if(synth_channel->ty_initialized && TingYunValidId(&synth_channel->ty_action)) {
+			ActionSetError(&synth_channel->ty_action, "TTS-WebSocket", "handshake failed");
+		}
+#endif
 		apr_socket_close(sock);
 		return FALSE;
 	}
+
+#ifdef TINGYUN_ENABLED
+	/* 创建 WebSocket 外部调用组件：追踪到 TTS 服务的网络连接。
+	 * URL 使用 ws://host:port/path 格式，便于听云控制台识别外部依赖。 */
+	if(synth_channel->ty_initialized && TingYunValidId(&synth_channel->ty_action)) {
+		char ws_url[256];
+		apr_snprintf(ws_url, sizeof(ws_url), "ws://%s:%d/v1/audio/speech/stream",
+			tts_engine->tts_server_host, tts_engine->tts_server_port);
+		synth_channel->ty_ws_component = CreateExternalComponent(&synth_channel->ty_action, ws_url);
+		if(TingYunValidId(&synth_channel->ty_ws_component)) {
+			/* 生成跨应用追踪 ID，可注入到下游 WebSocket 消息中实现全链路追踪 */
+			char track_id[64] = {0};
+			int track_len = ComponentCreateTrackId(&synth_channel->ty_ws_component, track_id, sizeof(track_id));
+			if(track_len > 0) {
+				LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[TINGYUN] WS ExternalComponent created, track_id=%s", track_id);
+			} else {
+				LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[TINGYUN] WS ExternalComponent created");
+			}
+		}
+	}
+#endif
 
 	/* 发送 session.config 消息 */
 	if(!voice_name || voice_name[0] == '\0') {
@@ -1649,6 +1725,14 @@ static mrcp_engine_channel_t* tts_websocket_engine_channel_create(mrcp_engine_t 
 	synth_channel->record_file = NULL;
 	synth_channel->record_file_orig = NULL;
 
+#ifdef TINGYUN_ENABLED
+	/* 初始化听云埋点字段（零初始化结构体，避免未初始化误销毁） */
+	memset(&synth_channel->ty_action, 0, sizeof(synth_channel->ty_action));
+	memset(&synth_channel->ty_ws_component, 0, sizeof(synth_channel->ty_ws_component));
+	memset(&synth_channel->ty_stream_component, 0, sizeof(synth_channel->ty_stream_component));
+	synth_channel->ty_initialized = 0;
+#endif
+
 	capabilities = mpf_source_stream_capabilities_create(pool);
 	mpf_codec_capabilities_add(
 			&capabilities->codecs,
@@ -1837,6 +1921,53 @@ static void tts_websocket_recording_close(tts_websocket_channel_t *synth_channel
 	}
 }
 
+#ifdef TINGYUN_ENABLED
+/* ---------- TingYun APM helpers ---------- */
+/**
+ * @brief 完成并销毁当前 SPEAK 事务的所有听云组件
+ * @param synth_channel TTS WebSocket 合成通道对象
+ * @param error_message 若非 NULL，表示以错误状态结束事务
+ * 说明：
+ *   在 SPEAK-COMPLETE 后或错误路径调用，确保 Action 及其子组件正确关闭。
+ *   该函数是幂等的：重复调用或从未初始化的通道调用均为安全 no-op。
+ */
+static void tts_websocket_tingyun_finish(
+	tts_websocket_channel_t *synth_channel,
+	const char *error_message)
+{
+	if(!synth_channel || !synth_channel->ty_initialized) {
+		return;
+	}
+	/* 流式处理组件（内部组件）先完成 */
+	if(TingYunValidId(&synth_channel->ty_stream_component)) {
+		if(error_message) {
+			ComponentSetError(&synth_channel->ty_stream_component, error_message);
+		}
+		ComponentFinish(&synth_channel->ty_stream_component);
+		memset(&synth_channel->ty_stream_component, 0, sizeof(synth_channel->ty_stream_component));
+	}
+	/* WebSocket 外部调用组件 */
+	if(TingYunValidId(&synth_channel->ty_ws_component)) {
+		if(error_message) {
+			ComponentSetError(&synth_channel->ty_ws_component, error_message);
+		}
+		ComponentFinish(&synth_channel->ty_ws_component);
+		memset(&synth_channel->ty_ws_component, 0, sizeof(synth_channel->ty_ws_component));
+	}
+	/* 顶层事务 */
+	if(TingYunValidId(&synth_channel->ty_action)) {
+		if(error_message) {
+			ActionSetError(&synth_channel->ty_action, "TTS-Error", error_message);
+		}
+		ActionDestroy(&synth_channel->ty_action);
+		memset(&synth_channel->ty_action, 0, sizeof(synth_channel->ty_action));
+	}
+	synth_channel->ty_initialized = 0;
+	LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[TINGYUN] Action finished%s%s",
+		error_message ? " with error: " : "", error_message ? error_message : "");
+}
+#endif
+
 /* ---------- channel audio cleanup ---------- */
 /**
  * @brief 清理通道音频资源
@@ -1934,6 +2065,21 @@ static void tts_websocket_channel_cleanup_audio(tts_websocket_channel_t *synth_c
 	synth_channel->stream_postroll_ticks_left = 0;
 	synth_channel->stream_drain_ticks_left = 0;
 	synth_channel->stream_completion_cause = SYNTHESIZER_COMPLETION_CAUSE_NORMAL;
+
+#ifdef TINGYUN_ENABLED
+	/* 听云事务收尾：流式线程已 join，组件已完成；此处销毁 Action 及残留组件。
+	 * 若 SPEAK-COMPLETE 已通过 read_safe 路径发送，ty_initialized 仍为 1，
+	 * 在此统一销毁；若 SPEAK 中途失败进入 cleanup，error_message 记录原因。 */
+	{
+		const char *ty_error = NULL;
+		if(synth_channel->stream_error || synth_channel->stream_completion_cause == SYNTHESIZER_COMPLETION_CAUSE_ERROR) {
+			ty_error = "TTS-STREAM-ERROR";
+		} else if(synth_channel->stream_ring_bytes_dropped > 0) {
+			ty_error = "TTS-STREAM-DROPPED";
+		}
+		tts_websocket_tingyun_finish(synth_channel, ty_error);
+	}
+#endif
 }
 
 /* ---------- channel destroy ---------- */
@@ -2263,6 +2409,29 @@ static apt_bool_t tts_websocket_channel_speak(mrcp_engine_channel_t *channel, mr
 
 		/* 打印原始请求体的十六进制转储，用于调试编码问题 */
 		hex_dump("MRCP request body", request->body.buf, request->body.length);
+
+#ifdef TINGYUN_ENABLED
+		/* 创建听云事务：每次 SPEAK 请求对应一个 Action，覆盖 WebSocket 连接 + 流式处理 + 音频输出。
+		 * 事务名使用 session_id 便于在听云控制台定位具体会话。 */
+		{
+			const char *session_id = request->channel_id.session_id.buf;
+			char action_name[128];
+			apr_snprintf(action_name, sizeof(action_name), "TTS-SPEAK:%s",
+				session_id && session_id[0] ? session_id : "unknown");
+			synth_channel->ty_action = CreateAction(action_name);
+			if(TingYunValidId(&synth_channel->ty_action)) {
+				/* 附加自定义参数便于控制台过滤 */
+				ActionAddCustomParam(&synth_channel->ty_action, "tts.host", tts_engine->tts_server_host);
+				ActionAddCustomParam(&synth_channel->ty_action, "tts.text_length",
+					apr_psprintf(request->pool, "%"APR_SIZE_T_FMT, request->body.length));
+				if(session_id && session_id[0]) {
+					ActionAddCustomParam(&synth_channel->ty_action, "session.id", session_id);
+				}
+				synth_channel->ty_initialized = 1;
+				LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[TINGYUN] Action created: %s", action_name);
+			}
+		}
+#endif
 
 		/* ========== 使用流式TTS接收 ========== */
 		const char *voice_name = NULL;
@@ -2837,6 +3006,17 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 				fclose(synth_channel->audio_file);
 				synth_channel->audio_file = NULL;
 			}
+#ifdef TINGYUN_ENABLED
+			/* SPEAK-COMPLETE 已发送：设置事务状态码（200=正常，500=错误）。
+			 * Action 本身在后续 cleanup_audio 中销毁（线程 join 之后）。 */
+			if(synth_channel->ty_initialized && TingYunValidId(&synth_channel->ty_action)) {
+				if(terminal_error) {
+					ActionSetStatus(&synth_channel->ty_action, 500);
+				} else {
+					ActionSetStatus(&synth_channel->ty_action, 200);
+				}
+			}
+#endif
 			mrcp_engine_channel_message_send(synth_channel->channel, message);
 		}
 		/* 播放完成（含 post-roll 最后一帧），此处关闭诊断录音文件。

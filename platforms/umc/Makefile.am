@@ -20,7 +20,7 @@ umc_SOURCES            = src/main.cpp \
                          src/setparamsession.cpp \
                          src/verifierscenario.cpp \
                          src/verifiersession.cpp
-umc_LDADD              = $(UNIMRCP_CLIENTAPP_LIBS)
+umc_LDADD              = $(UNIMRCP_CLIENTAPP_LIBS) $(UNIMRCP_CLIENTAPP_TINGYUN_LIBADD)
 umc_LDFLAGS            = $(UNIMRCP_CLIENTAPP_OPTS)
 
 include $(top_srcdir)/build/rules/uniclientapp.am

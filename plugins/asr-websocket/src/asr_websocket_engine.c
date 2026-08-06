@@ -11,6 +11,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef TINGYUN_ENABLED
+#include "tingyun.h"
+#endif
+
 #define RECOG_ENGINE_TASK_NAME "ASR WebSocket Engine"
 #define FUNASR_SERVER_HOST "40.20.85.37"
 #define FUNASR_SERVER_PORT 8888
@@ -72,6 +76,13 @@ struct funasr_channel_t {
     funasr_clock_t clock;
     char *session_id;
     apt_bool_t close_response_pending;
+
+#ifdef TINGYUN_ENABLED
+    /* 听云 APM 埋点字段 */
+    TActionId                ty_action;          /* RECOGNIZE 事务 */
+    TComponentId             ty_ws_component;    /* WebSocket 到 FunASR 服务的外部调用 */
+    int                      ty_initialized;     /* 避免重复销毁 */
+#endif
 };
 
 struct funasr_event_bridge_t {
@@ -506,6 +517,23 @@ static apt_bool_t funasr_recognition_complete(
         "recognition terminal cause=%d generation=%lu",
         (int)cause,
         (unsigned long)channel->control.generation);
+#ifdef TINGYUN_ENABLED
+    /* 识别完成：设置事务状态并完成 WebSocket 外部组件。
+     * Action 本身在 channel close/destroy 时统一销毁。 */
+    if (channel->ty_initialized) {
+        if (TingYunValidId(&channel->ty_ws_component)) {
+            if (cause != RECOGNIZER_COMPLETION_CAUSE_SUCCESS) {
+                ComponentSetError(&channel->ty_ws_component, "ASR-recognition-failed");
+            }
+            ComponentFinish(&channel->ty_ws_component);
+            memset(&channel->ty_ws_component, 0, sizeof(channel->ty_ws_component));
+        }
+        if (TingYunValidId(&channel->ty_action)) {
+            ActionSetStatus(&channel->ty_action,
+                cause == RECOGNIZER_COMPLETION_CAUSE_SUCCESS ? 200 : 500);
+        }
+    }
+#endif
     return mrcp_engine_channel_message_send(channel->channel, message);
 }
 
@@ -554,6 +582,25 @@ static apt_bool_t funasr_control_send_close(void *obj)
         funasr_registry_remove(engine, channel->registry_entry);
     }
     channel->transport = NULL;
+#ifdef TINGYUN_ENABLED
+    /* 通道关闭：销毁听云事务及残留组件。
+     * 正常路径中 recognition_complete 已完成 ws_component 并设置了状态；
+     * 异常路径（连接中断、未收到识别结果）在此兜底销毁。 */
+    if (channel->ty_initialized) {
+        if (TingYunValidId(&channel->ty_ws_component)) {
+            ComponentSetError(&channel->ty_ws_component, "ASR-channel-close-before-complete");
+            ComponentFinish(&channel->ty_ws_component);
+            memset(&channel->ty_ws_component, 0, sizeof(channel->ty_ws_component));
+        }
+        if (TingYunValidId(&channel->ty_action)) {
+            ActionSetStatus(&channel->ty_action, 500);
+            ActionDestroy(&channel->ty_action);
+            memset(&channel->ty_action, 0, sizeof(channel->ty_action));
+        }
+        channel->ty_initialized = 0;
+        LOG_WITH_SID(channel, APT_PRIO_DEBUG, "[TINGYUN] Action destroyed on channel close");
+    }
+#endif
     if (channel->close_response_pending) {
         channel->close_response_pending = FALSE;
         result = mrcp_engine_channel_close_respond(channel->channel);
@@ -654,6 +701,50 @@ static apt_bool_t funasr_channel_recognize(
         response->start_line.status_code = MRCP_STATUS_CODE_METHOD_FAILED;
         return FALSE;
     }
+
+#ifdef TINGYUN_ENABLED
+    /* 创建听云事务：每次 RECOGNIZE 请求对应一个 Action。
+     * 若上一次 RECOGNIZE 的 Action 尚未销毁（通道复用场景），先完成它。 */
+    if (channel->ty_initialized) {
+        if (TingYunValidId(&channel->ty_ws_component)) {
+            ComponentFinish(&channel->ty_ws_component);
+            memset(&channel->ty_ws_component, 0, sizeof(channel->ty_ws_component));
+        }
+        if (TingYunValidId(&channel->ty_action)) {
+            ActionDestroy(&channel->ty_action);
+            memset(&channel->ty_action, 0, sizeof(channel->ty_action));
+        }
+        channel->ty_initialized = 0;
+    }
+    {
+        char action_name[128];
+        apr_snprintf(action_name, sizeof(action_name), "ASR-RECOGNIZE:%s",
+            channel->session_id ? channel->session_id : "unknown");
+        channel->ty_action = CreateAction(action_name);
+        if (TingYunValidId(&channel->ty_action)) {
+            ActionAddCustomParam(&channel->ty_action, "asr.host",
+                channel->engine->server_host ? channel->engine->server_host : FUNASR_SERVER_HOST);
+            if (channel->session_id) {
+                ActionAddCustomParam(&channel->ty_action, "session.id", channel->session_id);
+            }
+            /* 创建 WebSocket 外部调用组件：追踪到 FunASR 服务的连接 */
+            {
+                char ws_url[256];
+                apr_snprintf(ws_url, sizeof(ws_url), "ws://%s:%d%s",
+                    channel->engine->server_host ? channel->engine->server_host : FUNASR_SERVER_HOST,
+                    (int)channel->engine->server_port,
+                    channel->engine->server_path ? channel->engine->server_path : FUNASR_SERVER_PATH);
+                channel->ty_ws_component = CreateExternalComponent(&channel->ty_action, ws_url);
+                if (TingYunValidId(&channel->ty_ws_component)) {
+                    LOG_WITH_SID(channel, APT_PRIO_DEBUG,
+                        "[TINGYUN] Action + WS ExternalComponent created: %s", action_name);
+                }
+            }
+            channel->ty_initialized = 1;
+        }
+    }
+#endif
+
     channel->recog_request = request;
     response->start_line.request_state = MRCP_REQUEST_STATE_INPROGRESS;
     LOG_WITH_SID(

@@ -211,6 +211,8 @@ jobs:
           configure_args=(--prefix=/opt/tte-mrcp --with-sofia-sip="$SOFIA_PREFIX")
           if [ "$TARGET" = kylinv10-aarch64 ]; then
             configure_args+=(--build=aarch64-unknown-linux-gnu)
+            # TingYun APM SDK does not ship aarch64 libraries; explicitly disable.
+            configure_args+=(--disable-tingyun)
           fi
           ../../configure "${configure_args[@]}"
           make -j"$(getconf _NPROCESSORS_ONLN)"

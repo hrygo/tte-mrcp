@@ -15,9 +15,19 @@
  */
 
 #include "umcconsole.h"
+#ifdef TINGYUN_ENABLED
+#include <cstdlib>
+#include "tingyun.h"
+#endif
 
 int main(int argc, const char * const *argv)
 {
+#ifdef TINGYUN_ENABLED
+	/* TingYun APM agent initialization (async background startup). */
+	TingYunAgentInit();
+	std::atexit(TingYunAgentStop);
+#endif
+
 	UmcConsole console;
 	console.Run(argc,argv);
 	return 0;

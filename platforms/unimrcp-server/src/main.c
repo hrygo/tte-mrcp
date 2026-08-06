@@ -21,6 +21,9 @@
 #include "apt_dir_layout.h"
 #include "apt_log.h"
 #include "uni_revision.h"
+#ifdef TINGYUN_ENABLED
+#include "tingyun.h"
+#endif
 
 typedef struct {
 	const char   *root_dir_path;
@@ -184,6 +187,12 @@ int main(int argc, const char * const *argv)
 		apr_terminate();
 		return 0;
 	}
+
+#ifdef TINGYUN_ENABLED
+	/* TingYun APM agent initialization (async background startup). */
+	TingYunAgentInit();
+	atexit(TingYunAgentStop);
+#endif
 
 	/* create APR pool */
 	pool = apt_pool_create();

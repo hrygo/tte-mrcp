@@ -21,6 +21,9 @@
 #include <apr_thread_proc.h>
 #include "asr_engine.h"
 #include "asr_engine_common.h"
+#ifdef TINGYUN_ENABLED
+#include "tingyun.h"
+#endif
 
 #define DEFAULT_GRAMMAR_FILE "grammar.xml"
 #define DEFAULT_INPUT_FILE "one-8kHz.pcm"
@@ -362,6 +365,12 @@ int main(int argc, const char * const *argv)
 		apr_terminate();
 		return 0;
 	}
+
+#ifdef TINGYUN_ENABLED
+	/* TingYun APM agent initialization (async background startup). */
+	TingYunAgentInit();
+	atexit(TingYunAgentStop);
+#endif
 
 	/* load options */
 	options = options_load(argc,argv);

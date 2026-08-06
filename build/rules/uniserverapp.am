@@ -13,10 +13,17 @@ UNIMRCP_SERVERAPP_INCLUDES = -I$(top_srcdir)/platforms/libunimrcp-server/include
                              -I$(top_srcdir)/libs/mpf/include \
                              -I$(top_srcdir)/libs/apr-toolkit/include \
                              -I$(top_srcdir)/build \
-                             $(UNIMRCP_APR_INCLUDES)
+                             $(UNIMRCP_APR_INCLUDES) \
+                             $(TINGYUN_CPPFLAGS)
 
 # Libraries (LDADD)
 UNIMRCP_SERVERAPP_LIBS     = $(top_builddir)/platforms/libunimrcp-server/libunimrcpserver.la
+
+# Conditional TingYun APM static library (set by UNI_TINGYUN_APM).
+UNIMRCP_SERVERAPP_TINGYUN_LIBADD =
+if TINGYUN_ENABLED
+UNIMRCP_SERVERAPP_TINGYUN_LIBADD = $(TINGYUN_LIBADD)
+endif
 
 # Linker options (LDFLAGS)
 UNIMRCP_SERVERAPP_OPTS     =
