@@ -64,6 +64,26 @@ AC_DEFUN([UNI_TINGYUN_APM],[
             AC_DEFINE([TINGYUN_ENABLED], [1],
                 [Define to 1 to enable TingYun APM instrumentation])
             enable_tingyun="yes"
+
+            dnl Optional SHA-256 integrity check for the selected static library.
+            dnl Only runs when sha256sum is available and SHA256SUMS file exists.
+            dnl --enable-tingyun=yes treats mismatch as a hard error;
+            dnl auto mode logs a warning and continues.
+            AC_PATH_PROG([TINGYUN_SHA256SUM], [sha256sum], [])
+            AS_IF([test -n "$TINGYUN_SHA256SUM" && test -f "$tingyun_dir/lib/SHA256SUMS"], [
+                AC_MSG_CHECKING([TingYun SDK integrity (sha256sum)])
+                _tingyun_saved_dir=`pwd`
+                cd "$tingyun_dir/lib"
+                if $TINGYUN_SHA256SUM -c --quiet --status SHA256SUMS 2>/dev/null; then
+                    AC_MSG_RESULT([ok])
+                else
+                    AC_MSG_RESULT([FAILED])
+                    AS_IF([test "$enable_tingyun" = "yes"],
+                        [AC_MSG_ERROR([TingYun SDK library checksum mismatch — see libs/tingyun/lib/SHA256SUMS])],
+                        [AC_MSG_WARN([TingYun SDK library checksum mismatch — APM data may be unreliable])])
+                fi
+                cd "$_tingyun_saved_dir"
+            ])
         ])
     ])
 

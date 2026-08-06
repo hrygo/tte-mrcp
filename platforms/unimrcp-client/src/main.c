@@ -23,6 +23,11 @@
 #include "uni_revision.h"
 #ifdef TINGYUN_ENABLED
 #include "tingyun.h"
+/* 包装函数：确保 TingYunAgentStop 在 apr_terminate 之前运行。 */
+static void tingyun_atexit(void)
+{
+	TingYunAgentStop();
+}
 #endif
 
 typedef struct {
@@ -209,9 +214,10 @@ int main(int argc, const char * const *argv)
 	}
 
 #ifdef TINGYUN_ENABLED
-	/* TingYun APM agent initialization (async background startup). */
+	/* TingYun APM agent initialization (async background startup).
+	 * 通过 tingyun_atexit 包装函数注册，确保退出顺序：TingYunAgentStop → apr_terminate。 */
 	TingYunAgentInit();
-	atexit(TingYunAgentStop);
+	atexit(tingyun_atexit);
 #endif
 
 	/* create APR pool */

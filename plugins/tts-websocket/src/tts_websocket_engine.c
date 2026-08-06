@@ -248,6 +248,8 @@ struct tts_websocket_channel_t {
 	TComponentId             ty_ws_component;
 	/** 流式音频处理线程的内部组件（性能分解） */
 	TComponentId             ty_stream_component;
+	/** 跨应用追踪 ID（ComponentCreateTrackId 生成，注入到 session.config） */
+	char                     ty_track_id[128];
 	/** 埋点字段是否已初始化（避免重复销毁） */
 	int                      ty_initialized;
 #endif
@@ -1396,14 +1398,21 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 			tts_engine->tts_server_host, tts_engine->tts_server_port);
 		synth_channel->ty_ws_component = CreateExternalComponent(&synth_channel->ty_action, ws_url);
 		if(TingYunValidId(&synth_channel->ty_ws_component)) {
-			/* 生成跨应用追踪 ID，可注入到下游 WebSocket 消息中实现全链路追踪 */
-			char track_id[64] = {0};
-			int track_len = ComponentCreateTrackId(&synth_channel->ty_ws_component, track_id, sizeof(track_id));
+			/* 生成跨应用追踪 ID，注入到 session.config 消息中传递给 TTS 服务端，
+			 * 使下游服务（如已集成听云 SDK）可关联全链路追踪。 */
+			char track_id[128] = {0};
+			int track_len = ComponentCreateTrackId(&synth_channel->ty_ws_component, track_id, sizeof(track_id) - 1);
 			if(track_len > 0) {
+				apr_cpystrn(synth_channel->ty_track_id, track_id, sizeof(synth_channel->ty_track_id));
 				LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[TINGYUN] WS ExternalComponent created, track_id=%s", track_id);
 			} else {
-				LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[TINGYUN] WS ExternalComponent created");
+				synth_channel->ty_track_id[0] = '\0';
+				LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[TINGYUN] WS ExternalComponent created (no track_id)");
 			}
+		} else {
+			LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+				"[TINGYUN] CreateExternalComponent failed for %s — external call to TTS service will not be traced",
+				ws_url);
 		}
 	}
 #endif
@@ -1412,7 +1421,18 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 	if(!voice_name || voice_name[0] == '\0') {
 		voice_name = "yamei_fangyan";
 	}
-	json_body = apr_psprintf(pool, "{\"type\":\"session.config\",\"voice\":\"%s\",\"task_type\":\"CustomVoice\",\"language\":\"Auto\",\"split_granularity\":\"sentence\",\"stream_audio\":true,\"response_format\":\"pcm\",\"system_id\":\"ncc\",\"scene_id\":\"outcall\",\"call_id\":\"%s\"}", voice_name, (synth_channel && synth_channel->speak_request) ? synth_channel->speak_request->channel_id.session_id.buf : "");
+#ifdef TINGYUN_ENABLED
+	/* 若生成了跨应用追踪 ID，将其注入 session.config 供 TTS 服务端关联全链路追踪 */
+	if(synth_channel->ty_track_id[0]) {
+		json_body = apr_psprintf(pool, "{\"type\":\"session.config\",\"voice\":\"%s\",\"task_type\":\"CustomVoice\",\"language\":\"Auto\",\"split_granularity\":\"sentence\",\"stream_audio\":true,\"response_format\":\"pcm\",\"system_id\":\"ncc\",\"scene_id\":\"outcall\",\"call_id\":\"%s\",\"tingyun_track_id\":\"%s\"}",
+			voice_name,
+			(synth_channel && synth_channel->speak_request) ? synth_channel->speak_request->channel_id.session_id.buf : "",
+			synth_channel->ty_track_id);
+	} else
+#endif
+	{
+		json_body = apr_psprintf(pool, "{\"type\":\"session.config\",\"voice\":\"%s\",\"task_type\":\"CustomVoice\",\"language\":\"Auto\",\"split_granularity\":\"sentence\",\"stream_audio\":true,\"response_format\":\"pcm\",\"system_id\":\"ncc\",\"scene_id\":\"outcall\",\"call_id\":\"%s\"}", voice_name, (synth_channel && synth_channel->speak_request) ? synth_channel->speak_request->channel_id.session_id.buf : "");
+	}
 	if(!websocket_send_text(sock, json_body, strlen(json_body), pool)) {
 		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Failed to send session.config");
 		apr_socket_close(sock);
@@ -1730,6 +1750,7 @@ static mrcp_engine_channel_t* tts_websocket_engine_channel_create(mrcp_engine_t 
 	memset(&synth_channel->ty_action, 0, sizeof(synth_channel->ty_action));
 	memset(&synth_channel->ty_ws_component, 0, sizeof(synth_channel->ty_ws_component));
 	memset(&synth_channel->ty_stream_component, 0, sizeof(synth_channel->ty_stream_component));
+	synth_channel->ty_track_id[0] = '\0';
 	synth_channel->ty_initialized = 0;
 #endif
 
@@ -1963,6 +1984,7 @@ static void tts_websocket_tingyun_finish(
 		memset(&synth_channel->ty_action, 0, sizeof(synth_channel->ty_action));
 	}
 	synth_channel->ty_initialized = 0;
+	synth_channel->ty_track_id[0] = '\0';
 	LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[TINGYUN] Action finished%s%s",
 		error_message ? " with error: " : "", error_message ? error_message : "");
 }
@@ -2429,6 +2451,10 @@ static apt_bool_t tts_websocket_channel_speak(mrcp_engine_channel_t *channel, mr
 				}
 				synth_channel->ty_initialized = 1;
 				LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[TINGYUN] Action created: %s", action_name);
+			} else {
+				LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+					"[TINGYUN] CreateAction failed for %s — APM data will not be collected for this SPEAK",
+					action_name);
 			}
 		}
 #endif

@@ -72,17 +72,53 @@ set (TINGYUN_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/libs/tingyun/include")
 set (TINGYUN_LIB_DIR     "${CMAKE_SOURCE_DIR}/libs/tingyun/lib")
 if (ENABLE_TINGYUN_APM)
 	set (_tingyun_lib "")
+	set (_tingyun_is_musl FALSE)
 	if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+		# Detect musl libc to select the correct SDK static library.
+		# ldd on musl prints "musl" in its version output; glibc prints "GLIBC" / "ldd (GNU libc)".
+		execute_process (
+			COMMAND ldd --version
+			OUTPUT_VARIABLE _tingyun_ldd_out
+			ERROR_VARIABLE  _tingyun_ldd_out
+			OUTPUT_STRIP_TRAILING_WHITESPACE
+			ERROR_STRIP_TRAILING_WHITESPACE
+			RESULT_VARIABLE _tingyun_ldd_rc)
+		if (_tingyun_ldd_out MATCHES "[Mm]usl")
+			set (_tingyun_is_musl TRUE)
+		endif ()
+		unset (_tingyun_ldd_out)
+		unset (_tingyun_ldd_rc)
+
 		if (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
-			# Prefer musl build only when the compiler targets musl.
-			# Default path uses glibc; users can override by editing this block.
-			set (_tingyun_lib "libtingyun_sdk.a")
+			if (_tingyun_is_musl)
+				set (_tingyun_lib "libtingyun_musl.x64.a")
+			else ()
+				set (_tingyun_lib "libtingyun_sdk.a")
+			endif ()
 		elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "i.86|x86")
 			set (_tingyun_lib "libtingyun_sdk.x86.a")
 		endif ()
 	endif ()
 	if (_tingyun_lib AND EXISTS "${TINGYUN_INCLUDE_DIR}/tingyun.h"
 			AND EXISTS "${TINGYUN_LIB_DIR}/${_tingyun_lib}")
+		# Optional SHA-256 integrity verification.
+		set (_tingyun_sums "${TINGYUN_LIB_DIR}/SHA256SUMS")
+		find_program (_tingyun_sha256 sha256sum shasum)
+		if (_tingyun_sha256 AND EXISTS "${_tingyun_sums}")
+			execute_process (
+				COMMAND ${_tingyun_sha256} -c --quiet --status SHA256SUMS
+				WORKING_DIRECTORY "${TINGYUN_LIB_DIR}"
+				RESULT_VARIABLE _tingyun_sha_result
+				OUTPUT_QUIET ERROR_QUIET)
+			if (NOT _tingyun_sha_result EQUAL 0)
+				message (WARNING "TingYun APM: SHA-256 checksum mismatch in "
+						"libs/tingyun/lib/ — APM data may be unreliable. "
+						"Regenerate SHA256SUMS after SDK upgrades.")
+			endif ()
+		endif ()
+		unset (_tingyun_sha256)
+		unset (_tingyun_sums)
+		unset (_tingyun_sha_result)
 		set (TINGYUN_FOUND TRUE)
 		set (TINGYUN_LIBRARY "${TINGYUN_LIB_DIR}/${_tingyun_lib}")
 		# Propagate preprocessor symbol to every target in this directory scope.

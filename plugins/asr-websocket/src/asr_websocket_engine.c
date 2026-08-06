@@ -518,8 +518,9 @@ static apt_bool_t funasr_recognition_complete(
         (int)cause,
         (unsigned long)channel->control.generation);
 #ifdef TINGYUN_ENABLED
-    /* 识别完成：设置事务状态并完成 WebSocket 外部组件。
-     * Action 本身在 channel close/destroy 时统一销毁。 */
+    /* 识别完成：设置事务状态、完成 WebSocket 外部组件，并立即销毁 Action。
+     * 立即销毁（而非等待 channel close）使听云事务延迟精确反映识别实际耗时，
+     * 避免 channel 复用或长连接场景下事务延迟指标虚高。 */
     if (channel->ty_initialized) {
         if (TingYunValidId(&channel->ty_ws_component)) {
             if (cause != RECOGNIZER_COMPLETION_CAUSE_SUCCESS) {
@@ -531,7 +532,12 @@ static apt_bool_t funasr_recognition_complete(
         if (TingYunValidId(&channel->ty_action)) {
             ActionSetStatus(&channel->ty_action,
                 cause == RECOGNIZER_COMPLETION_CAUSE_SUCCESS ? 200 : 500);
+            ActionDestroy(&channel->ty_action);
+            memset(&channel->ty_action, 0, sizeof(channel->ty_action));
         }
+        channel->ty_initialized = 0;
+        LOG_WITH_SID(channel, APT_PRIO_DEBUG,
+            "[TINGYUN] Action destroyed on recognition complete (cause=%d)", (int)cause);
     }
 #endif
     return mrcp_engine_channel_message_send(channel->channel, message);
@@ -583,9 +589,10 @@ static apt_bool_t funasr_control_send_close(void *obj)
     }
     channel->transport = NULL;
 #ifdef TINGYUN_ENABLED
-    /* 通道关闭：销毁听云事务及残留组件。
-     * 正常路径中 recognition_complete 已完成 ws_component 并设置了状态；
-     * 异常路径（连接中断、未收到识别结果）在此兜底销毁。 */
+    /* 通道关闭：兜底销毁听云事务及残留组件。
+     * 正常路径中 recognition_complete 已销毁 Action 并置 ty_initialized=0；
+     * 仅当异常路径（连接中断、未收到识别结果、通道强制关闭）绕过
+     * recognition_complete 时，此处才实际执行销毁。 */
     if (channel->ty_initialized) {
         if (TingYunValidId(&channel->ty_ws_component)) {
             ComponentSetError(&channel->ty_ws_component, "ASR-channel-close-before-complete");
@@ -703,8 +710,9 @@ static apt_bool_t funasr_channel_recognize(
     }
 
 #ifdef TINGYUN_ENABLED
-    /* 创建听云事务：每次 RECOGNIZE 请求对应一个 Action。
-     * 若上一次 RECOGNIZE 的 Action 尚未销毁（通道复用场景），先完成它。 */
+    /* 防御性清理：若通道复用且上一次 RECOGNIZE 的 Action 尚未销毁
+     * （例如异常路径跳过了 recognition_complete），在此先清理。
+     * 正常路径中 ty_initialized 已在 recognition_complete 中置 0。 */
     if (channel->ty_initialized) {
         if (TingYunValidId(&channel->ty_ws_component)) {
             ComponentFinish(&channel->ty_ws_component);
@@ -738,9 +746,17 @@ static apt_bool_t funasr_channel_recognize(
                 if (TingYunValidId(&channel->ty_ws_component)) {
                     LOG_WITH_SID(channel, APT_PRIO_DEBUG,
                         "[TINGYUN] Action + WS ExternalComponent created: %s", action_name);
+                } else {
+                    LOG_WITH_SID(channel, APT_PRIO_WARNING,
+                        "[TINGYUN] CreateExternalComponent failed for %s — external call to ASR service will not be traced",
+                        ws_url);
                 }
             }
             channel->ty_initialized = 1;
+        } else {
+            LOG_WITH_SID(channel, APT_PRIO_WARNING,
+                "[TINGYUN] CreateAction failed for %s — APM data will not be collected for this RECOGNIZE",
+                action_name);
         }
     }
 #endif

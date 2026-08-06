@@ -1,0 +1,15 @@
+# TingYun APM C SDK — SHA-256 checksums
+#
+# Verified by build/acmacros/uni_tingyun.m4 (autoconf) and CMakeLists.txt (CMake)
+# when sha256sum is available.  Mismatch aborts an explicit --enable-tingyun=yes
+# configure and logs a WARNING in CMake auto-detect mode.
+#
+# To regenerate after an SDK upgrade:
+#   cd libs/tingyun/lib && shasum -a 256 *.a *.so > SHA256SUMS
+#
+34600740bc263ea249b5a8bca70b6c5fb79080eebcb0842600aabc6102e97f28  libtingyun_sdk.a
+1f7174bcbff295dd8ca6dfb70764d1c36791f8d15ace1ce0b1698788462b93af  libtingyun_sdk.x86.a
+f66ba36ec81c592c3f269519561b478a4f3b25207706b48753f9f04899be8d65  libtingyun_musl.x64.a
+16bc078f48693ae1793c259debd93455b1124847ef318d3f85c7f7fcfc967571  libtingyun.so
+ae2409ed5522372a24342bb277a351215969bbc3f84a94828cca76fd942d192f  libtingyun3.x86.so
+18c50f9c8b9445bee67723a4a346a6b09190e79bc077c4c365ebdac10e297bcf  libtingyun3-musl.x64.so
