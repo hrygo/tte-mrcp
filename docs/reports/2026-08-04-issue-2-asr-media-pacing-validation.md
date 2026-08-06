@@ -10,7 +10,7 @@ Issue：[#2](https://github.com/hrygo/tte-mrcp/issues/2)
 
 macOS 上 CMake 与 Autotools 的插件本体和 4 个插件测试均实际编译，测试 4/4 通过。新增的 20-worker 回归覆盖 20 个独立 transport、每通道 50 个 20 ms PCM 帧、最终结果和关闭 fence，全部通道零队列溢出。
 
-完整 UMC/Server 构建受仓库既有公共层问题阻断，因此未执行真实的 20 个 UMC 会话实验，也没有把 transport 单测冒充为端到端结果。Windows、Linux 和生产灰度均标记为未验证。
+macOS 上完整 UMC/Server 构建仍受仓库既有公共层问题阻断，因此本地未执行真实的 20 个 UMC 会话实验，也没有把 transport 单测冒充为端到端结果。但 Linux 门禁已由 GitHub Actions run [30967036638](https://github.com/hrygo/tte-mrcp/actions/runs/30967036638) 验证：`verify-linux` 在 x86_64/aarch64 两架构各执行 1 次预热 + 20 并发 split-payload loopback，rhel7 与 kylin 均 20/20 成功、零 overrun、非故障 gap p99/max 10–11 ms（详见 §4 证据表）。Windows 与生产灰度仍未验证。
 
 ## 2. 源码事实
 
