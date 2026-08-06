@@ -56,6 +56,21 @@ static int test_all_one_byte_chunks_match_contiguous_input(void)
     return memcmp(output, input, produced) == 0;
 }
 
+static int test_silence_fill_covers_complete_frame(void)
+{
+    unsigned char frame[160];
+    size_t i;
+
+    memset(frame, 0x00, sizeof(frame));
+    tts_websocket_pcm_fill_silence(frame, sizeof(frame));
+    for (i = 0; i < sizeof(frame); ++i) {
+        if (frame[i] != 0xFF) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 int main(void)
 {
     if (!test_odd_chunks_preserve_bytes()) {
@@ -66,6 +81,10 @@ int main(void)
         fprintf(stderr, "test_all_one_byte_chunks_match_contiguous_input failed\n");
         return 1;
     }
-    puts("2/2 PCM streaming tests passed");
+    if (!test_silence_fill_covers_complete_frame()) {
+        fprintf(stderr, "test_silence_fill_covers_complete_frame failed\n");
+        return 1;
+    }
+    puts("3/3 PCM streaming tests passed");
     return 0;
 }
