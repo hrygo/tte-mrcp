@@ -1,5 +1,7 @@
 ## 快速构建
 
+服务器使用 GitHub Release/Actions Artifact 部署和绿灯测试见 [Release Artifacts 部署与绿灯测试](docs/deployment/release-artifacts.md)。
+
 Agent 进行后续排查、优化和开发时，请先阅读 [AGENTS.md](AGENTS.md)；其中的架构边界、SSOT 规则和验证门禁以当前源码为准。
 
 ```sh
