@@ -9,6 +9,7 @@ set root_dir [lindex $argv 2]
 set worker_id [lindex $argv 3]
 set stop_after_start [lindex $argv 4]
 set result "UNKNOWN"
+set umc_pid ""
 
 if {$worker_id == ""} {
     set worker_id 0
@@ -22,6 +23,7 @@ if {[info exists env(UMC_BIN)] && $env(UMC_BIN) != ""} {
 
 # 启动 umc (使用 -l 6 INFO 级别，确保 NLSML 识别结果可见)
 spawn $umc_bin -r $root_dir -l 6 -o 1
+set umc_pid $spawn_id
 
 # 等待提示符
 expect {
@@ -240,7 +242,15 @@ if {[catch {send "exit\r"}]} {
 
 # Release the Expect channel if UMC is still draining its shutdown tasks.
 if {$cleanup_timeout} {
-    catch {close}
+    # close waits for the child process.  Under mixed ARM load UMC can remain
+    # in shutdown for the full outer Expect timeout, even after MRCP already
+    # reported a successful completion.  Detach first, then terminate the
+    # stuck client so this cleanup path cannot rewrite a successful result as
+    # RESULT:TIMEOUT.
+    catch {disconnect}
+    if {$umc_pid != ""} {
+        catch {exec kill -TERM [exp_pid -i $umc_pid]}
+    }
 }
 
 # 输出结果 (包含 NLSML 识别文本)

@@ -996,7 +996,8 @@ static apr_status_t funasr_default_io_poll(
             *events |= FUNASR_IO_WRITABLE;
         }
         if ((descriptors[0].rtnevents &
-             (APR_POLLERR | APR_POLLHUP | APR_POLLNVAL)) != 0) {
+             (APR_POLLERR | APR_POLLHUP | APR_POLLNVAL)) != 0 &&
+            (*events & FUNASR_IO_READABLE) == 0) {
             return APR_EOF;
         }
     }
@@ -2018,7 +2019,8 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                     tx_size != tx_offset,
                     &events);
                 if (poll_status != APR_SUCCESS &&
-                    !funasr_status_retryable(poll_status)) {
+                    !funasr_status_retryable(poll_status) &&
+                    (events & FUNASR_IO_READABLE) == 0) {
                     terminal_failure = FUNASR_FAILURE_EOF;
                     generation_failed = TRUE;
                     break;
