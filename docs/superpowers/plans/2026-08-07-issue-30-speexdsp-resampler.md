@@ -51,8 +51,8 @@ Use a temporary source directory and the fixed prefix `/tmp/tte-mrcp-speexdsp-1.
 rtk pkg-config --atleast-version=1.2.1 speexdsp
 rtk git clone --branch SpeexDSP-1.2.1 https://github.com/xiph/speexdsp.git /tmp/tte-mrcp-speexdsp-src
 rtk git -C /tmp/tte-mrcp-speexdsp-src rev-parse HEAD
-rtk /tmp/tte-mrcp-speexdsp-src/autogen.sh
-rtk /tmp/tte-mrcp-speexdsp-src/configure --prefix=/tmp/tte-mrcp-speexdsp-1.2.1
+rtk sh -c 'cd /tmp/tte-mrcp-speexdsp-src && ./autogen.sh'
+rtk sh -c 'cd /tmp/tte-mrcp-speexdsp-src && ./configure --prefix=/tmp/tte-mrcp-speexdsp-1.2.1'
 rtk make -C /tmp/tte-mrcp-speexdsp-src -j4
 rtk make -C /tmp/tte-mrcp-speexdsp-src install
 rtk env PKG_CONFIG_PATH=/tmp/tte-mrcp-speexdsp-1.2.1/lib/pkgconfig pkg-config --modversion speexdsp
