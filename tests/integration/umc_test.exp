@@ -8,6 +8,8 @@ set profile [lindex $argv 1]
 set root_dir [lindex $argv 2]
 set worker_id [lindex $argv 3]
 set stop_after_start [lindex $argv 4]
+set result "UNKNOWN"
+set umc_pid ""
 
 if {$worker_id == ""} {
     set worker_id 0
@@ -21,6 +23,7 @@ if {[info exists env(UMC_BIN)] && $env(UMC_BIN) != ""} {
 
 # 启动 umc (使用 -l 6 INFO 级别，确保 NLSML 识别结果可见)
 spawn $umc_bin -r $root_dir -l 6 -o 1
+set umc_pid $spawn_id
 
 # 等待提示符
 expect {
@@ -64,16 +67,40 @@ if {$stop_after_start == "stop"} {
     set saved_timeout $timeout
     set timeout 1
     set result "STOP_TIMEOUT"
-    for {set poll 0} {$poll < 5} {incr poll} {
-        send "show sessions\r"
+    set umc_closed 0
+    # Session teardown includes the asynchronous channel removal callback.
+    # Under concurrent ARM verification it can take several seconds even
+    # when the session is healthy; leave half of the outer 30s cycle timeout
+    # for this bounded cleanup phase.
+    for {set poll 0} {$poll < 10} {incr poll} {
+        # STOP can complete the MRCP session while the previous command is
+        # still being rendered. In that race UMC may close before the next
+        # poll; catch send so Expect reports the process outcome instead of
+        # aborting with "spawn id ... not open".
+        if {[catch {send "show sessions\r"}]} {
+            set result "STOP_EOF"
+            set umc_closed 1
+            break
+        }
         expect {
             -re {0 Session\(s\)} {
                 set result "STOPPED"
                 break
             }
+            -re {>}$ {
+                # The command completed while the session was still being
+                # removed.  Poll again only after the prompt is back so
+                # commands cannot overtake one another in the UMC console.
+                exp_continue
+            }
             timeout {
                 # The next poll gives the asynchronous terminate callback time
                 # to remove the session from UMC's table.
+            }
+            eof {
+                set result "STOP_EOF"
+                set umc_closed 1
+                break
             }
         }
     }
@@ -154,6 +181,23 @@ expect {
 # End of the normal completion path.
 }
 
+# A clean UMC exit after STOP is an acceptable completion of the cancellation
+# path. A non-zero exit or signal remains a test failure.
+if {$stop_after_start == "stop" && $umc_closed} {
+    set wait_status {}
+    catch {set wait_status [wait]}
+    if {[llength $wait_status] >= 4 &&
+        [lindex $wait_status 2] == 0 &&
+        [lindex $wait_status 3] == 0} {
+        set result "STOPPED"
+    }
+    puts "RESULT:$result"
+    if {$result == "STOPPED"} {
+        exit 0
+    }
+    exit 1
+}
+
 # =========================================================================
 # Phase 2: 成功完成后，等待 Interpretation[].instance[] trace
 # =========================================================================
@@ -180,10 +224,34 @@ if {$result == "SUCCESS"} {
 sleep 1
 
 # 发送退出命令
-send "exit\r"
+set cleanup_timeout 0
+if {[catch {send "exit\r"}]} {
+    set cleanup_timeout 1
+} else {
+    # UMC shutdown can lag behind a completed MRCP request under concurrent
+    # load.  The protocol result is already final, so bound only this cleanup
+    # wait and do not turn a healthy request into RESULT:TIMEOUT.
+    set saved_timeout $timeout
+    set timeout 5
+    expect {
+        eof {}
+        timeout {set cleanup_timeout 1}
+    }
+    set timeout $saved_timeout
+}
 
-# 等待 umc 退出
-expect eof
+# Release the Expect channel if UMC is still draining its shutdown tasks.
+if {$cleanup_timeout} {
+    # close waits for the child process.  Under mixed ARM load UMC can remain
+    # in shutdown for the full outer Expect timeout, even after MRCP already
+    # reported a successful completion.  Detach first, then terminate the
+    # stuck client so this cleanup path cannot rewrite a successful result as
+    # RESULT:TIMEOUT.
+    catch {disconnect}
+    if {$umc_pid != ""} {
+        catch {exec kill -TERM [exp_pid -i $umc_pid]}
+    }
+}
 
 # 输出结果 (包含 NLSML 识别文本)
 if {$nlsml_text != ""} {

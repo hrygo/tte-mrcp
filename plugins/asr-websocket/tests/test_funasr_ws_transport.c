@@ -408,6 +408,7 @@ typedef struct fake_io_t {
     apt_bool_t stall_writes;
     int poll_want_write;
     int poll_without_write;
+    apt_bool_t eof_with_readable;
     int wake_count;
     unsigned char handshake_suffix[256];
     apr_size_t handshake_suffix_size;
@@ -476,6 +477,9 @@ static apr_status_t fake_io_poll(
     if (*events == 0) {
         apr_sleep(1000);
         return APR_TIMEUP;
+    }
+    if (io->eof_with_readable && (*events & FUNASR_IO_READABLE) != 0) {
+        return APR_EOF;
     }
     return APR_SUCCESS;
 }
@@ -1606,6 +1610,71 @@ static void test_worker_preserves_handshake_sticky_frame(apr_pool_t *pool)
                funasr_transport_join_closed(transport) == APR_SUCCESS);
 }
 
+static void test_worker_reads_data_when_poll_reports_eof_with_readable(
+    apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    static const char response[] = "{\"code\":0,\"text\":\"hup\"}";
+    funasr_transport_config_t config;
+    funasr_audio_format_t format;
+    funasr_transport_t *transport;
+    fake_io_t io;
+    event_collector_t collector;
+    apr_int64_t now_us = 2600000;
+    unsigned char frame[2 + sizeof(response) - 1];
+
+    memset(&io, 0, sizeof(io));
+    memset(&collector, 0, sizeof(collector));
+    apr_thread_mutex_create(&io.mutex, APR_THREAD_MUTEX_DEFAULT, pool);
+    apr_thread_mutex_create(
+        &collector.mutex,
+        APR_THREAD_MUTEX_DEFAULT,
+        pool);
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.clock.now_us = fake_now_us;
+    config.clock.obj = &now_us;
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+    config.io_vtable = &fake_vtable;
+    config.io_obj = &io;
+    transport = funasr_transport_create(pool, 49, &config);
+    memset(&format, 0, sizeof(format));
+    format.input_sample_rate = 16000;
+    format.output_sample_rate = 16000;
+    format.channel_count = 1;
+    format.sample_width = 2;
+    format.call_id = "hup-test";
+
+    CHECK_TRUE("HUP generation begins",
+               funasr_transport_begin_generation(transport, 81, &format));
+    CHECK_TRUE("HUP handshake completes", fake_io_wait_handshake(&io));
+    frame[0] = 0x81;
+    frame[1] = (unsigned char)(sizeof(response) - 1U);
+    memcpy(frame + 2, response, sizeof(response) - 1U);
+    fake_io_append_inbound(&io, frame, sizeof(frame));
+    apr_thread_mutex_lock(io.mutex);
+    io.eof_with_readable = TRUE;
+    apr_thread_mutex_unlock(io.mutex);
+    funasr_transport_wake(transport);
+
+    CHECK_TRUE("data survives poll HUP", wait_for_collector(&collector, 0, 1));
+    CHECK_TRUE("HUP final text preserved", strcmp(collector.final_text, "hup") == 0);
+    CHECK_TRUE("HUP does not report transport failure", collector.failures == 0);
+    funasr_transport_request_close(transport);
+    CHECK_TRUE("HUP worker closes", wait_for_collector(&collector, 2, 1));
+    CHECK_TRUE("HUP worker joins", funasr_transport_join_closed(transport) == APR_SUCCESS);
+}
+
 static void test_worker_reports_one_queue_overrun(
     apr_pool_t *pool)
 {
@@ -1992,6 +2061,7 @@ int main(void)
     test_worker_natural_endpoint_flushes_short_input(pool);
     test_twenty_transport_workers_remain_independent(pool);
     test_worker_preserves_handshake_sticky_frame(pool);
+    test_worker_reads_data_when_poll_reports_eof_with_readable(pool);
     test_worker_reports_one_queue_overrun(pool);
     test_worker_write_stall_uses_fake_clock(pool);
     test_stop_interrupts_stalled_handshake(pool);

@@ -26,4 +26,9 @@ size_t tts_websocket_pcm_accumulate(
     size_t output_capacity,
     size_t alignment);
 
+/** Fill a complete PCMU frame with the G.711 mu-law silence value. */
+void tts_websocket_pcm_fill_silence(
+    unsigned char *buffer,
+    size_t size);
+
 #endif
