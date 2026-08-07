@@ -350,9 +350,7 @@ static apt_bool_t tts_websocket_stream_write_audio(tts_websocket_channel_t *synt
 	while(total_written < size) {
 		/* STOP is terminal for the producer. Do not admit any remaining data
 		 * from this write, especially a resampler finish tail. */
-		if(synth_channel->stream_stop_requested ||
-			 tts_websocket_stream_pipeline_stop_requested(
-				synth_channel->stream_pipeline)) {
+		if(synth_channel->stream_stop_requested) {
 			/* 诊断：stop 路径丢弃的字节会计入 dropped（8k 录音在此之前已落盘，
 			 * 因此录音完整但 ring 缺尾时此计数器 > 0） */
 			synth_channel->stream_ring_bytes_written += total_written;
@@ -367,9 +365,7 @@ static apt_bool_t tts_websocket_stream_write_audio(tts_websocket_channel_t *synt
 		/* STOP is published outside this writer's loop. Recheck it after
 		 * acquiring the mutex so a STOP between the precheck and lock cannot
 		 * admit a tail or another regular audio chunk. */
-		if(synth_channel->stream_stop_requested ||
-			tts_websocket_stream_pipeline_stop_requested(
-				synth_channel->stream_pipeline)) {
+		if(synth_channel->stream_stop_requested) {
 			apr_thread_mutex_unlock(synth_channel->stream_buffer_mutex);
 			synth_channel->stream_ring_bytes_written += total_written;
 			synth_channel->stream_ring_bytes_dropped += size - total_written;
@@ -455,25 +451,26 @@ static apt_bool_t tts_websocket_stream_write_audio(tts_websocket_channel_t *synt
  * boundary between its check and the ring write. */
 static void tts_websocket_stream_request_stop(tts_websocket_channel_t *synth_channel)
 {
+	tts_websocket_stream_pipeline_t *pipeline;
+
 	if(!synth_channel) {
 		return;
 	}
 	if(synth_channel->stream_buffer_mutex) {
 		apr_thread_mutex_lock(synth_channel->stream_buffer_mutex);
-		if(synth_channel->stream_pipeline) {
-			tts_websocket_stream_pipeline_request_stop(
-				synth_channel->stream_pipeline);
-		}
 		synth_channel->stream_stop_requested = 1;
+		pipeline = synth_channel->stream_pipeline;
+		/* request_stop is an atomic flag publication and cannot block or take
+		 * the pipeline terminal mutex, so it is safe under the pointer lock. */
+		if(pipeline) {
+			tts_websocket_stream_pipeline_request_stop(pipeline);
+		}
 		if(synth_channel->stream_buffer_cond) {
 			apr_thread_cond_broadcast(synth_channel->stream_buffer_cond);
 		}
 		apr_thread_mutex_unlock(synth_channel->stream_buffer_mutex);
 	} else {
-		if(synth_channel->stream_pipeline) {
-			tts_websocket_stream_pipeline_request_stop(
-				synth_channel->stream_pipeline);
-		}
+		/* A pipeline is published only after the buffer mutex exists. */
 		synth_channel->stream_stop_requested = 1;
 	}
 }
@@ -493,9 +490,7 @@ static int tts_websocket_stream_pipeline_output(
 		return 0;
 	}
 	synth_channel = output_context->synth_channel;
-	if(synth_channel->stream_stop_requested ||
-		tts_websocket_stream_pipeline_stop_requested(
-			synth_channel->stream_pipeline)) {
+	if(synth_channel->stream_stop_requested) {
 		return 0;
 	}
 	if(sample_count == 0) {
@@ -640,6 +635,8 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 	int pipeline_error_code = 0;
 	apr_size_t final_orphan_bytes = 0;
 	tts_websocket_stream_pipeline_output_context_t output_context;
+	tts_websocket_stream_pipeline_t *pipeline;
+	apt_bool_t stop_before_publish;
 
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Stream thread starting...");
 
@@ -689,14 +686,23 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 	/* The worker owns one production pipeline for the complete SPEAK. The
 	 * pipeline keeps PCM carry across all WebSocket message boundaries and is
 	 * destroyed only by cleanup after a successful worker join. */
-	synth_channel->stream_pipeline = tts_websocket_stream_pipeline_create(
+	pipeline = tts_websocket_stream_pipeline_create(
 		pool, 24000U, 8000U, 1U, 10, &pipeline_error_code);
-	if(!synth_channel->stream_pipeline) {
+	if(!pipeline) {
 		synth_channel->stream_error = 1;
 		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
 			"[WS] Failed to create stream pipeline: error=%d",
 			pipeline_error_code);
 		goto stream_thread_finalize;
+	}
+	/* Publish the pointer under the same lock used by STOP and cleanup. If
+	 * STOP won before creation completed, propagate it before processing. */
+	apr_thread_mutex_lock(synth_channel->stream_buffer_mutex);
+	synth_channel->stream_pipeline = pipeline;
+	stop_before_publish = synth_channel->stream_stop_requested ? TRUE : FALSE;
+	apr_thread_mutex_unlock(synth_channel->stream_buffer_mutex);
+	if(stop_before_publish) {
+		tts_websocket_stream_pipeline_request_stop(pipeline);
 	}
 	output_context.synth_channel = synth_channel;
 	output_context.scratch_pool = frame_pool;
@@ -1156,11 +1162,22 @@ static void tts_websocket_stream_pool_destroy(tts_websocket_channel_t *synth_cha
 static void tts_websocket_channel_pipeline_destroy(
 	tts_websocket_channel_t *synth_channel)
 {
-	if(!synth_channel || !synth_channel->stream_pipeline) {
+	tts_websocket_stream_pipeline_t *pipeline;
+
+	if(!synth_channel) {
 		return;
 	}
-	tts_websocket_stream_pipeline_destroy(synth_channel->stream_pipeline);
-	synth_channel->stream_pipeline = NULL;
+	if(synth_channel->stream_buffer_mutex) {
+		apr_thread_mutex_lock(synth_channel->stream_buffer_mutex);
+		pipeline = synth_channel->stream_pipeline;
+		synth_channel->stream_pipeline = NULL;
+		apr_thread_mutex_unlock(synth_channel->stream_buffer_mutex);
+	} else {
+		pipeline = synth_channel->stream_pipeline;
+		synth_channel->stream_pipeline = NULL;
+	}
+	/* Destroy outside the pointer lock; future STOP readers now see NULL. */
+	tts_websocket_stream_pipeline_destroy(pipeline);
 }
 
 /* Detach the socket under the buffer mutex so cleanup and the worker have a
@@ -1277,9 +1294,8 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 	synth_channel->stream_postroll_ticks_left = 0;
 	synth_channel->stream_drain_ticks_left = 0;
 	synth_channel->stream_completion_cause = SYNTHESIZER_COMPLETION_CAUSE_NORMAL;
-	/* The new SPEAK creates its pipeline in the worker after the pool and
-	 * socket are ready. */
-	synth_channel->stream_pipeline = NULL;
+	/* The new SPEAK creates and publishes its pipeline in the worker after the
+	 * pool, ring buffer and pointer lock are ready. */
 
 	/* 分配环形缓冲区（512KB，高并发下TTS服务响应可能变慢，需要更大缓冲防止句子间underrun） */
 	synth_channel->stream_buffer_size = 512 * 1024;
