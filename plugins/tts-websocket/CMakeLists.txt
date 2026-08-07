@@ -11,6 +11,7 @@ set (TTS_WEBSOCKET_SOURCES
 	src/tts_websocket_lifecycle.c
 	src/tts_websocket_ws.c
 	src/tts_websocket_resampler.c
+	src/tts_websocket_stream_pipeline.c
 )
 source_group ("src" FILES ${TTS_WEBSOCKET_SOURCES})
 
@@ -92,6 +93,25 @@ if(BUILD_TTS_WEBSOCKET_TESTS)
 	endif ()
 	set_target_properties(test_tts_websocket_resampler PROPERTIES FOLDER "tests")
 	add_test(NAME tts_websocket_resampler COMMAND test_tts_websocket_resampler)
+	add_executable(test_tts_websocket_stream_pipeline
+		tests/test_tts_websocket_stream_pipeline.c
+		src/tts_websocket_resampler.c
+		src/tts_websocket_pcm.c
+		src/tts_websocket_stream_pipeline.c)
+	target_include_directories(test_tts_websocket_stream_pipeline PRIVATE
+		${PROJECT_SOURCE_DIR}/src
+		${APR_TOOLKIT_INCLUDE_DIRS}
+		${APR_INCLUDE_DIRS}
+		${SPEEXDSP_INCLUDE_DIRS})
+	if (UNIX)
+		target_link_libraries(test_tts_websocket_stream_pipeline
+			${SPEEXDSP_LIBRARIES} ${APR_LIBRARIES} m)
+	else ()
+		target_link_libraries(test_tts_websocket_stream_pipeline
+			${SPEEXDSP_LIBRARIES} ${APR_LIBRARIES})
+	endif ()
+	set_target_properties(test_tts_websocket_stream_pipeline PROPERTIES FOLDER "tests")
+	add_test(NAME tts_websocket_stream_pipeline COMMAND test_tts_websocket_stream_pipeline)
 	add_executable(test_tts_websocket_lifecycle
 		tests/test_tts_websocket_lifecycle.c
 		src/tts_websocket_lifecycle.c)
