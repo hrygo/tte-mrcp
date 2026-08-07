@@ -2544,10 +2544,11 @@ static apt_bool_t tts_websocket_stream_close(mpf_audio_stream_t *stream)
 /* Start an explicit end-of-stream sequence.
  *
  * POSTROLL keeps the RTP timeline alive until a client-side jitter buffer has
- * played the real tail. RTP_DRAIN emits explicit PCMU silence frames for the
- * worst-case number of packetizer ticks. The drain stage is required because
- * MPF calls the source before the RTP sink: an event sent from the first empty
- * EOF callback can otherwise overtake a partial final RTP packet.
+ * played the real tail. RTP_DRAIN gives MPF enough callbacks to flush a
+ * partial packet, without adding a new RTP packet of its own. The drain stage
+ * is required because MPF calls the source before the RTP sink: an event sent
+ * from the first empty EOF callback can otherwise overtake a partial final
+ * RTP packet.
  */
 static void tts_websocket_output_finish_begin(
 	tts_websocket_channel_t *synth_channel,
@@ -2607,9 +2608,9 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 	apt_bool_t eof = FALSE;
 	apt_bool_t completed = FALSE;
 	apt_bool_t terminal_error = FALSE;
-	apt_bool_t emit_silence = FALSE;
 	apt_bool_t audio_started = FALSE;
 	apt_bool_t stream_complete = FALSE;
+	apt_bool_t read_audio = TRUE;
 	apt_bool_t lifecycle_entered = FALSE;
 
 	if(!synth_channel || !frame || !frame->codec_frame.buffer ||
@@ -2630,6 +2631,10 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 	}
 	frame_size = synth_channel->stream_codec_frame_size;
 	frame->codec_frame.size = frame_size;
+	/* NONE callbacks can still be consumed by MPF while flushing a partial
+	 * packet. Keep the backing bytes deterministic even when no AUDIO frame is
+	 * emitted. */
+	tts_websocket_pcm_fill_silence(frame->codec_frame.buffer, frame_size);
 
 	if(synth_channel->stop_response) {
 		mrcp_engine_channel_message_send(
@@ -2655,8 +2660,10 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 		goto stream_read_done;
 	}
 
-	/* Drain states must run before ordinary underrun handling. In RTP_DRAIN the
-	 * frame type remains NONE so the sink can pad/flush its pending ptime packet. */
+	/* Drain states must run before ordinary underrun handling. Keep the callback
+	 * frame initialized because MPF copies codec_frame.buffer while flushing a
+	 * pending packet, but leave its type as NONE so a drain tick cannot create a
+	 * fresh RTP packet. */
 	if(synth_channel->stream_output_state == TTS_WEBSOCKET_OUTPUT_POSTROLL) {
 		memset(frame->codec_frame.buffer, 0xFF, frame_size);
 		frame->type |= MEDIA_FRAME_TYPE_AUDIO;
@@ -2678,12 +2685,10 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 	}
 	if(synth_channel->stream_output_state == TTS_WEBSOCKET_OUTPUT_RTP_DRAIN) {
 		/* MPF's RTP packetizer may use a NONE frame to flush a partial packet,
-		 * but it still copies codec_frame.buffer/size in that path. Supplying a
-		 * real, initialized audio frame prevents stale callback-buffer bytes from
-		 * becoming RTP payload. */
+		 * but it still copies codec_frame.buffer/size in that path. Supplying an
+		 * initialized reserve prevents stale callback-buffer bytes from becoming
+		 * RTP payload. */
 		tts_websocket_pcm_fill_silence(frame->codec_frame.buffer, frame_size);
-		frame->type |= MEDIA_FRAME_TYPE_AUDIO;
-		synth_channel->stream_silence_frame_count++;
 		if(synth_channel->stream_drain_ticks_left > 0) {
 			synth_channel->stream_drain_ticks_left--;
 		}
@@ -2732,22 +2737,24 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 						? SYNTHESIZER_COMPLETION_CAUSE_ERROR
 						: SYNTHESIZER_COMPLETION_CAUSE_NORMAL;
 				} else {
-					emit_silence = TRUE;
+					/* Wait for the first real chunk instead of moving the RTP clock
+					 * with synthetic silence. */
+					read_audio = FALSE;
 				}
 			} else if(!synth_channel->stream_prebuffered) {
 				if(stream_complete || available >= synth_channel->stream_prebuffer_min_fill) {
 					synth_channel->stream_prebuffered = 1;
 				} else {
-					emit_silence = TRUE;
+					read_audio = FALSE;
 				}
 			}
-				if(!completed && !emit_silence) {
+				if(!completed && read_audio) {
 					bytes_read = tts_websocket_stream_read_audio(
 						synth_channel, frame->codec_frame.buffer, frame_size, &eof);
 				}
 				apr_thread_mutex_unlock(synth_channel->stream_buffer_mutex);
 
-			if(!completed && !emit_silence) {
+			if(!completed && read_audio) {
 			if(bytes_read > 0) {
 				if(bytes_read < frame_size) {
 					memset((char*)frame->codec_frame.buffer + bytes_read, 0xFF,
@@ -2764,9 +2771,11 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 				tts_websocket_output_finish_begin(
 					synth_channel, stream, terminal_error);
 				} else {
-					/* Preserve any partial producer chunk and rebuild the reserve. */
+					/* Preserve any partial producer chunk and rebuild the reserve.
+					 * A temporary underrun is not audio. Returning NONE lets the
+					 * RTP sink keep its clock without inserting synthetic speech-time
+					 * silence ahead of the next real chunk. */
 					synth_channel->stream_prebuffered = 0;
-					emit_silence = TRUE;
 					synth_channel->stream_buffer_empty_count++;
 				}
 			}
@@ -2780,12 +2789,6 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 		} else {
 			tts_websocket_output_finish_begin(synth_channel, stream, FALSE);
 		}
-	}
-
-	if(emit_silence) {
-		memset(frame->codec_frame.buffer, 0xFF, frame_size);
-		frame->type |= MEDIA_FRAME_TYPE_AUDIO;
-		synth_channel->stream_silence_frame_count++;
 	}
 
 	/* ========== 丢音诊断：在发帧点录制客户端实际收到的音频流 ==========
