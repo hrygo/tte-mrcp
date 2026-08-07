@@ -192,6 +192,12 @@ AM_CONDITIONAL([UNIMRCP_SERVER_APP],[test "${enable_server_lib}" = "yes" && test
 dnl TTS WebSocket plugin.
 UNI_PLUGIN_ENABLED(tts_websocket)
 
+AS_IF([test "x${enable_tts_websocket_plugin}" = "xyes"], [
+    PKG_CHECK_MODULES([SPEEXDSP], [speexdsp >= 1.2.1])
+])
+AC_SUBST([SPEEXDSP_CFLAGS])
+AC_SUBST([SPEEXDSP_LIBS])
+
 AM_CONDITIONAL([TTS_WEBSOCKET_PLUGIN],[test "${enable_tts_websocket_plugin}" = "yes"])
 
 dnl ASR WebSocket plugin.

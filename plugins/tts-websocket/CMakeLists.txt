@@ -1,12 +1,16 @@
 cmake_minimum_required (VERSION 2.8)
 project (tts_websocket)
 
+pkg_check_modules (SPEEXDSP REQUIRED speexdsp>=1.2.1)
+link_directories (${SPEEXDSP_LIBRARY_DIRS})
+
 # Set source files
 set (TTS_WEBSOCKET_SOURCES
 	src/tts_websocket_engine.c
 	src/tts_websocket_pcm.c
 	src/tts_websocket_lifecycle.c
 	src/tts_websocket_ws.c
+	src/tts_websocket_resampler.c
 )
 source_group ("src" FILES ${TTS_WEBSOCKET_SOURCES})
 
@@ -23,6 +27,7 @@ set_target_properties (${PROJECT_NAME} PROPERTIES FOLDER "plugins")
 target_link_libraries(${PROJECT_NAME}
 	${APU_LIBRARIES}
 	${APR_LIBRARIES}
+	${SPEEXDSP_LIBRARIES}
 )
 # Input system libraries
 if (WIN32)
@@ -43,14 +48,15 @@ add_definitions (
 # Include directories
 include_directories (
 	${PROJECT_SOURCE_DIR}/include
+	${PROJECT_SOURCE_DIR}/src
 	${MRCP_ENGINE_INCLUDE_DIRS}
 	${MRCP_INCLUDE_DIRS}
 	${MPF_INCLUDE_DIRS}
 	${APR_TOOLKIT_INCLUDE_DIRS}
 	${APR_INCLUDE_DIRS}
 	${APU_INCLUDE_DIRS}
+	${SPEEXDSP_INCLUDE_DIRS}
 )
-
 # Installation directives
 install (TARGETS ${PROJECT_NAME} LIBRARY DESTINATION plugin)
 if (MSVC)
@@ -70,6 +76,22 @@ if(BUILD_TTS_WEBSOCKET_TESTS)
 		src/tts_websocket_pcm.c)
 	set_target_properties(test_tts_websocket_pcm PROPERTIES FOLDER "tests")
 	add_test(NAME tts_websocket_pcm COMMAND test_tts_websocket_pcm)
+	add_executable(test_tts_websocket_resampler
+		tests/test_tts_websocket_resampler.c
+		src/tts_websocket_resampler.c
+		src/tts_websocket_pcm.c)
+	target_include_directories(test_tts_websocket_resampler PRIVATE
+		${PROJECT_SOURCE_DIR}/src
+		${SPEEXDSP_INCLUDE_DIRS})
+	if (UNIX)
+		target_link_libraries(test_tts_websocket_resampler
+			${SPEEXDSP_LIBRARIES} m)
+	else ()
+		target_link_libraries(test_tts_websocket_resampler
+			${SPEEXDSP_LIBRARIES})
+	endif ()
+	set_target_properties(test_tts_websocket_resampler PROPERTIES FOLDER "tests")
+	add_test(NAME tts_websocket_resampler COMMAND test_tts_websocket_resampler)
 	add_executable(test_tts_websocket_lifecycle
 		tests/test_tts_websocket_lifecycle.c
 		src/tts_websocket_lifecycle.c)
