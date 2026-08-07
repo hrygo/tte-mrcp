@@ -146,6 +146,23 @@ jobs:
             pkg-config --modversion sofia-sip-ua
           }
 
+          install_speexdsp() {
+            local version=1.2.1
+            local commit=1b28a0f61bc31162979e1f26f3981fc3637095c8
+            export SPEEXDSP_PREFIX=/opt/tte-mrcp
+
+            git clone --depth 1 --branch "SpeexDSP-$version" \
+              https://github.com/xiph/speexdsp.git /tmp/speexdsp
+            test "$(cd /tmp/speexdsp && git rev-parse HEAD)" = "$commit"
+            cd /tmp/speexdsp
+            ./autogen.sh
+            ./configure --prefix="$SPEEXDSP_PREFIX" --disable-static --enable-shared
+            make -j"$(getconf _NPROCESSORS_ONLN)"
+            make install
+            export PKG_CONFIG_PATH="$SPEEXDSP_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+            test "$(pkg-config --modversion speexdsp)" = "$version"
+          }
+
           elf_files() {
             find "$package_dir" -type f -print0 | while IFS= read -r -d '' candidate; do
               if file "$candidate" | grep -q ELF; then
@@ -194,9 +211,27 @@ jobs:
             done
           }
 
+          stage_speexdsp_soname_chain() {
+            local source_dir="$SPEEXDSP_PREFIX/lib"
+            local real_library soname
+            test -e "$source_dir/libspeexdsp.so"
+            test -e "$source_dir/libspeexdsp.so.1"
+            real_library="$(readlink -f "$source_dir/libspeexdsp.so.1")"
+            test -f "$real_library"
+            soname="$(readelf -d "$real_library" | awk -F'[][]' '/SONAME/ {print $2; exit}')"
+            test "$soname" = libspeexdsp.so.1
+            cp -a "$real_library" "$package_dir/lib/"
+            ln -sfn "$(basename "$real_library")" "$package_dir/lib/libspeexdsp.so.1"
+            ln -sfn libspeexdsp.so.1 "$package_dir/lib/libspeexdsp.so"
+            test -e "$package_dir/lib/libspeexdsp.so"
+            test -e "$package_dir/lib/libspeexdsp.so.1"
+            test -f "$package_dir/lib/$(basename "$real_library")"
+          }
+
           install_dependencies
           refresh_autotools_inputs
           install_sofia_sip
+          install_speexdsp
           cd "$GITHUB_WORKSPACE"
           gcc --version
           g++ --version
@@ -228,22 +263,35 @@ jobs:
 
           export LD_LIBRARY_PATH="$package_dir/lib:$SOFIA_PREFIX/lib"
           bundle_non_system_libraries
+          stage_speexdsp_soname_chain
           audit_elf
+
+          tts_plugin="$package_dir/plugin/tts_websocket.so"
+          test -f "$tts_plugin"
+          speexdsp_resolved="$(LD_LIBRARY_PATH="$package_dir/lib" ldd "$tts_plugin" \
+            | awk '$1 == "libspeexdsp.so.1" {print $3; exit}')"
+          test "$speexdsp_resolved" = "$package_dir/lib/libspeexdsp.so.1"
 
           # ---- Plugin unit-test gates (target ABI container) ----
           # Autotools gate: asr_websocket check_PROGRAMS (4 tests).
           make -C "$GITHUB_WORKSPACE/build/ci/plugins/asr-websocket" check \
             > "$GITHUB_WORKSPACE/check-autotools-$TARGET.log" 2>&1 || {
-              tail -n 120 "$GITHUB_WORKSPACE/check-autotools-$TARGET.log"
-              exit 1
-            }
+            tail -n 120 "$GITHUB_WORKSPACE/check-autotools-$TARGET.log"
+            exit 1
+          }
+          # Autotools gate: tts_websocket check_PROGRAMS (resampler + stream pipeline).
+          make -C "$GITHUB_WORKSPACE/build/ci/plugins/tts-websocket" check \
+            >> "$GITHUB_WORKSPACE/check-autotools-$TARGET.log" 2>&1 || {
+            tail -n 120 "$GITHUB_WORKSPACE/check-autotools-$TARGET.log"
+            exit 1
+          }
           grep -E "^(PASS|FAIL|SKIP|ERROR|XFAIL|XPASS):" \
             "$GITHUB_WORKSPACE/check-autotools-$TARGET.log" || true
 
           # CMake gate (kylinv10 row only): plugin tests via CTest.
           # PR checks run on the merge ref, where the tts-websocket plugin
-          # registers http_parse/pcm/lifecycle/ws test executables in addition
-          # to the four asr_websocket tests; build every registered plugin target.
+          # registers all six TTS unit-test executables in addition to the four
+          # asr_websocket tests; build every registered plugin target.
           if [ "$RUN_CMAKE_GATE" = true ]; then
             cmake -S "$GITHUB_WORKSPACE" -B "$GITHUB_WORKSPACE/build/ci-cmake" \
               -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -258,6 +306,8 @@ jobs:
                      test_funasr_ws_transport test_funasr_control \
                      test_tts_websocket_http_parse \
                      test_tts_websocket_pcm test_tts_websocket_lifecycle \
+                     test_tts_websocket_resampler \
+                     test_tts_websocket_stream_pipeline \
                      test_tts_websocket_ws \
               -j"$(getconf _NPROCESSORS_ONLN)" \
               > "$GITHUB_WORKSPACE/cmake-build-$TARGET.log" 2>&1 || {
@@ -266,7 +316,7 @@ jobs:
               }
             ctest --test-dir "$GITHUB_WORKSPACE/build/ci-cmake" \
               --output-on-failure \
-              -R '^(asr_websocket_|tts_websocket_)' \
+              -R '^(asr_websocket_|tts_websocket_(http_parse|pcm|resampler|stream_pipeline|lifecycle|ws)$)' \
               > "$GITHUB_WORKSPACE/ctest-$TARGET.log" 2>&1 || {
                 tail -n 120 "$GITHUB_WORKSPACE/ctest-$TARGET.log"
                 exit 1
@@ -286,7 +336,14 @@ jobs:
           fi
 
           cd "$GITHUB_WORKSPACE/package-root"
-          zip -r "$GITHUB_WORKSPACE/$ZIP_NAME" opt/tte-mrcp
+          zip -yr "$GITHUB_WORKSPACE/$ZIP_NAME" opt/tte-mrcp
+          speexdsp_real_name="$(basename "$(readlink -f "$package_dir/lib/libspeexdsp.so.1")")"
+          for archive_entry in \
+            opt/tte-mrcp/lib/libspeexdsp.so \
+            opt/tte-mrcp/lib/libspeexdsp.so.1 \
+            "opt/tte-mrcp/lib/$speexdsp_real_name"; do
+            unzip -Z1 "$GITHUB_WORKSPACE/$ZIP_NAME" | grep -qx "$archive_entry"
+          done
           unzip -l "$GITHUB_WORKSPACE/$ZIP_NAME"
           CONTAINER_SCRIPT
 

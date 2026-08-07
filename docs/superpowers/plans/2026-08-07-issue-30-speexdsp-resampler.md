@@ -224,7 +224,7 @@ rtk git commit -m "fix(tts): use SpeexDSP for streamed PCM" -m "Refs #30"
 - Consumes: Task 1's pkg-config requirement and Task 2's dynamically linked `tts_websocket.so`.
 - Produces: both Linux ZIP artifacts containing a compatible SpeexDSP soname chain and a CI gate that executes the new resampler tests on target ISA/ABI.
 
-- [ ] **Step 1: Establish the failing CI assertions**
+- [x] **Step 1: Establish the failing CI assertions**
 
 Run these before editing the workflow and record their expected non-zero results:
 
@@ -235,7 +235,7 @@ rtk rg -n 'test_tts_websocket_resampler' .github/workflows/build-linux.yml
 
 Expected: neither pinned dependency installation nor the target test exists yet.
 
-- [ ] **Step 2: Add pinned SpeexDSP installation**
+- [x] **Step 2: Add pinned SpeexDSP installation**
 
 Add an `install_speexdsp()` function next to `install_sofia_sip()`:
 
@@ -259,7 +259,7 @@ install_speexdsp() {
 
 Invoke it after `install_sofia_sip` and before configuring TTE-MRCP. Preserve GCC 4.8.5 on x86_64 and native aarch64 execution.
 
-- [ ] **Step 3: Extend unit, packaging and runtime gates**
+- [x] **Step 3: Extend unit, packaging and runtime gates**
 
 - Add `test_tts_websocket_resampler` to the CMake build target list and CTest regex coverage.
 - Add an Autotools `make check` invocation for the TTS plugin so x86_64 also executes its tests.
@@ -267,7 +267,7 @@ Invoke it after `install_sofia_sip` and before configuring TTE-MRCP. Preserve GC
 - Assert the ZIP contains `libspeexdsp.so` and its soname symlink.
 - Keep `audit_elf` responsible for both machine type and GLIBC ceiling on the bundled library.
 
-- [ ] **Step 4: Run local static and configure gates**
+- [x] **Step 4: Run local static and configure gates**
 
 ```bash
 rtk git diff --check
@@ -279,7 +279,7 @@ rtk env LD_LIBRARY_PATH=/tmp/tte-mrcp-speexdsp-1.2.1/lib ctest --test-dir /tmp/t
 
 Expected: no whitespace errors, both configuration systems resolve SpeexDSP 1.2.1, and every TTS plugin test passes with pristine output.
 
-- [ ] **Step 5: Validate the target workflow and update evidence**
+- [x] **Step 5: Validate the target workflow and update evidence**
 
 Run a YAML parse, inspect the exact staged diff, and verify every pin/target/artifact assertion:
 
@@ -291,11 +291,30 @@ rtk git diff --check
 
 Mark only actually executed plan checkboxes. Record Linux artifact builds as pending until GitHub Actions supplies current-run evidence; never substitute macOS configuration results for Linux deployment verification.
 
-- [ ] **Step 6: Commit Task 3**
+- [x] **Step 6: Commit Task 3**
 
 ```bash
 rtk git commit -m "ci(tts): package SpeexDSP for Linux targets" -m "Refs #30"
 ```
+
+#### Task 3 execution evidence — 2026-08-07
+
+- Step 1 RED: both pre-edit `rtk rg` assertions exited `1` with no output;
+  the workflow had no SpeexDSP pin/install or resampler target gate.
+- Step 2: `.github/workflows/build-linux.yml` now clones
+  `SpeexDSP-1.2.1`, verifies commit
+  `1b28a0f61bc31162979e1f26f3981fc3637095c8`, builds shared-only at
+  `/opt/tte-mrcp`, and checks pkg-config version `1.2.1`.
+- Step 3: both matrix rows run the TTS Autotools `make check`; the aarch64
+  CMake gate builds all six TTS tests, runs an explicit six-name TTS CTest
+  regex, stages/verifies the SpeexDSP soname chain, checks staged plugin
+  resolution, and audits ELF machine/GLIBC ceilings. ZIP uses `zip -yr`.
+- Step 4/5: YAML parse, embedded container Bash syntax, `git diff --check`,
+  configure help, CMake configure, six-target TTS build, and TTS CTest all
+  passed locally. CMake required the existing local APR/APR-util/Sofia
+  pkg-config paths in addition to the fixed SpeexDSP path.
+- Linux x86_64/aarch64 artifact and target-ISA evidence remains pending until
+  GitHub Actions runs on the PR; it is not substituted with macOS evidence.
 
 ## Whole-branch verification and delivery
 
