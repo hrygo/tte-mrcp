@@ -31,6 +31,7 @@
 #include "tts_websocket_pcm.h"
 #include "tts_websocket_lifecycle.h"
 #include "tts_websocket_ws.h"
+#include "tts_websocket_resampler.h"
 #include "apt_consumer_task.h"
 #include "apt_log.h"
 #include <apr_network_io.h>
@@ -226,10 +227,18 @@ struct tts_websocket_channel_t {
 	apr_uint32_t           stream_postroll_ticks_left;
 	apr_uint32_t           stream_drain_ticks_left;
 	mrcp_synth_completion_cause_e stream_completion_cause;
-	/** 原始PCM累积缓冲区（跨帧对齐到3采样边界，避免帧边界爆音） */
-	char     pcm_accum[6];  /* 6字节防御性预留：PCM帧恒为偶数，process_len%6∈{0,2,4} */
-	/** 累积缓冲区中的字节数 (0-5) */
+	/** 原始PCM累积缓冲区（跨WebSocket消息对齐到16-bit采样边界） */
+	unsigned char pcm_accum[2];
+	/** 累积缓冲区中的不完整采样字节数 (0-1) */
 	int      pcm_accum_len;
+	/** 当前 SPEAK 独占的 SpeexDSP 重采样器；仅 worker 调用 process/finish */
+	tts_websocket_resampler_t *stream_resampler;
+	/** 当前 SPEAK 的重采样统计 */
+	volatile apr_size_t    stream_resampler_input_samples;
+	volatile apr_size_t    stream_resampler_output_samples;
+	volatile apr_uint32_t  stream_resampler_process_calls;
+	volatile apr_size_t    stream_resampler_finish_samples;
+	volatile int           stream_resampler_error;
 
 	/* ========== 录音保存相关字段 ========== */
 	/** 录音输出文件（最终8kHz μ-law格式，即MRCP客户端收到的格式） */
@@ -256,8 +265,6 @@ static apt_bool_t tts_websocket_msg_signal(tts_websocket_msg_type_e type, mrcp_e
 static apt_bool_t tts_websocket_msg_process(apt_task_t *task, apt_task_msg_t *msg);
 static void hex_dump(const char *label, const char *data, apr_size_t len);
 static char* gbk_to_utf8(const char *gbk_str, apr_size_t gbk_len, apr_size_t *utf8_len, apr_pool_t *pool);
-static char* resample_pcm_to_8k(const char *input_pcm, apr_size_t input_size, apr_size_t *output_size, apr_pool_t *pool);
-static char* resample_ulaw_to_8k(const char *input_ulaw, apr_size_t input_size, apr_size_t *output_size, apr_pool_t *pool);
 static char* convert_16bit_to_ulaw(const char *input_pcm, apr_size_t input_size, apr_size_t *output_size, apr_pool_t *pool);
 
 /* ========== 流式TTS处理函数声明 ========== */
@@ -266,6 +273,7 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 static apr_size_t tts_websocket_stream_read_audio(tts_websocket_channel_t *synth_channel, char *buffer, apr_size_t size, apt_bool_t *eof);
 static apt_bool_t tts_websocket_stream_write_audio(tts_websocket_channel_t *synth_channel, const char *data, apr_size_t size);
 static void tts_websocket_stream_pool_destroy(tts_websocket_channel_t *synth_channel);
+static void tts_websocket_stream_resampler_destroy(tts_websocket_channel_t *synth_channel);
 static char* json_escape(const char *str, apr_size_t len, apr_pool_t *pool);
 static const char* json_get_type(const char *json, apr_size_t len, char *type_buf, apr_size_t type_buf_size);
 
@@ -574,6 +582,8 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 	apt_bool_t session_done_received = FALSE;
 	apr_pool_t *pool;       /* channel pool — 用于长生命周期分配（buffer/socket） */
 	apr_pool_t *frame_pool = NULL; /* 线程私有临时pool — 每帧处理后清空，避免内存泄漏 */
+	int resampler_error_code = 0;
+	apr_size_t final_orphan_bytes = 0;
 
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Stream thread starting...");
 
@@ -609,7 +619,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 	}
 
 	/* ========== 修复：创建线程私有临时pool，避免每帧apr_palloc导致channel pool无限增长 ==========
-	 * 之前 resample_pcm_to_8k / convert_16bit_to_ulaw / combined buffer 都用 channel pool，
+	 * 之前重采样、convert_16bit_to_ulaw / combined buffer 都用 channel pool，
 	 * 分配的内存永不释放，长时间session持续累积 → OOM → 分配失败丢帧。
 	 * 现在用 frame_pool 子池，每轮循环后 apr_pool_clear 释放本轮临时分配。 */
 	if(apr_pool_create(&frame_pool, pool) != APR_SUCCESS) {
@@ -618,6 +628,19 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 		synth_channel->stream_error = 1;
 		apr_thread_exit(thd, 0);
 		return NULL;
+	}
+
+	/* 每个 SPEAK 独占一个 24 kHz -> 8 kHz 的 SpeexDSP 状态；worker
+	 * 独占其 process/finish 调用，cleanup 在 join 后负责销毁。 */
+	synth_channel->stream_resampler = tts_websocket_resampler_create(
+		24000U, 8000U, 1U, 10, &resampler_error_code);
+	if(!synth_channel->stream_resampler) {
+		synth_channel->stream_resampler_error = resampler_error_code;
+		synth_channel->stream_error = 1;
+		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+			"[WS] Failed to create SpeexDSP resampler: error=%d",
+			resampler_error_code);
+		goto stream_thread_finalize;
 	}
 
 	/* 记录开始时间（发送input.done后的时间） */
@@ -705,8 +728,8 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 				/* synth_channel->stream_prebuffered = 0;  已移除每句预缓冲：TTS gap仅20-27ms，
 				 * 句子间flush的残留数据已在环形缓冲中，新句子音频到来后可直接播放，
 				 * 每句重新预缓冲反而导致每句开头大量静音帧（压测silence_frame_count普遍40） */
-				/* 丢弃上一句末尾不足3采样(6字节)的残留PCM字节。
-				 * 残留量最多4字节 = 2个16-bit采样 = 0.083ms@24kHz，完全不可闻。
+				/* 丢弃上一句末尾不足一个16-bit采样的残留PCM字节。
+				 * 残留量最多1字节，完全不可闻。
 				 * 零填充flush会引入波形跳变 → 句子间爆音，直接丢弃远优于补零。 */
 				if(synth_channel->pcm_accum_len > 0) {
 					LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Discarding %d residual accum bytes at audio.start (inaudible)",
@@ -807,8 +830,8 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 				}
 			}
 
-			/* 丢弃句子末尾不足3采样(6字节)的残留PCM字节（最多4字节，
-			 * = 0.083ms@24kHz），直接丢弃避免补零flush造成的波形跳变/爆音。 */
+			/* 丢弃句子末尾不足一个16-bit采样的残留PCM字节（最多1字节），
+			 * 直接丢弃避免补零flush造成的波形跳变/爆音。 */
 			if(synth_channel->pcm_accum_len > 0) {
 				LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Discarding %d residual accum bytes at audio.done (inaudible)",
 					synth_channel->pcm_accum_len);
@@ -834,10 +857,10 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 				}
 
 				/* ========== 修复：先标记 session.done 已接收，但不设置 stream_complete ==========
-				 * stream_complete 必须在 pcm_accum flush（循环结束后）之后再设置。
+				 * stream_complete 必须在完整 PCM 样本处理、SpeexDSP finish 和尾部写入之后再设置。
 				 * 否则 reader 线程可能看到 stream_complete==1 且环形缓冲区为空，
-				 * 提前发送 SPEAK-COMPLETE，导致 flush 写入的残余数据被丢弃。
-				 * 现在仅设置 session_done_received，退出循环后再 flush → set stream_complete。 */
+				 * 提前发送 SPEAK-COMPLETE，导致 finish 写入的残余数据被丢弃。
+				 * 现在仅设置 session_done_received，退出循环后再 drain adapter → set stream_complete。 */
 				session_done_received = TRUE;
 				break;
 			}
@@ -897,63 +920,150 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 				 * 不再使用启发式字节序检测（该检测在LSB接近0时会误判为big-endian导致偶发噪声）
 				 * 直接按 little-endian 处理 */
 
-				/* 重采样：24kHz -> 8kHz。网络块可在任意字节处分割，
-				 * accumulate 会把未达到 6 字节（3 个 16-bit 采样）的尾部
-				 * 保留到下一块，保证输入字节流不丢失、不重排。 */
+				/* 网络分块边界不等于 PCM 采样边界。只保留一个不完整的
+				 * 16-bit S16LE 采样字节，完整采样立即交给 SpeexDSP。 */
 				{
 					apr_size_t combined_capacity = (apr_size_t)synth_channel->pcm_accum_len + (apr_size_t)len;
-					char *combined = apr_palloc(frame_pool, combined_capacity > 0 ? combined_capacity : 1);
+					unsigned char *combined = apr_palloc(frame_pool, combined_capacity > 0 ? combined_capacity : 1);
 					apr_size_t aligned_len;
 					size_t carry_len = (size_t)synth_channel->pcm_accum_len;
 
 					if(!combined) {
 						LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
-							"[WS] Failed to allocate PCM accumulation buffer, terminating stream without dropping bytes");
+							"[WS] Failed to allocate PCM alignment buffer, terminating stream");
+						synth_channel->stream_resampler_error = -1;
 						synth_channel->stream_error = 1;
 						break;
 					}
 
 					aligned_len = tts_websocket_pcm_accumulate(
-						(unsigned char *)synth_channel->pcm_accum,
+						synth_channel->pcm_accum,
 						&carry_len,
 						(const unsigned char *)buffer, (apr_size_t)len,
-						(unsigned char *)combined, combined_capacity, 6);
+						combined, combined_capacity, 2);
 					synth_channel->pcm_accum_len = (int)carry_len;
 
-					/* 处理对齐部分 */
-					if(aligned_len >= 6) {
-						apr_size_t resampled_size = 0;
-						char *resampled_data = resample_pcm_to_8k(combined, aligned_len, &resampled_size, frame_pool);
-						if(!resampled_data) {
-							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Resampling failed, dropping frame");
-							continue;
-						}
-						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Resampled: %"APR_SIZE_T_FMT" bytes -> %"APR_SIZE_T_FMT" bytes (accum=%d)",
-							aligned_len, resampled_size, synth_channel->pcm_accum_len);
+					if(aligned_len > 0) {
+						size_t input_sample_count = (size_t)aligned_len / 2;
+						size_t output_capacity = tts_websocket_resampler_output_bound(
+							synth_channel->stream_resampler, input_sample_count);
+						size_t input_offset = 0;
+						size_t output_count = 0;
+						short *aligned_samples;
+						short *resampled_samples;
+						size_t i;
 
-						/* 2. 格式转换：16-bit PCM -> 8-bit μ-law (PCMU) */
-						apr_size_t ulaw_size = 0;
-						char *ulaw_data = convert_16bit_to_ulaw(resampled_data, resampled_size, &ulaw_size, frame_pool);
-						if(!ulaw_data) {
-							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] μ-law conversion failed, dropping frame");
-							continue;
+						if(output_capacity == 0 ||
+							input_sample_count > (size_t)-1 / sizeof(short) ||
+							output_capacity > (size_t)-1 / sizeof(short)) {
+							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+								"[WS] Invalid SpeexDSP output bound for %"APR_SIZE_T_FMT" input samples",
+								input_sample_count);
+							synth_channel->stream_resampler_error = -1;
+							synth_channel->stream_error = 1;
+							break;
 						}
-						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Converted to μ-law: %d bytes", (int)ulaw_size);
 
-						/* 8k 录音已移至 MPF 发帧点（tts_websocket_stream_read_safe），
-						 * 录制内容与客户端实际收到的 RTP 载荷流一致，
-						 * 用于定位 ring→RTP 之间的丢音；此处不再落盘。 */
-
-						/* 3. 写入环形缓冲区 */
-						if(!tts_websocket_stream_write_audio(synth_channel, ulaw_data, ulaw_size)) {
-							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Write interrupted by stop request, %d bytes not written",
-								(int)ulaw_size);
-						} else {
-							LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Written to ring buffer: %d bytes", (int)ulaw_size);
+						aligned_samples = apr_palloc(
+							frame_pool, input_sample_count * sizeof(*aligned_samples));
+						resampled_samples = apr_palloc(
+							frame_pool, output_capacity * sizeof(*resampled_samples));
+						if(!aligned_samples || !resampled_samples) {
+							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+								"[WS] Failed to allocate SpeexDSP sample buffers");
+							synth_channel->stream_resampler_error = -1;
+							synth_channel->stream_error = 1;
+							break;
 						}
-					} else {
-						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Accumulated %d bytes (total accum=%d), waiting for more",
-							(int)len, synth_channel->pcm_accum_len);
+
+						/* Decode the S16LE network bytes explicitly so the adapter
+						 * receives numeric samples independent of host byte order. */
+						for(i = 0; i < input_sample_count; ++i) {
+							unsigned short value = (unsigned short)combined[i * 2] |
+								((unsigned short)combined[i * 2 + 1] << 8);
+							memcpy(&aligned_samples[i], &value, sizeof(value));
+						}
+
+						/* The adapter may consume only part of the input when its
+						 * output capacity is exhausted; keep processing until all
+						 * aligned samples are consumed. */
+						while(input_offset < input_sample_count) {
+							size_t input_available = input_sample_count - input_offset;
+							size_t output_available = output_capacity - output_count;
+							size_t consumed = input_available;
+							size_t produced = output_available;
+							int process_error;
+
+							if(output_available == 0) {
+								synth_channel->stream_resampler_error = -1;
+								synth_channel->stream_error = 1;
+								LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+									"[WS] SpeexDSP output bound exhausted before input was consumed");
+								break;
+							}
+
+							synth_channel->stream_resampler_process_calls++;
+							process_error = tts_websocket_resampler_process(
+								synth_channel->stream_resampler,
+								aligned_samples + input_offset, &consumed,
+								resampled_samples + output_count, &produced);
+							if(consumed > input_available || produced > output_available) {
+								synth_channel->stream_resampler_error = -1;
+								synth_channel->stream_error = 1;
+								LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+									"[WS] SpeexDSP returned invalid sample counts");
+								break;
+							}
+							synth_channel->stream_resampler_input_samples += consumed;
+							synth_channel->stream_resampler_output_samples += produced;
+							input_offset += consumed;
+							output_count += produced;
+							if(process_error != 0) {
+								synth_channel->stream_resampler_error = process_error;
+								synth_channel->stream_error = 1;
+								LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+									"[WS] SpeexDSP process failed: error=%d", process_error);
+								break;
+							}
+							if(consumed == 0 && produced == 0) {
+								synth_channel->stream_resampler_error = -1;
+								synth_channel->stream_error = 1;
+								LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+									"[WS] SpeexDSP process made no progress");
+								break;
+							}
+						}
+
+						if(synth_channel->stream_error || input_offset != input_sample_count) {
+							break;
+						}
+
+						/* Only samples actually produced by SpeexDSP enter the
+						 * existing PCMU conversion and ring-buffer state machine. */
+						if(output_count > 0) {
+							apr_size_t ulaw_size = 0;
+							char *ulaw_data = convert_16bit_to_ulaw(
+								(const char *)resampled_samples,
+								output_count * sizeof(short), &ulaw_size, frame_pool);
+							if(!ulaw_data) {
+								LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+									"[WS] μ-law conversion failed");
+								synth_channel->stream_resampler_error = -1;
+								synth_channel->stream_error = 1;
+								break;
+							}
+							if(!tts_websocket_stream_write_audio(
+								synth_channel, ulaw_data, ulaw_size)) {
+								LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+									"[WS] Write interrupted by stop request, %"APR_SIZE_T_FMT" bytes not written",
+									ulaw_size);
+							}
+						}
+					}
+					else {
+						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG,
+							"[WS] Accumulated %d incomplete PCM bytes, waiting for more",
+							(int)synth_channel->pcm_accum_len);
 					}
 				}
 			} else {
@@ -962,12 +1072,84 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 		}
 	}
 
-	/* 丢弃session末尾不足3采样(6字节)的残留PCM字节（最多4字节=0.083ms），
-	 * 直接丢弃避免补零flush造成的波形跳变/爆音。 */
-	if(session_done_received && synth_channel->pcm_accum_len > 0) {
-		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Discarding %d residual accum bytes at session.done (inaudible)",
-			synth_channel->pcm_accum_len);
+stream_thread_finalize:
+	/* With alignment=2 every complete final sample has already entered the
+	 * adapter.  Only one orphan byte can remain at session.done. */
+	if(session_done_received && synth_channel->pcm_accum_len == 1) {
+		final_orphan_bytes = 1;
 		synth_channel->pcm_accum_len = 0;
+		LOG_WITH_SID(synth_channel, APT_PRIO_INFO,
+			"[WS] Discarded orphan PCM byte at session.done: count=%"APR_SIZE_T_FMT,
+			final_orphan_bytes);
+	}
+	else if(session_done_received && synth_channel->pcm_accum_len > 1) {
+		synth_channel->stream_resampler_error = -1;
+		synth_channel->stream_error = 1;
+		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+			"[WS] Invalid PCM carry at session.done: bytes=%d",
+			synth_channel->pcm_accum_len);
+	}
+
+	/* A normal session is the only path allowed to drain SpeexDSP latency.
+	 * STOP, timeout, socket error and cleanup leave the adapter unfinished. */
+	if(session_done_received && !synth_channel->stream_stop_requested &&
+		!synth_channel->stream_error && synth_channel->stream_resampler) {
+		size_t finish_capacity = tts_websocket_resampler_output_bound(
+			synth_channel->stream_resampler, 0);
+		short *finish_samples = NULL;
+		size_t produced = 0;
+		int finish_error;
+
+		if(finish_capacity == 0 || finish_capacity > (size_t)-1 / sizeof(short)) {
+			synth_channel->stream_resampler_error = -1;
+			synth_channel->stream_error = 1;
+			LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+				"[WS] Invalid SpeexDSP finish output bound");
+		}
+		else {
+			finish_samples = apr_palloc(
+				frame_pool, finish_capacity * sizeof(*finish_samples));
+			if(!finish_samples) {
+				synth_channel->stream_resampler_error = -1;
+				synth_channel->stream_error = 1;
+				LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+					"[WS] Failed to allocate SpeexDSP finish buffer");
+			}
+			else {
+				produced = finish_capacity;
+				finish_error = tts_websocket_resampler_finish(
+					synth_channel->stream_resampler,
+					finish_samples, &produced);
+				synth_channel->stream_resampler_finish_samples += produced;
+				synth_channel->stream_resampler_output_samples += produced;
+
+				if(produced > 0) {
+					apr_size_t ulaw_size = 0;
+					char *ulaw_data = convert_16bit_to_ulaw(
+						(const char *)finish_samples,
+						produced * sizeof(short), &ulaw_size, frame_pool);
+					if(!ulaw_data) {
+						synth_channel->stream_resampler_error = -1;
+						synth_channel->stream_error = 1;
+						LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+							"[WS] μ-law conversion failed for SpeexDSP finish output");
+					}
+					else if(!tts_websocket_stream_write_audio(
+						synth_channel, ulaw_data, ulaw_size)) {
+						LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+							"[WS] Write interrupted while draining SpeexDSP finish output, %"APR_SIZE_T_FMT" bytes not written",
+							ulaw_size);
+					}
+				}
+
+				if(finish_error != 0) {
+					synth_channel->stream_resampler_error = finish_error;
+					synth_channel->stream_error = 1;
+					LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+						"[WS] SpeexDSP finish failed: error=%d", finish_error);
+				}
+			}
+		}
 	}
 
 	/* ========== 时序诊断：打印session汇总统计 ========== */
@@ -1000,12 +1182,21 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 			synth_channel->stream_ring_bytes_dropped,
 			(unsigned)synth_channel->stream_trylock_fail_count,
 			(unsigned)synth_channel->stream_partial_wait_count);
+		LOG_WITH_SID(synth_channel, APT_PRIO_INFO,
+			"[TIMING] Resampler: input_samples=%"APR_SIZE_T_FMT", output_samples=%"APR_SIZE_T_FMT", process_calls=%u, finish_samples=%"APR_SIZE_T_FMT", error=%d, orphan_bytes=%"APR_SIZE_T_FMT,
+			synth_channel->stream_resampler_input_samples,
+			synth_channel->stream_resampler_output_samples,
+			(unsigned)synth_channel->stream_resampler_process_calls,
+			synth_channel->stream_resampler_finish_samples,
+			synth_channel->stream_resampler_error,
+			final_orphan_bytes);
 		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[TIMING] ==========================================");
 	}
 	/* ========== 时序诊断结束 ========== */
 
-	/* 标记接收完成（stream_complete 在 pcm_accum flush 之后再设置，避免 reader 提前看到 EOF） */
-	if(session_done_received) {
+	/* 标记接收完成（stream_complete 在 SpeexDSP finish 和尾部写入之后再设置，避免 reader 提前看到 EOF） */
+	if(session_done_received && !synth_channel->stream_stop_requested &&
+		!synth_channel->stream_error) {
 		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] ========== Streaming completed successfully (session.done received) ==========");
 		/* ========== 修复：在 mutex 保护下设置 stream_complete 并 broadcast ==========
 		 * 之前 stream_complete 在 mutex 之外设置（无 release barrier），
@@ -1017,8 +1208,8 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 		 * mutex 的 release/acquire 语义保证 reader 同时看到 stream_complete 和
 		 * 最新的 write_pos/read_pos，消除内存排序导致的 TOCTOU 竞态。
 		 *
-		 * 注意：pcm_accum flush（上面的 tts_websocket_stream_write_audio 调用）
-		 * 已完成所有环形缓冲区写入，此处仅设置完成标志。 */
+		 * 注意：上面的 PCM 样本处理和 SpeexDSP finish 已完成所有环形缓冲区写入，
+		 * 此处仅设置完成标志。 */
 		apr_thread_mutex_lock(synth_channel->stream_buffer_mutex);
 		synth_channel->stream_complete = 1;
 		apr_thread_cond_broadcast(synth_channel->stream_buffer_cond);
@@ -1095,6 +1286,18 @@ static void tts_websocket_stream_pool_destroy(tts_websocket_channel_t *synth_cha
 	synth_channel->stream_ws = NULL;
 }
 
+/* The worker is the only caller of process/finish.  Destruction is kept out
+ * of the worker so STOP/error cleanup can join it before freeing the adapter. */
+static void tts_websocket_stream_resampler_destroy(
+	tts_websocket_channel_t *synth_channel)
+{
+	if(!synth_channel || !synth_channel->stream_resampler) {
+		return;
+	}
+	tts_websocket_resampler_destroy(synth_channel->stream_resampler);
+	synth_channel->stream_resampler = NULL;
+}
+
 /* Detach the socket under the buffer mutex so cleanup and the worker have a
  * single owner for the send-close/close sequence. */
 static apr_socket_t *tts_websocket_detach_stream_socket(
@@ -1163,6 +1366,7 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 		synth_channel->stream_thread = NULL;
 		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Previous stream thread completed");
 	}
+	tts_websocket_stream_resampler_destroy(synth_channel);
 
 	/* ========== 修复：关闭之前的 socket（如果存在） ========== */
 	/* 之前的线程应该已经关闭了 socket，但为了安全起见，再次检查 */
@@ -1208,6 +1412,12 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 	synth_channel->stream_completion_cause = SYNTHESIZER_COMPLETION_CAUSE_NORMAL;
 	/* 重置PCM累积缓冲区 */
 	synth_channel->pcm_accum_len = 0;
+	synth_channel->stream_resampler = NULL;
+	synth_channel->stream_resampler_input_samples = 0;
+	synth_channel->stream_resampler_output_samples = 0;
+	synth_channel->stream_resampler_process_calls = 0;
+	synth_channel->stream_resampler_finish_samples = 0;
+	synth_channel->stream_resampler_error = 0;
 
 	/* 分配环形缓冲区（512KB，高并发下TTS服务响应可能变慢，需要更大缓冲防止句子间underrun） */
 	synth_channel->stream_buffer_size = 512 * 1024;
@@ -1645,6 +1855,12 @@ static mrcp_engine_channel_t* tts_websocket_engine_channel_create(mrcp_engine_t 
 	synth_channel->stream_postroll_ticks_left = 0;
 	synth_channel->stream_drain_ticks_left = 0;
 	synth_channel->stream_completion_cause = SYNTHESIZER_COMPLETION_CAUSE_NORMAL;
+	synth_channel->stream_resampler = NULL;
+	synth_channel->stream_resampler_input_samples = 0;
+	synth_channel->stream_resampler_output_samples = 0;
+	synth_channel->stream_resampler_process_calls = 0;
+	synth_channel->stream_resampler_finish_samples = 0;
+	synth_channel->stream_resampler_error = 0;
 	/* 初始化录音文件指针 */
 	synth_channel->record_file = NULL;
 	synth_channel->record_file_orig = NULL;
@@ -1897,6 +2113,8 @@ static void tts_websocket_channel_cleanup_audio(tts_websocket_channel_t *synth_c
 		synth_channel->stream_thread = NULL;
 		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[CLEANUP] Stream thread completed");
 	}
+	/* The worker has stopped before the adapter is destroyed. */
+	tts_websocket_stream_resampler_destroy(synth_channel);
 
 	/* socket 已在上面关闭，此处仅防御性检查 */
 	{
@@ -1991,85 +2209,6 @@ static apt_bool_t tts_websocket_channel_request_process(mrcp_engine_channel_t *c
 	return tts_websocket_msg_signal(TTS_WEBSOCKET_MSG_REQUEST_PROCESS,channel,request);
 }
 
-/* ---------- audio resample function ---------- */
-/**
- * @brief 将24kHz PCM音频降采样到8kHz（带抗混叠滤波）
- * @param input_pcm 输入PCM数据（16位单声道）
- * @param input_size 输入数据大小（字节数）
- * @param output_size 输出参数，返回输出数据大小
- * @param pool APR内存池
- * @return 返回重采样后的PCM数据，失败返回NULL
- * 说明：
- *   1. 输入为24kHz采样率（TTS服务返回）
- *   2. 使用3:1降采样，先进行移动平均滤波再抽取
- *   3. 输出为8kHz采样率，16位单声道PCM
- * @deprecated 流式场景请使用 resample_pcm_to_8k_stateful 避免帧边界爆音
- */
-static char* resample_pcm_to_8k(const char *input_pcm, apr_size_t input_size, apr_size_t *output_size, apr_pool_t *pool)
-{
-	/* 降采样比例 = 24000 / 8000 = 3 */
-	const int decimation_factor = 3;
-	apr_size_t input_samples = input_size / 2;  /* 16位采样，2字节/采样 */
-	apr_size_t output_samples = input_samples / decimation_factor;
-	apr_size_t output_bytes = output_samples * 2;
-	unsigned char *input_bytes = (unsigned char*)input_pcm;
-	short *output;
-	apr_size_t i;
-
-	if(!input_pcm || input_size == 0 || !output_size || !pool) {
-		return NULL;
-	}
-
-	/* ========== 修复：防御性检查 — 输入大小必须是6字节（3个16-bit采样）的整数倍 ==========
-	 * 非对齐输入会导致末尾采样被整数除法静默丢弃。
-	 * 虽然调用方通过 pcm_accum 机制保证了 6 字节对齐，但此检查可防止
-	 * 未来代码变更引入非对齐调用导致的数据丢失。 */
-	if(input_size % 6 != 0) {
-		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING,
-			"zyTTS: resample_pcm_to_8k: input_size %"APR_SIZE_T_FMT" is not a multiple of 6, "
-			"last %"APR_SIZE_T_FMT" bytes will be dropped",
-			input_size, input_size % 6);
-	}
-
-	output = apr_palloc(pool, output_bytes);
-	if(!output) {
-		apt_log(SYNTH_LOG_MARK,APT_PRIO_WARNING,"zyTTS: Failed to allocate memory for resampled audio");
-		return NULL;
-	}
-
-	/* 调试：打印原始前几个字节 */
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_DEBUG,"zyTTS: Resample input: first 10 bytes = %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-		input_bytes[0], input_bytes[1], input_bytes[2], input_bytes[3], input_bytes[4],
-		input_bytes[5], input_bytes[6], input_bytes[7], input_bytes[8], input_bytes[9]);
-
-	/* 降采样：使用移动平均滤波来减少混叠失真
-	 * 每3个采样点取平均值，而不是简单抽取
-	 * 注意：TTS服务返回的音频通常是little-endian格式
-	 */
-	for(i = 0; i < output_samples; i++) {
-		int sum = 0;
-		/* 对每3个采样点求平均 */
-		apr_size_t j;
-		for(j = 0; j < decimation_factor; j++) {
-			/* 从little-endian字节序读取16位采样值 */
-			apr_size_t sample_idx = (i * decimation_factor + j) * 2;
-			short sample = (short)((input_bytes[sample_idx + 1] << 8) | input_bytes[sample_idx]);
-			sum += sample;
-		}
-		output[i] = (short)(sum / decimation_factor);
-	}
-
-	/* 调试：打印输出前几个采样值 */
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_DEBUG,"zyTTS: Resample output: first 5 samples = %d, %d, %d, %d, %d",
-		output[0], output[1], output[2], output[3], output[4]);
-
-	*output_size = output_bytes;
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_DEBUG,"zyTTS: Resampled audio: %d samples (%d bytes) -> %d samples (%d bytes)",
-		(int)input_samples, (int)input_size, (int)output_samples, (int)output_bytes);
-
-	return (char*)output;
-}
-
 /* ---------- audio bit depth conversion function (16-bit linear to 8-bit mu-law) ---------- */
 /**
  * @brief μ-law编码查找表 (ITU-T G.711标准)
@@ -2156,62 +2295,6 @@ static char* convert_16bit_to_ulaw(const char *input_pcm, apr_size_t input_size,
 	*output_size = output_bytes;
 	apt_log(SYNTH_LOG_MARK,APT_PRIO_DEBUG,"zyTTS: μ-law conversion: %d samples (%d bytes 16bit linear) -> %d samples (%d bytes 8bit μ-law/PCMU)",
 		(int)input_samples, (int)input_size, (int)input_samples, (int)output_bytes);
-
-	return (char*)output;
-}
-
-/* ---------- audio resample function for 8-bit μ-law ---------- */
-/**
- * @brief 将24kHz μ-law音频降采样到8kHz
- * @param input_ulaw 输入μ-law数据（8位单声道）
- * @param input_size 输入数据大小（字节数）
- * @param output_size 输出参数，返回输出数据大小
- * @param pool APR内存池
- * @return 返回重采样后的μ-law数据，失败返回NULL
- * 说明：
- *   1. 输入为24kHz采样率的8bit μ-law数据
- *   2. 使用3:1降采样，简单抽取
- *   3. 输出为8kHz采样率的8bit μ-law数据
- */
-static char* resample_ulaw_to_8k(const char *input_ulaw, apr_size_t input_size, apr_size_t *output_size, apr_pool_t *pool)
-{
-	/* 降采样比例 = 24000 / 8000 = 3 */
-	const int decimation_factor = 3;
-	apr_size_t input_samples = input_size;  /* 8位采样，1字节/采样 */
-	apr_size_t output_samples = input_samples / decimation_factor;
-	apr_size_t output_bytes = output_samples;
-	unsigned char *output;
-
-	if(!input_ulaw || input_size == 0 || !output_size || !pool) {
-		return NULL;
-	}
-
-	output = apr_palloc(pool, output_bytes);
-	if(!output) {
-		apt_log(SYNTH_LOG_MARK,APT_PRIO_WARNING,"zyTTS: Failed to allocate memory for resampled μ-law audio");
-		return NULL;
-	}
-
-	/* 调试：打印原始前几个字节 */
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_INFO,"zyTTS: Resample μ-law input: first 10 bytes = %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-		(unsigned char)input_ulaw[0], (unsigned char)input_ulaw[1], (unsigned char)input_ulaw[2],
-		(unsigned char)input_ulaw[3], (unsigned char)input_ulaw[4], (unsigned char)input_ulaw[5],
-		(unsigned char)input_ulaw[6], (unsigned char)input_ulaw[7], (unsigned char)input_ulaw[8],
-		(unsigned char)input_ulaw[9]);
-
-	/* 降采样：简单抽取，每3个采样点取1个 */
-	apr_size_t i;
-	for(i = 0; i < output_samples; i++) {
-		output[i] = input_ulaw[i * decimation_factor];
-	}
-
-	/* 调试：打印输出前几个采样值 */
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_INFO,"zyTTS: Resample μ-law output: first 5 samples = 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X",
-		output[0], output[1], output[2], output[3], output[4]);
-
-	*output_size = output_bytes;
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_INFO,"zyTTS: Resampled μ-law audio: %d samples (%d bytes) -> %d samples (%d bytes)",
-		(int)input_samples, (int)input_size, (int)output_samples, (int)output_bytes);
 
 	return (char*)output;
 }
