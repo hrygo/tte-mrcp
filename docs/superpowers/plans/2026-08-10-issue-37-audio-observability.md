@@ -144,19 +144,27 @@ git commit -m "feat(tts): include scheduler thread in speak logs" -m "Refs #37"
 **文件：**
 - 修改：`docs/superpowers/plans/2026-08-10-issue-37-audio-observability.md`
 
-- [ ] **步骤 1：运行最终验证**
+- [x] **步骤 1：运行最终验证**
 
 运行：`git diff --check`、`find tools -type f -name '*.sh' -print0 | xargs -0 bash -n`、目标 ASR/TTS 单测、`cmake -S . -B /tmp/tte-mrcp-issue37 -DCMAKE_POLICY_VERSION_MINIMUM=3.5`。
 
 预期：变更卫生与可执行目标通过；全量构建若命中已知 MPF 宏签名基线，则记录为独立阻断，不归因于本 Issue。
 
-- [ ] **步骤 2：重新索引并查询关键链路**
+- [x] **步骤 2：重新索引并查询关键链路**
 
 运行 codebase-memory `index_repository`，查询 `funasr_stream_write → funasr_transport_enqueue_pcm` 和 `tts_websocket_channel_speak`，将结果与未验证的平台状态记录在本计划的执行结果中。
 
-- [ ] **步骤 3：提交最终验证记录**
+- [x] **步骤 3：提交最终验证记录**
 
 ```bash
 git add docs/superpowers/plans/2026-08-10-issue-37-audio-observability.md
 git commit -m "test: record issue 37 verification" -m "Refs #37"
 ```
+
+## 执行结果（2026-08-10）
+
+- macOS：`tools/dev/setup_macos.sh` 安装 Sofia-SIP 后，CMake 配置成功；`tts_websocket.so`、ASR transport 及 TTS 测试目标均构建成功。
+- 测试：`asr_websocket_funasr_ws_transport`、`tts_websocket_http_parse`、`tts_websocket_ws`、`tts_websocket_thread` 共 4/4 通过。
+- 构建卫生：`./configure --help`、全部 `tools/**/*.sh` 的 `bash -n` 和 `git diff --check` 通过。
+- 图谱：`tte-mrcp-issue-37` 已重新索引（5,903 nodes / 34,434 edges）；`funasr_transport_enqueue_pcm` 仍受 transport 单测覆盖，`tts_websocket_channel_speak` 已直接调用 `tts_websocket_thread_id_current`。
+- Windows、Linux：未验证。本次只同步了 Visual Studio 的 TTS 源文件登记；未执行 MSBuild/DLL 加载或 Linux 插件加载/冒烟。
