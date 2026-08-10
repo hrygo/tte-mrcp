@@ -1,6 +1,7 @@
 #include "funasr_ws_transport.h"
 #include "funasr_audio.h"
 #include "funasr_json.h"
+#include "apt_log.h"
 
 #include <apr_base64.h>
 #include <apr_general.h>
@@ -1021,7 +1022,15 @@ static apr_status_t funasr_default_io_write(
     apr_size_t *size)
 {
     funasr_default_io_t *io = (funasr_default_io_t *)obj;
-    return apr_socket_send(io->socket, (const char *)data, size);
+    apr_status_t status;
+
+    status = apr_socket_send(io->socket, (const char *)data, size);
+    if (status == APR_SUCCESS && *size != 0) {
+        apt_log(APT_LOG_MARK, APT_PRIO_DEBUG,
+            "asr_websocket: 发送 ASR WebSocket 网络数据包，大小=%" APR_SIZE_T_FMT " 字节",
+            *size);
+    }
+    return status;
 }
 
 static void funasr_default_io_close(void *obj)

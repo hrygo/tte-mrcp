@@ -769,6 +769,9 @@ static apt_bool_t funasr_stream_write(
     }
     data = frame->codec_frame.buffer;
     size = frame->codec_frame.size;
+    LOG_WITH_SID(channel, APT_PRIO_DEBUG,
+        "接收客户端媒体流音频数据包，大小=%" APR_SIZE_T_FMT " 字节",
+        frame->codec_frame.size);
     if (media.input_sample_rate == 8000) {
         if (!funasr_resample_8k_to_16k_into(
                 &channel->resample,
