@@ -934,7 +934,7 @@ static void funasr_transport_event_on_task(
         LOG_WITH_SID(
             entry->channel,
             APT_PRIO_INFO,
-            "audio transport generation=%lu audio_rx_frames=%lu audio_rx_bytes=%lu audio_rx_gap_samples=%lu audio_rx_gap_hist_ms=%s audio_rx_gap_p99_ms=%ld audio_rx_gap_max_ms=%ld audio_tx_frames=%lu audio_tx_bytes=%lu audio_tx_last_us=%ld audio_tx_gap_last_ms=%ld audio_tx_gap_max_ms=%ld ring_high_water=%lu overrun_bytes=%lu overrun_events=%lu first_send_ms=%ld write_wait_max_ms=%ld abnormal_closes=%lu partial_reads=%lu rx_messages=%lu completion_failure=%d",
+            "audio transport generation=%lu audio_rx_frames=%lu audio_rx_bytes=%lu audio_rx_gap_samples=%lu audio_rx_gap_hist_ms=%s audio_rx_gap_p99_ms=%ld audio_rx_gap_max_ms=%ld audio_tx_frames=%lu audio_tx_bytes=%lu audio_tx_last_us=%" APR_INT64_T_FMT " audio_tx_gap_last_ms=%ld audio_tx_gap_max_ms=%ld ring_high_water=%lu overrun_bytes=%lu overrun_events=%lu first_send_ms=%ld write_wait_max_ms=%ld abnormal_closes=%lu partial_reads=%lu rx_messages=%lu completion_failure=%d",
             (unsigned long)event->generation,
             (unsigned long)event->metrics.media_frames,
             (unsigned long)event->metrics.valid_audio_bytes,
@@ -944,7 +944,7 @@ static void funasr_transport_event_on_task(
             (long)(event->metrics.media_gap_max_us / 1000),
             (unsigned long)event->metrics.ws_audio_frames,
             (unsigned long)event->metrics.ws_audio_bytes,
-            (long)event->metrics.ws_audio_last_send_us,
+            event->metrics.ws_audio_last_send_us,
             (long)(event->metrics.ws_audio_gap_last_us / 1000),
             (long)(event->metrics.ws_audio_gap_max_us / 1000),
             (unsigned long)event->metrics.tx_ring_high_water_bytes,
