@@ -251,7 +251,6 @@ jobs:
           make -j"$(getconf _NPROCESSORS_ONLN)"
           make install DESTDIR="$GITHUB_WORKSPACE/package-root"
 
-          set -x
           package_dir="$GITHUB_WORKSPACE/package-root/opt/tte-mrcp"
           test -x "$package_dir/bin/unimrcpserver"
           test -x "$package_dir/bin/umc"
@@ -271,7 +270,11 @@ jobs:
           test -f "$tts_plugin"
           speexdsp_resolved="$(LD_LIBRARY_PATH="$package_dir/lib" ldd "$tts_plugin" \
             | awk '$1 == "libspeexdsp.so.1" {print $3; exit}')"
-          test "$speexdsp_resolved" = "$package_dir/lib/libspeexdsp.so.1"
+          # libtool embeds the deploy-time prefix in the plugin RPATH. During
+          # DESTDIR packaging, ldd therefore reports /opt/tte-mrcp/lib rather
+          # than the temporary package-root path. The staged SONAME chain and
+          # ZIP assertions below verify that this runtime library is packaged.
+          test "$speexdsp_resolved" = "$SPEEXDSP_PREFIX/lib/libspeexdsp.so.1"
 
           # ---- Plugin unit-test gates (target ABI container) ----
           # Autotools gate: asr_websocket check_PROGRAMS (4 tests).
