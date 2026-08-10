@@ -23,7 +23,9 @@ test_funasr_ws_transport_SOURCES = \
                              tests/test_funasr_ws_transport.c \
                              src/funasr_audio.c src/funasr_clock.c \
                              src/funasr_json.c src/funasr_ws_transport.c
-test_funasr_ws_transport_LDADD = $(UNIMRCP_APR_LIBS)
+test_funasr_ws_transport_LDADD = \
+                             $(top_builddir)/libs/apr-toolkit/libaprtoolkit.la \
+                             $(UNIMRCP_APR_LIBS)
 test_funasr_ws_transport_CPPFLAGS = $(AM_CPPFLAGS)
 test_funasr_control_SOURCES = tests/test_funasr_control.c src/funasr_control.c
 test_funasr_control_CPPFLAGS = $(AM_CPPFLAGS)

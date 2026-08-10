@@ -170,7 +170,9 @@ am_test_funasr_ws_transport_OBJECTS = tests/test_funasr_ws_transport-test_funasr
 test_funasr_ws_transport_OBJECTS =  \
 	$(am_test_funasr_ws_transport_OBJECTS)
 am__DEPENDENCIES_1 =
-test_funasr_ws_transport_DEPENDENCIES = $(am__DEPENDENCIES_1)
+test_funasr_ws_transport_DEPENDENCIES =  \
+	$(top_builddir)/libs/apr-toolkit/libaprtoolkit.la \
+	$(am__DEPENDENCIES_1)
 am_test_json_unescape_OBJECTS =  \
 	tests/test_json_unescape-test_json_unescape.$(OBJEXT) \
 	src/test_json_unescape-funasr_json.$(OBJEXT)
@@ -612,7 +614,10 @@ test_funasr_ws_transport_SOURCES = \
                              src/funasr_audio.c src/funasr_clock.c \
                              src/funasr_json.c src/funasr_ws_transport.c
 
-test_funasr_ws_transport_LDADD = $(UNIMRCP_APR_LIBS)
+test_funasr_ws_transport_LDADD = \
+                             $(top_builddir)/libs/apr-toolkit/libaprtoolkit.la \
+                             $(UNIMRCP_APR_LIBS)
+
 test_funasr_ws_transport_CPPFLAGS = $(AM_CPPFLAGS)
 test_funasr_control_SOURCES = tests/test_funasr_control.c src/funasr_control.c
 test_funasr_control_CPPFLAGS = $(AM_CPPFLAGS)
