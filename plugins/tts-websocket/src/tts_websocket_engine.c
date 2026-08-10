@@ -30,6 +30,7 @@
 #include "mrcp_synth_engine.h"
 #include "tts_websocket_pcm.h"
 #include "tts_websocket_lifecycle.h"
+#include "tts_websocket_thread.h"
 #include "tts_websocket_ws.h"
 #include "apt_consumer_task.h"
 #include "apt_log.h"
@@ -2233,7 +2234,8 @@ static char* resample_ulaw_to_8k(const char *input_ulaw, apr_size_t input_size, 
  */
 static apt_bool_t tts_websocket_channel_speak(mrcp_engine_channel_t *channel, mrcp_message_t *request, mrcp_message_t *response)
 {
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_INFO,"Received SPEAK request " APT_SIDRES_FMT, MRCP_MESSAGE_SIDRES(request));
+	apt_log(SYNTH_LOG_MARK,APT_PRIO_INFO,"Received SPEAK request thread_id=%lu " APT_SIDRES_FMT,
+		tts_websocket_thread_id_current(), MRCP_MESSAGE_SIDRES(request));
 	/* char *file_path = NULL;  // 已注释：本地文件回退功能已禁用 */
 	tts_websocket_channel_t *synth_channel = channel->method_obj;
 	const mpf_codec_descriptor_t *descriptor = mrcp_engine_source_stream_codec_get(channel);

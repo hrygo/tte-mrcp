@@ -145,7 +145,7 @@ tts_websocket_la_LIBADD =
 am__dirstamp = $(am__leading_dot)dirstamp
 am_tts_websocket_la_OBJECTS = src/tts_websocket_engine.lo \
 	src/tts_websocket_pcm.lo src/tts_websocket_lifecycle.lo \
-	src/tts_websocket_ws.lo
+	src/tts_websocket_thread.lo src/tts_websocket_ws.lo
 tts_websocket_la_OBJECTS = $(am_tts_websocket_la_OBJECTS)
 AM_V_lt = $(am__v_lt_@AM_V@)
 am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
@@ -173,6 +173,7 @@ am__maybe_remake_depfiles = depfiles
 am__depfiles_remade = src/$(DEPDIR)/tts_websocket_engine.Plo \
 	src/$(DEPDIR)/tts_websocket_lifecycle.Plo \
 	src/$(DEPDIR)/tts_websocket_pcm.Plo \
+	src/$(DEPDIR)/tts_websocket_thread.Plo \
 	src/$(DEPDIR)/tts_websocket_ws.Plo
 am__mv = mv -f
 COMPILE = $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) \
@@ -366,7 +367,7 @@ top_srcdir = @top_srcdir@
 vardir = @vardir@
 AM_CPPFLAGS = $(UNIMRCP_PLUGIN_INCLUDES)
 plugin_LTLIBRARIES = tts_websocket.la
-tts_websocket_la_SOURCES = src/tts_websocket_engine.c src/tts_websocket_pcm.c src/tts_websocket_lifecycle.c src/tts_websocket_ws.c
+tts_websocket_la_SOURCES = src/tts_websocket_engine.c src/tts_websocket_pcm.c src/tts_websocket_lifecycle.c src/tts_websocket_thread.c src/tts_websocket_ws.c
 tts_websocket_la_LDFLAGS = $(UNIMRCP_PLUGIN_OPTS)
 MAINTAINERCLEANFILES = Makefile.in
 
@@ -462,6 +463,8 @@ src/tts_websocket_pcm.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
 src/tts_websocket_lifecycle.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
+src/tts_websocket_thread.lo: src/$(am__dirstamp) \
+	src/$(DEPDIR)/$(am__dirstamp)
 src/tts_websocket_ws.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
 
@@ -479,6 +482,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_engine.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_lifecycle.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_pcm.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_thread.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_ws.Plo@am__quote@ # am--include-marker
 
 $(am__depfiles_remade):
@@ -652,6 +656,7 @@ distclean: distclean-am
 	-rm -f src/$(DEPDIR)/tts_websocket_engine.Plo
 	-rm -f src/$(DEPDIR)/tts_websocket_lifecycle.Plo
 	-rm -f src/$(DEPDIR)/tts_websocket_pcm.Plo
+	-rm -f src/$(DEPDIR)/tts_websocket_thread.Plo
 	-rm -f src/$(DEPDIR)/tts_websocket_ws.Plo
 	-rm -f Makefile
 distclean-am: clean-am distclean-compile distclean-generic \
@@ -701,6 +706,7 @@ maintainer-clean: maintainer-clean-am
 	-rm -f src/$(DEPDIR)/tts_websocket_engine.Plo
 	-rm -f src/$(DEPDIR)/tts_websocket_lifecycle.Plo
 	-rm -f src/$(DEPDIR)/tts_websocket_pcm.Plo
+	-rm -f src/$(DEPDIR)/tts_websocket_thread.Plo
 	-rm -f src/$(DEPDIR)/tts_websocket_ws.Plo
 	-rm -f Makefile
 maintainer-clean-am: distclean-am maintainer-clean-generic

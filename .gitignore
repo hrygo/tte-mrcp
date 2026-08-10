@@ -11,6 +11,9 @@
 # Local recovery archive (not part of the source distribution)
 /.archive/
 
+# Local linked worktrees
+/.worktrees/
+
 # Autotools and Libtool generated files
 Makefile
 configure~

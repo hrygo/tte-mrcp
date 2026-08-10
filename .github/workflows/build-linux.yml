@@ -258,7 +258,7 @@ jobs:
                      test_funasr_ws_transport test_funasr_control \
                      test_tts_websocket_http_parse \
                      test_tts_websocket_pcm test_tts_websocket_lifecycle \
-                     test_tts_websocket_ws \
+                     test_tts_websocket_ws test_tts_websocket_thread \
               -j"$(getconf _NPROCESSORS_ONLN)" \
               > "$GITHUB_WORKSPACE/cmake-build-$TARGET.log" 2>&1 || {
                 tail -n 120 "$GITHUB_WORKSPACE/cmake-build-$TARGET.log"

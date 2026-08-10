@@ -28,6 +28,31 @@ WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 METRICS_RE = re.compile(
     r"(?:session_id=(?P<session_id>[^\]]+)\]\s+)?"
+    r"audio transport generation=(?P<generation>\d+)"
+    r" audio_rx_frames=(?P<media_frames>\d+)"
+    r" audio_rx_bytes=(?P<valid_audio_bytes>\d+)"
+    r" audio_rx_gap_samples=(?P<media_gap_samples>\d+)"
+    r" audio_rx_gap_hist_ms=(?P<media_gap_hist_ms>\S+)"
+    r" audio_rx_gap_p99_ms=(?P<media_gap_p99_ms>\d+)"
+    r" audio_rx_gap_max_ms=(?P<media_gap_max_ms>\d+)"
+    r" audio_tx_frames=(?P<ws_audio_frames>\d+)"
+    r" audio_tx_bytes=(?P<ws_audio_bytes>\d+)"
+    r" audio_tx_last_us=(?P<ws_audio_last_us>-?\d+)"
+    r" audio_tx_gap_last_ms=(?P<ws_audio_gap_last_ms>-?\d+)"
+    r" audio_tx_gap_max_ms=(?P<ws_audio_gap_max_ms>-?\d+)"
+    r" ring_high_water=(?P<ring_high_water>\d+)"
+    r" overrun_bytes=(?P<overrun_bytes>\d+)"
+    r" overrun_events=(?P<overrun_events>\d+)"
+    r" first_send_ms=(?P<first_send_ms>-?\d+)"
+    r" write_wait_max_ms=(?P<write_wait_max_ms>\d+)"
+    r" abnormal_closes=(?P<abnormal_closes>\d+)"
+    r" partial_reads=(?P<partial_reads>\d+)"
+    r" rx_messages=(?P<rx_messages>\d+)"
+    r" completion_failure=(?P<completion_failure>\d+)"
+)
+
+LEGACY_METRICS_RE = re.compile(
+    r"(?:session_id=(?P<session_id>[^\]]+)\]\s+)?"
     r"transport metrics generation=(?P<generation>\d+)"
     r" media_frames=(?P<media_frames>\d+)"
     r" media_gap_samples=(?P<media_gap_samples>\d+)"
@@ -390,7 +415,7 @@ def parse_server_metrics(path: Path | None) -> list[dict[str, Any]]:
     metrics: list[dict[str, Any]] = []
     with path.open(encoding="utf-8", errors="replace") as stream:
         for line in stream:
-            match = METRICS_RE.search(line)
+            match = METRICS_RE.search(line) or LEGACY_METRICS_RE.search(line)
             if match:
                 values: dict[str, Any] = {}
                 for key, value in match.groupdict().items():
@@ -595,9 +620,12 @@ class FixtureSelfTests(unittest.TestCase):
 
     def test_metrics_parser_and_histogram_aggregation(self) -> None:
         line = (
-            "asr_websocket: [session_id=s-2] transport metrics generation=2 "
-            "media_frames=50 media_gap_samples=49 media_gap_hist_ms=20:48,120:1 "
-            "media_gap_p99_ms=120 media_gap_max_ms=120 valid_audio_bytes=32000 "
+            "asr_websocket: [session_id=s-2] audio transport generation=2 "
+            "audio_rx_frames=50 audio_rx_bytes=32000 audio_rx_gap_samples=49 "
+            "audio_rx_gap_hist_ms=20:48,120:1 audio_rx_gap_p99_ms=120 "
+            "audio_rx_gap_max_ms=120 audio_tx_frames=50 audio_tx_bytes=32000 "
+            "audio_tx_last_us=123456 audio_tx_gap_last_ms=20 "
+            "audio_tx_gap_max_ms=120 "
             "ring_high_water=6400 overrun_bytes=0 overrun_events=0 "
             "first_send_ms=201 write_wait_max_ms=2 abnormal_closes=0 "
             "partial_reads=3 rx_messages=1 completion_failure=7\n"

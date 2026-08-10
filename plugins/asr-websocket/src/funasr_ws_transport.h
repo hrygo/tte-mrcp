@@ -194,6 +194,11 @@ typedef struct funasr_transport_metrics_t {
     apr_int64_t enqueue_max_us;
     apr_int64_t ws_first_send_ms;
     apr_int64_t ws_write_wait_max_ms;
+    apr_uint64_t ws_audio_frames;
+    apr_uint64_t ws_audio_bytes;
+    apr_int64_t ws_audio_last_send_us;
+    apr_int64_t ws_audio_gap_last_us;
+    apr_int64_t ws_audio_gap_max_us;
     apr_size_t tx_ring_high_water_bytes;
     apr_size_t tx_ring_overrun_bytes;
     apr_size_t tx_ring_overrun_events;
