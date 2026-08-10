@@ -90,6 +90,8 @@ PRE_UNINSTALL = :
 POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
+check_PROGRAMS = test_tts_websocket_resampler$(EXEEXT) \
+	test_tts_websocket_stream_pipeline$(EXEEXT)
 subdir = plugins/tts-websocket
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/build/acmacros/opencore_amr.m4 \
@@ -141,11 +143,16 @@ am__uninstall_files_from_dir = { \
   }
 am__installdirs = "$(DESTDIR)$(plugindir)"
 LTLIBRARIES = $(plugin_LTLIBRARIES)
-tts_websocket_la_LIBADD =
+am__DEPENDENCIES_1 =
+tts_websocket_la_DEPENDENCIES = $(am__DEPENDENCIES_1)
 am__dirstamp = $(am__leading_dot)dirstamp
-am_tts_websocket_la_OBJECTS = src/tts_websocket_engine.lo \
-	src/tts_websocket_pcm.lo src/tts_websocket_lifecycle.lo \
-	src/tts_websocket_ws.lo
+am_tts_websocket_la_OBJECTS =  \
+	src/tts_websocket_la-tts_websocket_engine.lo \
+	src/tts_websocket_la-tts_websocket_pcm.lo \
+	src/tts_websocket_la-tts_websocket_lifecycle.lo \
+	src/tts_websocket_la-tts_websocket_ws.lo \
+	src/tts_websocket_la-tts_websocket_resampler.lo \
+	src/tts_websocket_la-tts_websocket_stream_pipeline.lo
 tts_websocket_la_OBJECTS = $(am_tts_websocket_la_OBJECTS)
 AM_V_lt = $(am__v_lt_@AM_V@)
 am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
@@ -155,6 +162,20 @@ tts_websocket_la_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC \
 	$(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=link $(CCLD) \
 	$(AM_CFLAGS) $(CFLAGS) $(tts_websocket_la_LDFLAGS) $(LDFLAGS) \
 	-o $@
+am_test_tts_websocket_resampler_OBJECTS = tests/test_tts_websocket_resampler-test_tts_websocket_resampler.$(OBJEXT) \
+	src/test_tts_websocket_resampler-tts_websocket_resampler.$(OBJEXT) \
+	src/test_tts_websocket_resampler-tts_websocket_pcm.$(OBJEXT)
+test_tts_websocket_resampler_OBJECTS =  \
+	$(am_test_tts_websocket_resampler_OBJECTS)
+test_tts_websocket_resampler_DEPENDENCIES = $(am__DEPENDENCIES_1)
+am_test_tts_websocket_stream_pipeline_OBJECTS = tests/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.$(OBJEXT) \
+	src/test_tts_websocket_stream_pipeline-tts_websocket_resampler.$(OBJEXT) \
+	src/test_tts_websocket_stream_pipeline-tts_websocket_pcm.$(OBJEXT) \
+	src/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.$(OBJEXT)
+test_tts_websocket_stream_pipeline_OBJECTS =  \
+	$(am_test_tts_websocket_stream_pipeline_OBJECTS)
+test_tts_websocket_stream_pipeline_DEPENDENCIES =  \
+	$(am__DEPENDENCIES_1) $(am__DEPENDENCIES_1)
 AM_V_P = $(am__v_P_@AM_V@)
 am__v_P_ = $(am__v_P_@AM_DEFAULT_V@)
 am__v_P_0 = false
@@ -170,10 +191,19 @@ am__v_at_1 =
 DEFAULT_INCLUDES = 
 depcomp = $(SHELL) $(top_srcdir)/build/depcomp
 am__maybe_remake_depfiles = depfiles
-am__depfiles_remade = src/$(DEPDIR)/tts_websocket_engine.Plo \
-	src/$(DEPDIR)/tts_websocket_lifecycle.Plo \
-	src/$(DEPDIR)/tts_websocket_pcm.Plo \
-	src/$(DEPDIR)/tts_websocket_ws.Plo
+am__depfiles_remade = src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_pcm.Po \
+	src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_resampler.Po \
+	src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_pcm.Po \
+	src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_resampler.Po \
+	src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.Po \
+	src/$(DEPDIR)/tts_websocket_la-tts_websocket_engine.Plo \
+	src/$(DEPDIR)/tts_websocket_la-tts_websocket_lifecycle.Plo \
+	src/$(DEPDIR)/tts_websocket_la-tts_websocket_pcm.Plo \
+	src/$(DEPDIR)/tts_websocket_la-tts_websocket_resampler.Plo \
+	src/$(DEPDIR)/tts_websocket_la-tts_websocket_stream_pipeline.Plo \
+	src/$(DEPDIR)/tts_websocket_la-tts_websocket_ws.Plo \
+	tests/$(DEPDIR)/test_tts_websocket_resampler-test_tts_websocket_resampler.Po \
+	tests/$(DEPDIR)/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.Po
 am__mv = mv -f
 COMPILE = $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) \
 	$(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
@@ -193,8 +223,12 @@ AM_V_CCLD = $(am__v_CCLD_@AM_V@)
 am__v_CCLD_ = $(am__v_CCLD_@AM_DEFAULT_V@)
 am__v_CCLD_0 = @echo "  CCLD    " $@;
 am__v_CCLD_1 = 
-SOURCES = $(tts_websocket_la_SOURCES)
-DIST_SOURCES = $(tts_websocket_la_SOURCES)
+SOURCES = $(tts_websocket_la_SOURCES) \
+	$(test_tts_websocket_resampler_SOURCES) \
+	$(test_tts_websocket_stream_pipeline_SOURCES)
+DIST_SOURCES = $(tts_websocket_la_SOURCES) \
+	$(test_tts_websocket_resampler_SOURCES) \
+	$(test_tts_websocket_stream_pipeline_SOURCES)
 am__can_run_installinfo = \
   case $$AM_UPDATE_INFO_DIR in \
     n|no|NO) false;; \
@@ -217,8 +251,193 @@ am__define_uniq_tagged_files = \
   unique=`for i in $$list; do \
     if test -f "$$i"; then echo $$i; else echo $(srcdir)/$$i; fi; \
   done | $(am__uniquify_input)`
+am__tty_colors_dummy = \
+  mgn= red= grn= lgn= blu= brg= std=; \
+  am__color_tests=no
+am__tty_colors = { \
+  $(am__tty_colors_dummy); \
+  if test "X$(AM_COLOR_TESTS)" = Xno; then \
+    am__color_tests=no; \
+  elif test "X$(AM_COLOR_TESTS)" = Xalways; then \
+    am__color_tests=yes; \
+  elif test "X$$TERM" != Xdumb && { test -t 1; } 2>/dev/null; then \
+    am__color_tests=yes; \
+  fi; \
+  if test $$am__color_tests = yes; then \
+    red='[0;31m'; \
+    grn='[0;32m'; \
+    lgn='[1;32m'; \
+    blu='[1;34m'; \
+    mgn='[0;35m'; \
+    brg='[1m'; \
+    std='[m'; \
+  fi; \
+}
+am__recheck_rx = ^[ 	]*:recheck:[ 	]*
+am__global_test_result_rx = ^[ 	]*:global-test-result:[ 	]*
+am__copy_in_global_log_rx = ^[ 	]*:copy-in-global-log:[ 	]*
+# A command that, given a newline-separated list of test names on the
+# standard input, print the name of the tests that are to be re-run
+# upon "make recheck".
+am__list_recheck_tests = $(AWK) '{ \
+  recheck = 1; \
+  while ((rc = (getline line < ($$0 ".trs"))) != 0) \
+    { \
+      if (rc < 0) \
+        { \
+          if ((getline line2 < ($$0 ".log")) < 0) \
+	    recheck = 0; \
+          break; \
+        } \
+      else if (line ~ /$(am__recheck_rx)[nN][Oo]/) \
+        { \
+          recheck = 0; \
+          break; \
+        } \
+      else if (line ~ /$(am__recheck_rx)[yY][eE][sS]/) \
+        { \
+          break; \
+        } \
+    }; \
+  if (recheck) \
+    print $$0; \
+  close ($$0 ".trs"); \
+  close ($$0 ".log"); \
+}'
+# A command that, given a newline-separated list of test names on the
+# standard input, create the global log from their .trs and .log files.
+am__create_global_log = $(AWK) ' \
+function fatal(msg) \
+{ \
+  print "fatal: making $@: " msg | "cat >&2"; \
+  exit 1; \
+} \
+function rst_section(header) \
+{ \
+  print header; \
+  len = length(header); \
+  for (i = 1; i <= len; i = i + 1) \
+    printf "="; \
+  printf "\n\n"; \
+} \
+{ \
+  copy_in_global_log = 1; \
+  global_test_result = "RUN"; \
+  while ((rc = (getline line < ($$0 ".trs"))) != 0) \
+    { \
+      if (rc < 0) \
+         fatal("failed to read from " $$0 ".trs"); \
+      if (line ~ /$(am__global_test_result_rx)/) \
+        { \
+          sub("$(am__global_test_result_rx)", "", line); \
+          sub("[ 	]*$$", "", line); \
+          global_test_result = line; \
+        } \
+      else if (line ~ /$(am__copy_in_global_log_rx)[nN][oO]/) \
+        copy_in_global_log = 0; \
+    }; \
+  if (copy_in_global_log) \
+    { \
+      rst_section(global_test_result ": " $$0); \
+      while ((rc = (getline line < ($$0 ".log"))) != 0) \
+      { \
+        if (rc < 0) \
+          fatal("failed to read from " $$0 ".log"); \
+        print line; \
+      }; \
+      printf "\n"; \
+    }; \
+  close ($$0 ".trs"); \
+  close ($$0 ".log"); \
+}'
+# Restructured Text title.
+am__rst_title = { sed 's/.*/   &   /;h;s/./=/g;p;x;s/ *$$//;p;g' && echo; }
+# Solaris 10 'make', and several other traditional 'make' implementations,
+# pass "-e" to $(SHELL), and POSIX 2008 even requires this.  Work around it
+# by disabling -e (using the XSI extension "set +e") if it's set.
+am__sh_e_setup = case $$- in *e*) set +e;; esac
+# Default flags passed to test drivers.
+am__common_driver_flags = \
+  --color-tests "$$am__color_tests" \
+  $$am__collect_skipped_logs \
+  --enable-hard-errors "$$am__enable_hard_errors" \
+  --expect-failure "$$am__expect_failure"
+# To be inserted before the command running the test.  Creates the
+# directory for the log if needed.  Stores in $dir the directory
+# containing $f, in $tst the test, in $log the log.  Executes the
+# developer-defined test setup AM_TESTS_ENVIRONMENT (if any), and
+# passes TESTS_ENVIRONMENT.  Set up options for the wrapper that
+# will run the test scripts (or their associated LOG_COMPILER, if
+# thy have one).
+am__check_pre = \
+$(am__sh_e_setup);					\
+$(am__vpath_adj_setup) $(am__vpath_adj)			\
+$(am__tty_colors);					\
+srcdir=$(srcdir); export srcdir;			\
+case "$@" in						\
+  */*) am__odir=`echo "./$@" | sed 's|/[^/]*$$||'`;;	\
+    *) am__odir=.;; 					\
+esac;							\
+test "x$$am__odir" = x"." || test -d "$$am__odir" 	\
+  || $(MKDIR_P) "$$am__odir" || exit $$?;		\
+if test -f "./$$f"; then dir=./;			\
+elif test -f "$$f"; then dir=;				\
+else dir="$(srcdir)/"; fi;				\
+tst=$$dir$$f; log='$@'; 				\
+if test -n '$(IGNORE_SKIPPED_LOGS)'; then		\
+  am__collect_skipped_logs='--collect-skipped-logs no';	\
+else							\
+  am__collect_skipped_logs='';				\
+fi;							\
+if test -n '$(DISABLE_HARD_ERRORS)'; then		\
+  am__enable_hard_errors=no; 				\
+else							\
+  am__enable_hard_errors=yes; 				\
+fi; 							\
+case " $(XFAIL_TESTS) " in				\
+  *[\ \	]$$f[\ \	]* | *[\ \	]$$dir$$f[\ \	]*) \
+    am__expect_failure=yes;;				\
+  *)							\
+    am__expect_failure=no;;				\
+esac; 							\
+$(AM_TESTS_ENVIRONMENT) $(TESTS_ENVIRONMENT)
+# A shell command to get the names of the tests scripts with any registered
+# extension removed (i.e., equivalently, the names of the test logs, with
+# the '.log' extension removed).  The result is saved in the shell variable
+# '$bases'.  This honors runtime overriding of TESTS and TEST_LOGS.  Sadly,
+# we cannot use something simpler, involving e.g., "$(TEST_LOGS:.log=)",
+# since that might cause problem with VPATH rewrites for suffix-less tests.
+# See also 'test-harness-vpath-rewrite.sh' and 'test-trs-basic.sh'.
+am__set_TESTS_bases = \
+  bases='$(TEST_LOGS)'; \
+  bases=`for i in $$bases; do echo $$i; done | sed 's/\.log$$//'`; \
+  bases=`echo $$bases`
+AM_TESTSUITE_SUMMARY_HEADER = ' for $(PACKAGE_STRING)'
+RECHECK_LOGS = $(TEST_LOGS)
+AM_RECURSIVE_TARGETS = check recheck
+TEST_SUITE_LOG = test-suite.log
+TEST_EXTENSIONS = @EXEEXT@ .test
+LOG_DRIVER = $(SHELL) $(top_srcdir)/build/test-driver
+LOG_COMPILE = $(LOG_COMPILER) $(AM_LOG_FLAGS) $(LOG_FLAGS)
+am__set_b = \
+  case '$@' in \
+    */*) \
+      case '$*' in \
+        */*) b='$*';; \
+          *) b=`echo '$@' | sed 's/\.log$$//'`; \
+       esac;; \
+    *) \
+      b='$*';; \
+  esac
+am__test_logs1 = $(TESTS:=.log)
+am__test_logs2 = $(am__test_logs1:@EXEEXT@.log=.log)
+TEST_LOGS = $(am__test_logs2:.test.log=.log)
+TEST_LOG_DRIVER = $(SHELL) $(top_srcdir)/build/test-driver
+TEST_LOG_COMPILE = $(TEST_LOG_COMPILER) $(AM_TEST_LOG_FLAGS) \
+	$(TEST_LOG_FLAGS)
 am__DIST_COMMON = $(srcdir)/Makefile.in $(top_srcdir)/build/depcomp \
-	$(top_srcdir)/build/rules/uniplugin.am
+	$(top_srcdir)/build/rules/uniplugin.am \
+	$(top_srcdir)/build/test-driver
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
 ACLOCAL = @ACLOCAL@
 AMTAR = @AMTAR@
@@ -286,11 +505,15 @@ PACKAGE_URL = @PACKAGE_URL@
 PACKAGE_VERSION = @PACKAGE_VERSION@
 PATH_SEPARATOR = @PATH_SEPARATOR@
 PKG_CONFIG = @PKG_CONFIG@
+PKG_CONFIG_LIBDIR = @PKG_CONFIG_LIBDIR@
+PKG_CONFIG_PATH = @PKG_CONFIG_PATH@
 PLUGIN_LT_VERSION = @PLUGIN_LT_VERSION@
 RANLIB = @RANLIB@
 SED = @SED@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
+SPEEXDSP_CFLAGS = @SPEEXDSP_CFLAGS@
+SPEEXDSP_LIBS = @SPEEXDSP_LIBS@
 STRIP = @STRIP@
 UNIMRCP_APR_INCLUDES = @UNIMRCP_APR_INCLUDES@
 UNIMRCP_APR_LIBS = @UNIMRCP_APR_LIBS@
@@ -366,8 +589,26 @@ top_srcdir = @top_srcdir@
 vardir = @vardir@
 AM_CPPFLAGS = $(UNIMRCP_PLUGIN_INCLUDES)
 plugin_LTLIBRARIES = tts_websocket.la
-tts_websocket_la_SOURCES = src/tts_websocket_engine.c src/tts_websocket_pcm.c src/tts_websocket_lifecycle.c src/tts_websocket_ws.c
+tts_websocket_la_SOURCES = src/tts_websocket_engine.c src/tts_websocket_pcm.c src/tts_websocket_lifecycle.c src/tts_websocket_ws.c src/tts_websocket_resampler.c src/tts_websocket_stream_pipeline.c
+tts_websocket_la_CPPFLAGS = $(AM_CPPFLAGS) $(SPEEXDSP_CFLAGS)
+tts_websocket_la_LIBADD = $(SPEEXDSP_LIBS)
 tts_websocket_la_LDFLAGS = $(UNIMRCP_PLUGIN_OPTS)
+TESTS = $(check_PROGRAMS)
+test_tts_websocket_resampler_SOURCES = \
+	tests/test_tts_websocket_resampler.c \
+	src/tts_websocket_resampler.c \
+	src/tts_websocket_pcm.c
+
+test_tts_websocket_resampler_CPPFLAGS = $(AM_CPPFLAGS) $(SPEEXDSP_CFLAGS)
+test_tts_websocket_resampler_LDADD = $(SPEEXDSP_LIBS) -lm
+test_tts_websocket_stream_pipeline_SOURCES = \
+	tests/test_tts_websocket_stream_pipeline.c \
+	src/tts_websocket_resampler.c \
+	src/tts_websocket_pcm.c \
+	src/tts_websocket_stream_pipeline.c
+
+test_tts_websocket_stream_pipeline_CPPFLAGS = $(AM_CPPFLAGS) $(SPEEXDSP_CFLAGS)
+test_tts_websocket_stream_pipeline_LDADD = $(SPEEXDSP_LIBS) $(UNIMRCP_APR_LIBS) -lm
 MAINTAINERCLEANFILES = Makefile.in
 
 # Includes
@@ -386,7 +627,7 @@ UNIMRCP_PLUGIN_OPTS = -module $(PLUGIN_LT_VERSION)
 all: all-am
 
 .SUFFIXES:
-.SUFFIXES: .c .lo .o .obj
+.SUFFIXES: .c .lo .log .o .obj .test .test$(EXEEXT) .trs
 $(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(top_srcdir)/build/rules/uniplugin.am $(am__configure_deps)
 	@for dep in $?; do \
 	  case '$(am__configure_deps)' in \
@@ -417,6 +658,10 @@ $(top_srcdir)/configure:  $(am__configure_deps)
 $(ACLOCAL_M4):  $(am__aclocal_m4_deps)
 	cd $(top_builddir) && $(MAKE) $(AM_MAKEFLAGS) am--refresh
 $(am__aclocal_m4_deps):
+
+clean-checkPROGRAMS:
+	$(am__rm_f) $(check_PROGRAMS)
+	test -z "$(EXEEXT)" || $(am__rm_f) $(check_PROGRAMS:$(EXEEXT)=)
 
 install-pluginLTLIBRARIES: $(plugin_LTLIBRARIES)
 	@$(NORMAL_INSTALL)
@@ -456,30 +701,72 @@ src/$(am__dirstamp):
 src/$(DEPDIR)/$(am__dirstamp):
 	@$(MKDIR_P) src/$(DEPDIR)
 	@: >>src/$(DEPDIR)/$(am__dirstamp)
-src/tts_websocket_engine.lo: src/$(am__dirstamp) \
+src/tts_websocket_la-tts_websocket_engine.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
-src/tts_websocket_pcm.lo: src/$(am__dirstamp) \
+src/tts_websocket_la-tts_websocket_pcm.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
-src/tts_websocket_lifecycle.lo: src/$(am__dirstamp) \
+src/tts_websocket_la-tts_websocket_lifecycle.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
-src/tts_websocket_ws.lo: src/$(am__dirstamp) \
+src/tts_websocket_la-tts_websocket_ws.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
+src/tts_websocket_la-tts_websocket_resampler.lo: src/$(am__dirstamp) \
+	src/$(DEPDIR)/$(am__dirstamp)
+src/tts_websocket_la-tts_websocket_stream_pipeline.lo:  \
+	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
 
 tts_websocket.la: $(tts_websocket_la_OBJECTS) $(tts_websocket_la_DEPENDENCIES) $(EXTRA_tts_websocket_la_DEPENDENCIES) 
 	$(AM_V_CCLD)$(tts_websocket_la_LINK) -rpath $(plugindir) $(tts_websocket_la_OBJECTS) $(tts_websocket_la_LIBADD) $(LIBS)
+tests/$(am__dirstamp):
+	@$(MKDIR_P) tests
+	@: >>tests/$(am__dirstamp)
+tests/$(DEPDIR)/$(am__dirstamp):
+	@$(MKDIR_P) tests/$(DEPDIR)
+	@: >>tests/$(DEPDIR)/$(am__dirstamp)
+tests/test_tts_websocket_resampler-test_tts_websocket_resampler.$(OBJEXT):  \
+	tests/$(am__dirstamp) tests/$(DEPDIR)/$(am__dirstamp)
+src/test_tts_websocket_resampler-tts_websocket_resampler.$(OBJEXT):  \
+	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+src/test_tts_websocket_resampler-tts_websocket_pcm.$(OBJEXT):  \
+	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+
+test_tts_websocket_resampler$(EXEEXT): $(test_tts_websocket_resampler_OBJECTS) $(test_tts_websocket_resampler_DEPENDENCIES) $(EXTRA_test_tts_websocket_resampler_DEPENDENCIES) 
+	@rm -f test_tts_websocket_resampler$(EXEEXT)
+	$(AM_V_CCLD)$(LINK) $(test_tts_websocket_resampler_OBJECTS) $(test_tts_websocket_resampler_LDADD) $(LIBS)
+tests/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.$(OBJEXT):  \
+	tests/$(am__dirstamp) tests/$(DEPDIR)/$(am__dirstamp)
+src/test_tts_websocket_stream_pipeline-tts_websocket_resampler.$(OBJEXT):  \
+	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+src/test_tts_websocket_stream_pipeline-tts_websocket_pcm.$(OBJEXT):  \
+	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+src/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.$(OBJEXT):  \
+	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+
+test_tts_websocket_stream_pipeline$(EXEEXT): $(test_tts_websocket_stream_pipeline_OBJECTS) $(test_tts_websocket_stream_pipeline_DEPENDENCIES) $(EXTRA_test_tts_websocket_stream_pipeline_DEPENDENCIES)
+	@rm -f test_tts_websocket_stream_pipeline$(EXEEXT)
+	$(AM_V_CCLD)$(LINK) $(test_tts_websocket_stream_pipeline_OBJECTS) $(test_tts_websocket_stream_pipeline_LDADD) $(LIBS)
 
 mostlyclean-compile:
 	-rm -f *.$(OBJEXT)
 	-rm -f src/*.$(OBJEXT)
 	-rm -f src/*.lo
+	-rm -f tests/*.$(OBJEXT)
 
 distclean-compile:
 	-rm -f *.tab.c
 
-@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_engine.Plo@am__quote@ # am--include-marker
-@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_lifecycle.Plo@am__quote@ # am--include-marker
-@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_pcm.Plo@am__quote@ # am--include-marker
-@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_ws.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_pcm.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_resampler.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_pcm.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_resampler.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_la-tts_websocket_engine.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_la-tts_websocket_lifecycle.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_la-tts_websocket_pcm.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_la-tts_websocket_resampler.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_la-tts_websocket_stream_pipeline.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_la-tts_websocket_ws.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_tts_websocket_resampler-test_tts_websocket_resampler.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.Po@am__quote@ # am--include-marker
 
 $(am__depfiles_remade):
 	@$(MKDIR_P) $(@D)
@@ -510,6 +797,146 @@ am--depfiles: $(am__depfiles_remade)
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LTCOMPILE) -c -o $@ $<
+
+src/tts_websocket_la-tts_websocket_engine.lo: src/tts_websocket_engine.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(tts_websocket_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/tts_websocket_la-tts_websocket_engine.lo -MD -MP -MF src/$(DEPDIR)/tts_websocket_la-tts_websocket_engine.Tpo -c -o src/tts_websocket_la-tts_websocket_engine.lo `test -f 'src/tts_websocket_engine.c' || echo '$(srcdir)/'`src/tts_websocket_engine.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/tts_websocket_la-tts_websocket_engine.Tpo src/$(DEPDIR)/tts_websocket_la-tts_websocket_engine.Plo
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_engine.c' object='src/tts_websocket_la-tts_websocket_engine.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(tts_websocket_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/tts_websocket_la-tts_websocket_engine.lo `test -f 'src/tts_websocket_engine.c' || echo '$(srcdir)/'`src/tts_websocket_engine.c
+
+src/tts_websocket_la-tts_websocket_pcm.lo: src/tts_websocket_pcm.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(tts_websocket_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/tts_websocket_la-tts_websocket_pcm.lo -MD -MP -MF src/$(DEPDIR)/tts_websocket_la-tts_websocket_pcm.Tpo -c -o src/tts_websocket_la-tts_websocket_pcm.lo `test -f 'src/tts_websocket_pcm.c' || echo '$(srcdir)/'`src/tts_websocket_pcm.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/tts_websocket_la-tts_websocket_pcm.Tpo src/$(DEPDIR)/tts_websocket_la-tts_websocket_pcm.Plo
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_pcm.c' object='src/tts_websocket_la-tts_websocket_pcm.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(tts_websocket_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/tts_websocket_la-tts_websocket_pcm.lo `test -f 'src/tts_websocket_pcm.c' || echo '$(srcdir)/'`src/tts_websocket_pcm.c
+
+src/tts_websocket_la-tts_websocket_lifecycle.lo: src/tts_websocket_lifecycle.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(tts_websocket_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/tts_websocket_la-tts_websocket_lifecycle.lo -MD -MP -MF src/$(DEPDIR)/tts_websocket_la-tts_websocket_lifecycle.Tpo -c -o src/tts_websocket_la-tts_websocket_lifecycle.lo `test -f 'src/tts_websocket_lifecycle.c' || echo '$(srcdir)/'`src/tts_websocket_lifecycle.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/tts_websocket_la-tts_websocket_lifecycle.Tpo src/$(DEPDIR)/tts_websocket_la-tts_websocket_lifecycle.Plo
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_lifecycle.c' object='src/tts_websocket_la-tts_websocket_lifecycle.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(tts_websocket_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/tts_websocket_la-tts_websocket_lifecycle.lo `test -f 'src/tts_websocket_lifecycle.c' || echo '$(srcdir)/'`src/tts_websocket_lifecycle.c
+
+src/tts_websocket_la-tts_websocket_ws.lo: src/tts_websocket_ws.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(tts_websocket_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/tts_websocket_la-tts_websocket_ws.lo -MD -MP -MF src/$(DEPDIR)/tts_websocket_la-tts_websocket_ws.Tpo -c -o src/tts_websocket_la-tts_websocket_ws.lo `test -f 'src/tts_websocket_ws.c' || echo '$(srcdir)/'`src/tts_websocket_ws.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/tts_websocket_la-tts_websocket_ws.Tpo src/$(DEPDIR)/tts_websocket_la-tts_websocket_ws.Plo
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_ws.c' object='src/tts_websocket_la-tts_websocket_ws.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(tts_websocket_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/tts_websocket_la-tts_websocket_ws.lo `test -f 'src/tts_websocket_ws.c' || echo '$(srcdir)/'`src/tts_websocket_ws.c
+
+src/tts_websocket_la-tts_websocket_resampler.lo: src/tts_websocket_resampler.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(tts_websocket_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/tts_websocket_la-tts_websocket_resampler.lo -MD -MP -MF src/$(DEPDIR)/tts_websocket_la-tts_websocket_resampler.Tpo -c -o src/tts_websocket_la-tts_websocket_resampler.lo `test -f 'src/tts_websocket_resampler.c' || echo '$(srcdir)/'`src/tts_websocket_resampler.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/tts_websocket_la-tts_websocket_resampler.Tpo src/$(DEPDIR)/tts_websocket_la-tts_websocket_resampler.Plo
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_resampler.c' object='src/tts_websocket_la-tts_websocket_resampler.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(tts_websocket_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/tts_websocket_la-tts_websocket_resampler.lo `test -f 'src/tts_websocket_resampler.c' || echo '$(srcdir)/'`src/tts_websocket_resampler.c
+
+src/tts_websocket_la-tts_websocket_stream_pipeline.lo: src/tts_websocket_stream_pipeline.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(tts_websocket_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/tts_websocket_la-tts_websocket_stream_pipeline.lo -MD -MP -MF src/$(DEPDIR)/tts_websocket_la-tts_websocket_stream_pipeline.Tpo -c -o src/tts_websocket_la-tts_websocket_stream_pipeline.lo `test -f 'src/tts_websocket_stream_pipeline.c' || echo '$(srcdir)/'`src/tts_websocket_stream_pipeline.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/tts_websocket_la-tts_websocket_stream_pipeline.Tpo src/$(DEPDIR)/tts_websocket_la-tts_websocket_stream_pipeline.Plo
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_stream_pipeline.c' object='src/tts_websocket_la-tts_websocket_stream_pipeline.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(tts_websocket_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/tts_websocket_la-tts_websocket_stream_pipeline.lo `test -f 'src/tts_websocket_stream_pipeline.c' || echo '$(srcdir)/'`src/tts_websocket_stream_pipeline.c
+
+tests/test_tts_websocket_resampler-test_tts_websocket_resampler.o: tests/test_tts_websocket_resampler.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_resampler_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_tts_websocket_resampler-test_tts_websocket_resampler.o -MD -MP -MF tests/$(DEPDIR)/test_tts_websocket_resampler-test_tts_websocket_resampler.Tpo -c -o tests/test_tts_websocket_resampler-test_tts_websocket_resampler.o `test -f 'tests/test_tts_websocket_resampler.c' || echo '$(srcdir)/'`tests/test_tts_websocket_resampler.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_tts_websocket_resampler-test_tts_websocket_resampler.Tpo tests/$(DEPDIR)/test_tts_websocket_resampler-test_tts_websocket_resampler.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_tts_websocket_resampler.c' object='tests/test_tts_websocket_resampler-test_tts_websocket_resampler.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_resampler_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tests/test_tts_websocket_resampler-test_tts_websocket_resampler.o `test -f 'tests/test_tts_websocket_resampler.c' || echo '$(srcdir)/'`tests/test_tts_websocket_resampler.c
+
+tests/test_tts_websocket_resampler-test_tts_websocket_resampler.obj: tests/test_tts_websocket_resampler.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_resampler_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_tts_websocket_resampler-test_tts_websocket_resampler.obj -MD -MP -MF tests/$(DEPDIR)/test_tts_websocket_resampler-test_tts_websocket_resampler.Tpo -c -o tests/test_tts_websocket_resampler-test_tts_websocket_resampler.obj `if test -f 'tests/test_tts_websocket_resampler.c'; then $(CYGPATH_W) 'tests/test_tts_websocket_resampler.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_tts_websocket_resampler.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_tts_websocket_resampler-test_tts_websocket_resampler.Tpo tests/$(DEPDIR)/test_tts_websocket_resampler-test_tts_websocket_resampler.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_tts_websocket_resampler.c' object='tests/test_tts_websocket_resampler-test_tts_websocket_resampler.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_resampler_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tests/test_tts_websocket_resampler-test_tts_websocket_resampler.obj `if test -f 'tests/test_tts_websocket_resampler.c'; then $(CYGPATH_W) 'tests/test_tts_websocket_resampler.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_tts_websocket_resampler.c'; fi`
+
+src/test_tts_websocket_resampler-tts_websocket_resampler.o: src/tts_websocket_resampler.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_resampler_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_tts_websocket_resampler-tts_websocket_resampler.o -MD -MP -MF src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_resampler.Tpo -c -o src/test_tts_websocket_resampler-tts_websocket_resampler.o `test -f 'src/tts_websocket_resampler.c' || echo '$(srcdir)/'`src/tts_websocket_resampler.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_resampler.Tpo src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_resampler.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_resampler.c' object='src/test_tts_websocket_resampler-tts_websocket_resampler.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_resampler_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_tts_websocket_resampler-tts_websocket_resampler.o `test -f 'src/tts_websocket_resampler.c' || echo '$(srcdir)/'`src/tts_websocket_resampler.c
+
+src/test_tts_websocket_resampler-tts_websocket_resampler.obj: src/tts_websocket_resampler.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_resampler_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_tts_websocket_resampler-tts_websocket_resampler.obj -MD -MP -MF src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_resampler.Tpo -c -o src/test_tts_websocket_resampler-tts_websocket_resampler.obj `if test -f 'src/tts_websocket_resampler.c'; then $(CYGPATH_W) 'src/tts_websocket_resampler.c'; else $(CYGPATH_W) '$(srcdir)/src/tts_websocket_resampler.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_resampler.Tpo src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_resampler.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_resampler.c' object='src/test_tts_websocket_resampler-tts_websocket_resampler.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_resampler_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_tts_websocket_resampler-tts_websocket_resampler.obj `if test -f 'src/tts_websocket_resampler.c'; then $(CYGPATH_W) 'src/tts_websocket_resampler.c'; else $(CYGPATH_W) '$(srcdir)/src/tts_websocket_resampler.c'; fi`
+
+src/test_tts_websocket_resampler-tts_websocket_pcm.o: src/tts_websocket_pcm.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_resampler_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_tts_websocket_resampler-tts_websocket_pcm.o -MD -MP -MF src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_pcm.Tpo -c -o src/test_tts_websocket_resampler-tts_websocket_pcm.o `test -f 'src/tts_websocket_pcm.c' || echo '$(srcdir)/'`src/tts_websocket_pcm.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_pcm.Tpo src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_pcm.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_pcm.c' object='src/test_tts_websocket_resampler-tts_websocket_pcm.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_resampler_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_tts_websocket_resampler-tts_websocket_pcm.o `test -f 'src/tts_websocket_pcm.c' || echo '$(srcdir)/'`src/tts_websocket_pcm.c
+
+src/test_tts_websocket_resampler-tts_websocket_pcm.obj: src/tts_websocket_pcm.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_resampler_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_tts_websocket_resampler-tts_websocket_pcm.obj -MD -MP -MF src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_pcm.Tpo -c -o src/test_tts_websocket_resampler-tts_websocket_pcm.obj `if test -f 'src/tts_websocket_pcm.c'; then $(CYGPATH_W) 'src/tts_websocket_pcm.c'; else $(CYGPATH_W) '$(srcdir)/src/tts_websocket_pcm.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_pcm.Tpo src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_pcm.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_pcm.c' object='src/test_tts_websocket_resampler-tts_websocket_pcm.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_resampler_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_tts_websocket_resampler-tts_websocket_pcm.obj `if test -f 'src/tts_websocket_pcm.c'; then $(CYGPATH_W) 'src/tts_websocket_pcm.c'; else $(CYGPATH_W) '$(srcdir)/src/tts_websocket_pcm.c'; fi`
+
+tests/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.o: tests/test_tts_websocket_stream_pipeline.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_stream_pipeline_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.o -MD -MP -MF tests/$(DEPDIR)/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.Tpo -c -o tests/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.o `test -f 'tests/test_tts_websocket_stream_pipeline.c' || echo '$(srcdir)/'`tests/test_tts_websocket_stream_pipeline.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.Tpo tests/$(DEPDIR)/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_tts_websocket_stream_pipeline.c' object='tests/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_stream_pipeline_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tests/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.o `test -f 'tests/test_tts_websocket_stream_pipeline.c' || echo '$(srcdir)/'`tests/test_tts_websocket_stream_pipeline.c
+
+tests/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.obj: tests/test_tts_websocket_stream_pipeline.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_stream_pipeline_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.obj -MD -MP -MF tests/$(DEPDIR)/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.Tpo -c -o tests/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.obj `if test -f 'tests/test_tts_websocket_stream_pipeline.c'; then $(CYGPATH_W) 'tests/test_tts_websocket_stream_pipeline.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_tts_websocket_stream_pipeline.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.Tpo tests/$(DEPDIR)/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_tts_websocket_stream_pipeline.c' object='tests/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_stream_pipeline_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tests/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.obj `if test -f 'tests/test_tts_websocket_stream_pipeline.c'; then $(CYGPATH_W) 'tests/test_tts_websocket_stream_pipeline.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_tts_websocket_stream_pipeline.c'; fi`
+
+src/test_tts_websocket_stream_pipeline-tts_websocket_resampler.o: src/tts_websocket_resampler.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_stream_pipeline_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_tts_websocket_stream_pipeline-tts_websocket_resampler.o -MD -MP -MF src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_resampler.Tpo -c -o src/test_tts_websocket_stream_pipeline-tts_websocket_resampler.o `test -f 'src/tts_websocket_resampler.c' || echo '$(srcdir)/'`src/tts_websocket_resampler.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_resampler.Tpo src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_resampler.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_resampler.c' object='src/test_tts_websocket_stream_pipeline-tts_websocket_resampler.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_stream_pipeline_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_tts_websocket_stream_pipeline-tts_websocket_resampler.o `test -f 'src/tts_websocket_resampler.c' || echo '$(srcdir)/'`src/tts_websocket_resampler.c
+
+src/test_tts_websocket_stream_pipeline-tts_websocket_resampler.obj: src/tts_websocket_resampler.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_stream_pipeline_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_tts_websocket_stream_pipeline-tts_websocket_resampler.obj -MD -MP -MF src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_resampler.Tpo -c -o src/test_tts_websocket_stream_pipeline-tts_websocket_resampler.obj `if test -f 'src/tts_websocket_resampler.c'; then $(CYGPATH_W) 'src/tts_websocket_resampler.c'; else $(CYGPATH_W) '$(srcdir)/src/tts_websocket_resampler.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_resampler.Tpo src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_resampler.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_resampler.c' object='src/test_tts_websocket_stream_pipeline-tts_websocket_resampler.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_stream_pipeline_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_tts_websocket_stream_pipeline-tts_websocket_resampler.obj `if test -f 'src/tts_websocket_resampler.c'; then $(CYGPATH_W) 'src/tts_websocket_resampler.c'; else $(CYGPATH_W) '$(srcdir)/src/tts_websocket_resampler.c'; fi`
+
+src/test_tts_websocket_stream_pipeline-tts_websocket_pcm.o: src/tts_websocket_pcm.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_stream_pipeline_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_tts_websocket_stream_pipeline-tts_websocket_pcm.o -MD -MP -MF src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_pcm.Tpo -c -o src/test_tts_websocket_stream_pipeline-tts_websocket_pcm.o `test -f 'src/tts_websocket_pcm.c' || echo '$(srcdir)/'`src/tts_websocket_pcm.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_pcm.Tpo src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_pcm.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_pcm.c' object='src/test_tts_websocket_stream_pipeline-tts_websocket_pcm.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_stream_pipeline_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_tts_websocket_stream_pipeline-tts_websocket_pcm.o `test -f 'src/tts_websocket_pcm.c' || echo '$(srcdir)/'`src/tts_websocket_pcm.c
+
+src/test_tts_websocket_stream_pipeline-tts_websocket_pcm.obj: src/tts_websocket_pcm.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_stream_pipeline_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_tts_websocket_stream_pipeline-tts_websocket_pcm.obj -MD -MP -MF src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_pcm.Tpo -c -o src/test_tts_websocket_stream_pipeline-tts_websocket_pcm.obj `if test -f 'src/tts_websocket_pcm.c'; then $(CYGPATH_W) 'src/tts_websocket_pcm.c'; else $(CYGPATH_W) '$(srcdir)/src/tts_websocket_pcm.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_pcm.Tpo src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_pcm.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_pcm.c' object='src/test_tts_websocket_stream_pipeline-tts_websocket_pcm.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_stream_pipeline_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_tts_websocket_stream_pipeline-tts_websocket_pcm.obj `if test -f 'src/tts_websocket_pcm.c'; then $(CYGPATH_W) 'src/tts_websocket_pcm.c'; else $(CYGPATH_W) '$(srcdir)/src/tts_websocket_pcm.c'; fi`
+
+src/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.o: src/tts_websocket_stream_pipeline.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_stream_pipeline_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.o -MD -MP -MF src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.Tpo -c -o src/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.o `test -f 'src/tts_websocket_stream_pipeline.c' || echo '$(srcdir)/'`src/tts_websocket_stream_pipeline.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.Tpo src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_stream_pipeline.c' object='src/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_stream_pipeline_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.o `test -f 'src/tts_websocket_stream_pipeline.c' || echo '$(srcdir)/'`src/tts_websocket_stream_pipeline.c
+
+src/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.obj: src/tts_websocket_stream_pipeline.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_stream_pipeline_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.obj -MD -MP -MF src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.Tpo -c -o src/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.obj `if test -f 'src/tts_websocket_stream_pipeline.c'; then $(CYGPATH_W) 'src/tts_websocket_stream_pipeline.c'; else $(CYGPATH_W) '$(srcdir)/src/tts_websocket_stream_pipeline.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.Tpo src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_stream_pipeline.c' object='src/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_tts_websocket_stream_pipeline_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.obj `if test -f 'src/tts_websocket_stream_pipeline.c'; then $(CYGPATH_W) 'src/tts_websocket_stream_pipeline.c'; else $(CYGPATH_W) '$(srcdir)/src/tts_websocket_stream_pipeline.c'; fi`
 
 mostlyclean-libtool:
 	-rm -f *.lo
@@ -570,6 +997,201 @@ cscopelist-am: $(am__tagged_files)
 distclean-tags:
 	-rm -f TAGS ID GTAGS GRTAGS GSYMS GPATH tags
 
+# Recover from deleted '.trs' file; this should ensure that
+# "rm -f foo.log; make foo.trs" re-run 'foo.test', and re-create
+# both 'foo.log' and 'foo.trs'.  Break the recipe in two subshells
+# to avoid problems with "make -n".
+.log.trs:
+	rm -f $< $@
+	$(MAKE) $(AM_MAKEFLAGS) $<
+
+# Leading 'am--fnord' is there to ensure the list of targets does not
+# expand to empty, as could happen e.g. with make check TESTS=''.
+am--fnord $(TEST_LOGS) $(TEST_LOGS:.log=.trs): $(am__force_recheck)
+am--force-recheck:
+	@:
+$(TEST_SUITE_LOG): $(TEST_LOGS)
+	@$(am__set_TESTS_bases); \
+	am__f_ok () { test -f "$$1" && test -r "$$1"; }; \
+	redo_bases=`for i in $$bases; do \
+	              am__f_ok $$i.trs && am__f_ok $$i.log || echo $$i; \
+	            done`; \
+	if test -n "$$redo_bases"; then \
+	  redo_logs=`for i in $$redo_bases; do echo $$i.log; done`; \
+	  redo_results=`for i in $$redo_bases; do echo $$i.trs; done`; \
+	  if $(am__make_dryrun); then :; else \
+	    rm -f $$redo_logs && rm -f $$redo_results || exit 1; \
+	  fi; \
+	fi; \
+	if test -n "$$am__remaking_logs"; then \
+	  echo "fatal: making $(TEST_SUITE_LOG): possible infinite" \
+	       "recursion detected" >&2; \
+	elif test -n "$$redo_logs"; then \
+	  am__remaking_logs=yes $(MAKE) $(AM_MAKEFLAGS) $$redo_logs; \
+	fi; \
+	if $(am__make_dryrun); then :; else \
+	  st=0;  \
+	  errmsg="fatal: making $(TEST_SUITE_LOG): failed to create"; \
+	  for i in $$redo_bases; do \
+	    test -f $$i.trs && test -r $$i.trs \
+	      || { echo "$$errmsg $$i.trs" >&2; st=1; }; \
+	    test -f $$i.log && test -r $$i.log \
+	      || { echo "$$errmsg $$i.log" >&2; st=1; }; \
+	  done; \
+	  test $$st -eq 0 || exit 1; \
+	fi
+	@$(am__sh_e_setup); $(am__tty_colors); $(am__set_TESTS_bases); \
+	ws='[ 	]'; \
+	results=`for b in $$bases; do echo $$b.trs; done`; \
+	test -n "$$results" || results=/dev/null; \
+	all=`  grep "^$$ws*:test-result:"           $$results | wc -l`; \
+	pass=` grep "^$$ws*:test-result:$$ws*PASS"  $$results | wc -l`; \
+	fail=` grep "^$$ws*:test-result:$$ws*FAIL"  $$results | wc -l`; \
+	skip=` grep "^$$ws*:test-result:$$ws*SKIP"  $$results | wc -l`; \
+	xfail=`grep "^$$ws*:test-result:$$ws*XFAIL" $$results | wc -l`; \
+	xpass=`grep "^$$ws*:test-result:$$ws*XPASS" $$results | wc -l`; \
+	error=`grep "^$$ws*:test-result:$$ws*ERROR" $$results | wc -l`; \
+	if test `expr $$fail + $$xpass + $$error` -eq 0; then \
+	  success=true; \
+	else \
+	  success=false; \
+	fi; \
+	br='==================='; br=$$br$$br$$br$$br; \
+	result_count () \
+	{ \
+	    if test x"$$1" = x"--maybe-color"; then \
+	      maybe_colorize=yes; \
+	    elif test x"$$1" = x"--no-color"; then \
+	      maybe_colorize=no; \
+	    else \
+	      echo "$@: invalid 'result_count' usage" >&2; exit 4; \
+	    fi; \
+	    shift; \
+	    desc=$$1 count=$$2; \
+	    if test $$maybe_colorize = yes && test $$count -gt 0; then \
+	      color_start=$$3 color_end=$$std; \
+	    else \
+	      color_start= color_end=; \
+	    fi; \
+	    echo "$${color_start}# $$desc $$count$${color_end}"; \
+	}; \
+	create_testsuite_report () \
+	{ \
+	  result_count $$1 "TOTAL:" $$all   "$$brg"; \
+	  result_count $$1 "PASS: " $$pass  "$$grn"; \
+	  result_count $$1 "SKIP: " $$skip  "$$blu"; \
+	  result_count $$1 "XFAIL:" $$xfail "$$lgn"; \
+	  result_count $$1 "FAIL: " $$fail  "$$red"; \
+	  result_count $$1 "XPASS:" $$xpass "$$red"; \
+	  result_count $$1 "ERROR:" $$error "$$mgn"; \
+	}; \
+	output_system_information () \
+	{ \
+          echo;                                     \
+	  { uname -a | $(AWK) '{                    \
+  printf "System information (uname -a):";          \
+  for (i = 1; i < NF; ++i)                          \
+    {                                               \
+      if (i != 2)                                   \
+        printf " %s", $$i;                          \
+    }                                               \
+  printf "\n";                                      \
+}'; } 2>&1;                                         \
+	  if test -r /etc/os-release; then          \
+	    echo "Distribution information (/etc/os-release):"; \
+	    sed 8q /etc/os-release;                 \
+	  elif test -r /etc/issue; then             \
+	    echo "Distribution information (/etc/issue):";      \
+	    cat /etc/issue;                         \
+	  fi;                                       \
+	}; \
+	please_report () \
+	{ \
+echo "Some test(s) failed.  Please report this to $(PACKAGE_BUGREPORT),";    \
+echo "together with the test-suite.log file (gzipped) and your system";      \
+echo "information.  Thanks.";                                                \
+	}; \
+	{								\
+	  echo "$(PACKAGE_STRING): $(subdir)/$(TEST_SUITE_LOG)" |	\
+	    $(am__rst_title);						\
+	  create_testsuite_report --no-color;				\
+	  output_system_information;                                    \
+	  echo;								\
+	  echo ".. contents:: :depth: 2";				\
+	  echo;								\
+	  for b in $$bases; do echo $$b; done				\
+	    | $(am__create_global_log);					\
+	} >$(TEST_SUITE_LOG).tmp || exit 1;				\
+	mv $(TEST_SUITE_LOG).tmp $(TEST_SUITE_LOG);			\
+	if $$success; then						\
+	  col="$$grn";							\
+	 else								\
+	  col="$$red";							\
+	  test x"$$VERBOSE" = x || cat $(TEST_SUITE_LOG);		\
+	fi;								\
+	echo "$${col}$$br$${std}"; 					\
+	echo "$${col}Testsuite summary"$(AM_TESTSUITE_SUMMARY_HEADER)"$${std}";	\
+	echo "$${col}$$br$${std}"; 					\
+	create_testsuite_report --maybe-color;				\
+	echo "$$col$$br$$std";						\
+	if $$success; then :; else					\
+	  echo "$${col}See $(subdir)/$(TEST_SUITE_LOG) for debugging.$${std}";\
+	  if test -n "$(PACKAGE_BUGREPORT)"; then			\
+	    please_report | sed -e "s/^/$${col}/" -e s/'$$'/"$${std}"/; \
+	  fi;								\
+	  echo "$$col$$br$$std";					\
+	fi;								\
+	$$success || exit 1
+
+check-TESTS: $(check_PROGRAMS)
+	@$(am__rm_f) $(RECHECK_LOGS)
+	@$(am__rm_f) $(RECHECK_LOGS:.log=.trs)
+	@$(am__rm_f) $(TEST_SUITE_LOG)
+	@set +e; $(am__set_TESTS_bases); \
+	log_list=`for i in $$bases; do echo $$i.log; done`; \
+	log_list=`echo $$log_list`; \
+	$(MAKE) $(AM_MAKEFLAGS) $(TEST_SUITE_LOG) TEST_LOGS="$$log_list"; \
+	exit $$?;
+recheck: all $(check_PROGRAMS)
+	@$(am__rm_f) $(TEST_SUITE_LOG)
+	@set +e; $(am__set_TESTS_bases); \
+	bases=`for i in $$bases; do echo $$i; done \
+	         | $(am__list_recheck_tests)` || exit 1; \
+	log_list=`for i in $$bases; do echo $$i.log; done`; \
+	log_list=`echo $$log_list`; \
+	$(MAKE) $(AM_MAKEFLAGS) $(TEST_SUITE_LOG) \
+	        am__force_recheck=am--force-recheck \
+	        TEST_LOGS="$$log_list"; \
+	exit $$?
+test_tts_websocket_resampler.log: test_tts_websocket_resampler$(EXEEXT)
+	@p='test_tts_websocket_resampler$(EXEEXT)'; \
+	b='test_tts_websocket_resampler'; \
+	$(am__check_pre) $(LOG_DRIVER) --test-name "$$f" \
+	--log-file $$b.log --trs-file $$b.trs \
+	$(am__common_driver_flags) $(AM_LOG_DRIVER_FLAGS) $(LOG_DRIVER_FLAGS) -- $(LOG_COMPILE) \
+	"$$tst" $(AM_TESTS_FD_REDIRECT)
+test_tts_websocket_stream_pipeline.log: test_tts_websocket_stream_pipeline$(EXEEXT)
+	@p='test_tts_websocket_stream_pipeline$(EXEEXT)'; \
+	b='test_tts_websocket_stream_pipeline'; \
+	$(am__check_pre) $(LOG_DRIVER) --test-name "$$f" \
+	--log-file $$b.log --trs-file $$b.trs \
+	$(am__common_driver_flags) $(AM_LOG_DRIVER_FLAGS) $(LOG_DRIVER_FLAGS) -- $(LOG_COMPILE) \
+	"$$tst" $(AM_TESTS_FD_REDIRECT)
+.test.log:
+	@p='$<'; \
+	$(am__set_b); \
+	$(am__check_pre) $(TEST_LOG_DRIVER) --test-name "$$f" \
+	--log-file $$b.log --trs-file $$b.trs \
+	$(am__common_driver_flags) $(AM_TEST_LOG_DRIVER_FLAGS) $(TEST_LOG_DRIVER_FLAGS) -- $(TEST_LOG_COMPILE) \
+	"$$tst" $(AM_TESTS_FD_REDIRECT)
+@am__EXEEXT_TRUE@.test$(EXEEXT).log:
+@am__EXEEXT_TRUE@	@p='$<'; \
+@am__EXEEXT_TRUE@	$(am__set_b); \
+@am__EXEEXT_TRUE@	$(am__check_pre) $(TEST_LOG_DRIVER) --test-name "$$f" \
+@am__EXEEXT_TRUE@	--log-file $$b.log --trs-file $$b.trs \
+@am__EXEEXT_TRUE@	$(am__common_driver_flags) $(AM_TEST_LOG_DRIVER_FLAGS) $(TEST_LOG_DRIVER_FLAGS) -- $(TEST_LOG_COMPILE) \
+@am__EXEEXT_TRUE@	"$$tst" $(AM_TESTS_FD_REDIRECT)
+
 distdir: $(BUILT_SOURCES)
 	$(MAKE) $(AM_MAKEFLAGS) distdir-am
 
@@ -604,6 +1226,8 @@ distdir-am: $(DISTFILES)
 	  fi; \
 	done
 check-am: all-am
+	$(MAKE) $(AM_MAKEFLAGS) $(check_PROGRAMS)
+	$(MAKE) $(AM_MAKEFLAGS) check-TESTS
 check: check-am
 all-am: Makefile $(LTLIBRARIES)
 installdirs:
@@ -630,6 +1254,9 @@ install-strip:
 	    "INSTALL_PROGRAM_ENV=STRIPPROG='$(STRIP)'" install; \
 	fi
 mostlyclean-generic:
+	-$(am__rm_f) $(TEST_LOGS)
+	-$(am__rm_f) $(TEST_LOGS:.log=.trs)
+	-$(am__rm_f) $(TEST_SUITE_LOG)
 
 clean-generic:
 
@@ -638,6 +1265,8 @@ distclean-generic:
 	-test . = "$(srcdir)" || $(am__rm_f) $(CONFIG_CLEAN_VPATH_FILES)
 	-$(am__rm_f) src/$(DEPDIR)/$(am__dirstamp)
 	-$(am__rm_f) src/$(am__dirstamp)
+	-$(am__rm_f) tests/$(DEPDIR)/$(am__dirstamp)
+	-$(am__rm_f) tests/$(am__dirstamp)
 
 maintainer-clean-generic:
 	@echo "This command is intended for maintainers to use"
@@ -645,14 +1274,23 @@ maintainer-clean-generic:
 	-$(am__rm_f) $(MAINTAINERCLEANFILES)
 clean: clean-am
 
-clean-am: clean-generic clean-libtool clean-pluginLTLIBRARIES \
-	mostlyclean-am
+clean-am: clean-checkPROGRAMS clean-generic clean-libtool \
+	clean-pluginLTLIBRARIES mostlyclean-am
 
 distclean: distclean-am
-	-rm -f src/$(DEPDIR)/tts_websocket_engine.Plo
-	-rm -f src/$(DEPDIR)/tts_websocket_lifecycle.Plo
-	-rm -f src/$(DEPDIR)/tts_websocket_pcm.Plo
-	-rm -f src/$(DEPDIR)/tts_websocket_ws.Plo
+	-rm -f src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_pcm.Po
+	-rm -f src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_resampler.Po
+	-rm -f src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_pcm.Po
+	-rm -f src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_resampler.Po
+	-rm -f src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.Po
+	-rm -f src/$(DEPDIR)/tts_websocket_la-tts_websocket_engine.Plo
+	-rm -f src/$(DEPDIR)/tts_websocket_la-tts_websocket_lifecycle.Plo
+	-rm -f src/$(DEPDIR)/tts_websocket_la-tts_websocket_pcm.Plo
+	-rm -f src/$(DEPDIR)/tts_websocket_la-tts_websocket_resampler.Plo
+	-rm -f src/$(DEPDIR)/tts_websocket_la-tts_websocket_stream_pipeline.Plo
+	-rm -f src/$(DEPDIR)/tts_websocket_la-tts_websocket_ws.Plo
+	-rm -f tests/$(DEPDIR)/test_tts_websocket_resampler-test_tts_websocket_resampler.Po
+	-rm -f tests/$(DEPDIR)/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.Po
 	-rm -f Makefile
 distclean-am: clean-am distclean-compile distclean-generic \
 	distclean-tags
@@ -698,10 +1336,19 @@ install-ps-am:
 installcheck-am:
 
 maintainer-clean: maintainer-clean-am
-	-rm -f src/$(DEPDIR)/tts_websocket_engine.Plo
-	-rm -f src/$(DEPDIR)/tts_websocket_lifecycle.Plo
-	-rm -f src/$(DEPDIR)/tts_websocket_pcm.Plo
-	-rm -f src/$(DEPDIR)/tts_websocket_ws.Plo
+	-rm -f src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_pcm.Po
+	-rm -f src/$(DEPDIR)/test_tts_websocket_resampler-tts_websocket_resampler.Po
+	-rm -f src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_pcm.Po
+	-rm -f src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_resampler.Po
+	-rm -f src/$(DEPDIR)/test_tts_websocket_stream_pipeline-tts_websocket_stream_pipeline.Po
+	-rm -f src/$(DEPDIR)/tts_websocket_la-tts_websocket_engine.Plo
+	-rm -f src/$(DEPDIR)/tts_websocket_la-tts_websocket_lifecycle.Plo
+	-rm -f src/$(DEPDIR)/tts_websocket_la-tts_websocket_pcm.Plo
+	-rm -f src/$(DEPDIR)/tts_websocket_la-tts_websocket_resampler.Plo
+	-rm -f src/$(DEPDIR)/tts_websocket_la-tts_websocket_stream_pipeline.Plo
+	-rm -f src/$(DEPDIR)/tts_websocket_la-tts_websocket_ws.Plo
+	-rm -f tests/$(DEPDIR)/test_tts_websocket_resampler-test_tts_websocket_resampler.Po
+	-rm -f tests/$(DEPDIR)/test_tts_websocket_stream_pipeline-test_tts_websocket_stream_pipeline.Po
 	-rm -f Makefile
 maintainer-clean-am: distclean-am maintainer-clean-generic
 
@@ -720,22 +1367,23 @@ ps-am:
 
 uninstall-am: uninstall-pluginLTLIBRARIES
 
-.MAKE: install-am install-strip
+.MAKE: check-am install-am install-strip
 
-.PHONY: CTAGS GTAGS TAGS all all-am am--depfiles check check-am clean \
-	clean-generic clean-libtool clean-pluginLTLIBRARIES \
-	cscopelist-am ctags ctags-am distclean distclean-compile \
-	distclean-generic distclean-libtool distclean-tags distdir dvi \
-	dvi-am html html-am info info-am install install-am \
-	install-data install-data-am install-dvi install-dvi-am \
-	install-exec install-exec-am install-html install-html-am \
-	install-info install-info-am install-man install-pdf \
-	install-pdf-am install-pluginLTLIBRARIES install-ps \
-	install-ps-am install-strip installcheck installcheck-am \
-	installdirs maintainer-clean maintainer-clean-generic \
-	mostlyclean mostlyclean-compile mostlyclean-generic \
-	mostlyclean-libtool pdf pdf-am ps ps-am tags tags-am uninstall \
-	uninstall-am uninstall-pluginLTLIBRARIES
+.PHONY: CTAGS GTAGS TAGS all all-am am--depfiles check check-TESTS \
+	check-am clean clean-checkPROGRAMS clean-generic clean-libtool \
+	clean-pluginLTLIBRARIES cscopelist-am ctags ctags-am distclean \
+	distclean-compile distclean-generic distclean-libtool \
+	distclean-tags distdir dvi dvi-am html html-am info info-am \
+	install install-am install-data install-data-am install-dvi \
+	install-dvi-am install-exec install-exec-am install-html \
+	install-html-am install-info install-info-am install-man \
+	install-pdf install-pdf-am install-pluginLTLIBRARIES \
+	install-ps install-ps-am install-strip installcheck \
+	installcheck-am installdirs maintainer-clean \
+	maintainer-clean-generic mostlyclean mostlyclean-compile \
+	mostlyclean-generic mostlyclean-libtool pdf pdf-am ps ps-am \
+	recheck tags tags-am uninstall uninstall-am \
+	uninstall-pluginLTLIBRARIES
 
 .PRECIOUS: Makefile
 
