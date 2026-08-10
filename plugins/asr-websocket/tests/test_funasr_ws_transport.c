@@ -1113,8 +1113,8 @@ static void test_worker_keeps_media_enqueue_independent_of_partial_rx(
                wait_for_collector(&collector, 2, 1) == TRUE);
     CHECK_TRUE("worker joins",
                funasr_transport_join_closed(transport) == APR_SUCCESS);
-    CHECK_TRUE("metrics emitted once per generation",
-               collector.metrics == 2);
+    CHECK_TRUE("progress and terminal metrics are both emitted",
+               collector.metrics == 3);
     CHECK_TRUE("POLLOUT requested only for pending bytes",
                io.poll_want_write > 0 && io.poll_without_write > 0);
     CHECK_TRUE("enqueue wakes worker", io.wake_count > 0);
@@ -1547,8 +1547,8 @@ static void test_twenty_transport_workers_remain_independent(
                    wait_for_collector(&collectors[index], 2, 1) == TRUE);
         CHECK_TRUE("20-worker joins",
                    funasr_transport_join_closed(transports[index]) == APR_SUCCESS);
-        CHECK_TRUE("20-worker metrics are not duplicated on close",
-                   collectors[index].metrics == 1);
+        CHECK_TRUE("20-worker emits progress and terminal metrics",
+                   collectors[index].metrics == 2);
     }
     free(transports);
     free(ios);

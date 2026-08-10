@@ -18,6 +18,7 @@
 #define FUNASR_HANDSHAKE_BUFFER_SIZE 4096U
 #define FUNASR_WORKER_READ_BUFFER_SIZE 4096U
 #define FUNASR_WS_FRAME_OVERHEAD 14U
+#define FUNASR_METRICS_LOG_INTERVAL_US APR_USEC_PER_SEC
 
 typedef struct funasr_default_io_t {
     apr_pool_t *pool;
@@ -49,6 +50,7 @@ struct funasr_transport_t {
     funasr_transport_metrics_t metrics;
     apr_int64_t generation_started_us;
     apr_int64_t last_media_us;
+    apr_int64_t last_metrics_report_us;
     apr_size_t ring_limit;
     apr_size_t chunk_size;
     funasr_transport_failure_e media_failure;
@@ -2035,6 +2037,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                 if ((events & FUNASR_IO_WRITABLE) != 0 &&
                     tx_size != tx_offset) {
                     apr_size_t before = tx_offset;
+                    apt_bool_t metrics_due = FALSE;
                     if (!funasr_worker_write_pending(
                             transport,
                             tx_buffer,
@@ -2080,10 +2083,27 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                                         transport->metrics.ws_audio_gap_max_us) {
                                     transport->metrics.ws_audio_gap_max_us = gap;
                                 }
+                                if (transport->last_metrics_report_us == 0 ||
+                                    last_write_progress_us -
+                                        transport->last_metrics_report_us >=
+                                        FUNASR_METRICS_LOG_INTERVAL_US) {
+                                    transport->last_metrics_report_us =
+                                        last_write_progress_us;
+                                    metrics_due = TRUE;
+                                }
                             }
                         }
                         apr_thread_mutex_unlock(transport->mutex);
                         write_wait_started_us = last_write_progress_us;
+                        if (metrics_due) {
+                            funasr_emit_event(
+                                transport,
+                                generation,
+                                FUNASR_EVENT_TRANSPORT_METRICS,
+                                FUNASR_FAILURE_NONE,
+                                NULL,
+                                0);
+                        }
                     }
                 }
                 if ((events & FUNASR_IO_READABLE) != 0 &&
@@ -2351,6 +2371,7 @@ apt_bool_t funasr_transport_begin_generation(
     transport->generation_started_us =
         funasr_clock_now_us(&transport->config.clock);
     transport->last_media_us = 0;
+    transport->last_metrics_report_us = 0;
     transport->ring_limit = ring_limit;
     transport->chunk_size = chunk_size;
     transport->media_failure_latched = FALSE;

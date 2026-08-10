@@ -66,31 +66,31 @@ git commit -m "feat(asr): track websocket audio delivery metrics" -m "Refs #37"
 - 修改：`plugins/asr-websocket/src/funasr_ws_transport.[ch]`
 - 测试：`plugins/asr-websocket/tests/test_funasr_ws_transport.c`
 
-- [ ] **步骤 1：编写失败的节流/终态测试**
+- [x] **步骤 1：编写失败的节流/终态测试**
 
 使用 fake clock 产生连续 metrics 快照，断言窗口未到期时不请求输出，到期时产生一次进度快照；队列溢出、write-stall、final、关闭时不受窗口限制而产生终态快照。
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`cmake --build /tmp/tte-mrcp-issue37 --target test_funasr_ws_transport && ctest --test-dir /tmp/tte-mrcp-issue37 -R '^asr_websocket_funasr_ws_transport$' --output-on-failure`
 
 预期：失败，原因是节流状态或终态判定尚未实现。
 
-- [ ] **步骤 3：实现最小节流和日志集成**
+- [x] **步骤 3：实现最小节流和日志集成**
 
 实现固定窗口的 `funasr_transport_metrics_should_log` 判定，使用 generation 与 monotonic timestamp。`funasr_control_handle_event`/metrics 消费路径调用它，并输出单条不含 payload/text 的日志：session/channel、generation、RX/TX bytes/frames、RX/TX latest-gap、ring current/high-water、overrun、first-send、write-wait、completion reason。保留所有 MRCP 消息与 completion 分支。
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行步骤 2 的命令。
 
 预期：节流、终态和既有 transport 测试均通过。
 
-- [ ] **步骤 5：重构并回归**
+- [x] **步骤 5：重构并回归**
 
 统一日志字段命名为 `audio_rx_*` 与 `audio_tx_*`，并检查生产路径没有逐帧 `APT_PRIO_INFO`/payload/hex 输出。
 
-- [ ] **步骤 6：提交**
+- [x] **步骤 6：提交**
 
 ```bash
 git add plugins/asr-websocket/src/funasr_ws_transport.h plugins/asr-websocket/src/funasr_ws_transport.c plugins/asr-websocket/src/asr_websocket_engine.c plugins/asr-websocket/tests/test_funasr_ws_transport.c docs/superpowers/plans/2026-08-10-issue-37-audio-observability.md
