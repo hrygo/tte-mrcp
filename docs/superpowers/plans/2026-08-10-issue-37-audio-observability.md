@@ -168,3 +168,86 @@ git commit -m "test: record issue 37 verification" -m "Refs #37"
 - 构建卫生：`./configure --help`、全部 `tools/**/*.sh` 的 `bash -n` 和 `git diff --check` 通过。
 - 图谱：`tte-mrcp-issue-37` 已重新索引（5,903 nodes / 34,434 edges）；`funasr_transport_enqueue_pcm` 仍受 transport 单测覆盖，`tts_websocket_channel_speak` 已直接调用 `tts_websocket_thread_id_current`。
 - Windows、Linux：未验证。本次只同步了 Visual Studio 的 TTS 源文件登记；未执行 MSBuild/DLL 加载或 Linux 插件加载/冒烟。
+
+### 任务 5：增加逐包中文 DEBUG 诊断日志
+
+**文件：**
+- 创建：`plugins/asr-websocket/tests/test_asr_frame_debug_logs.cmake`
+- 修改：`plugins/asr-websocket/CMakeLists.txt`
+- 修改：`plugins/asr-websocket/src/asr_websocket_engine.c:767-768`
+- 修改：`plugins/asr-websocket/src/funasr_ws_transport.c:1018-1025`
+
+- [x] **步骤 1：编写失败的日志契约测试**
+
+创建 `test_asr_frame_debug_logs.cmake`，通过 `file(READ ...)` 读取两个源码文件，并断言：媒体流入口存在 `APT_PRIO_DEBUG` 的中文“接收客户端媒体流音频数据包”日志且使用 `frame->codec_frame.size`；socket 写入函数保存 `apr_socket_send()` 的返回状态，并只在 `APR_SUCCESS` 且 `*size != 0` 时输出中文“发送 ASR WebSocket 网络数据包”日志。将 CMake 测试注册为：
+
+```cmake
+add_test(NAME asr_websocket_frame_debug_logs
+    COMMAND ${CMAKE_COMMAND}
+        -DASR_WEBSOCKET_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_asr_frame_debug_logs.cmake)
+```
+
+- [x] **步骤 2：运行测试验证失败**
+
+运行：
+
+```bash
+cmake -S . -B /tmp/tte-mrcp-issue37-debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+ctest --test-dir /tmp/tte-mrcp-issue37-debug -R '^asr_websocket_frame_debug_logs$' --output-on-failure
+```
+
+预期：失败，提示客户端媒体流或 ASR WebSocket 逐包 DEBUG 日志不存在。
+
+- [x] **步骤 3：添加最小日志实现**
+
+在 `funasr_stream_write` 中、`size = frame->codec_frame.size;` 后添加：
+
+```c
+LOG_WITH_SID(channel, APT_PRIO_DEBUG,
+    "接收客户端媒体流音频数据包，大小=%" APR_SIZE_T_FMT " 字节",
+    frame->codec_frame.size);
+```
+
+在 `funasr_ws_transport.c` 中包含 `apt_log.h`，将 `funasr_default_io_write` 改为保存 `apr_socket_send()` 的返回值，并仅在成功且实际写入非零时添加：
+
+```c
+apt_log(APT_LOG_MARK, APT_PRIO_DEBUG,
+    "asr_websocket: 发送 ASR WebSocket 网络数据包，大小=%" APR_SIZE_T_FMT " 字节",
+    *size);
+```
+
+保留 `apr_socket_send()` 返回值、`*size` short-write 语义和所有现有错误路径。
+
+- [x] **步骤 4：运行日志契约与 transport 回归测试**
+
+运行：
+
+```bash
+cmake --build /tmp/tte-mrcp-issue37-debug --target test_funasr_ws_transport
+ctest --test-dir /tmp/tte-mrcp-issue37-debug -R '^(asr_websocket_frame_debug_logs|asr_websocket_funasr_ws_transport)$' --output-on-failure
+```
+
+预期：两个测试均通过；transport 测试继续覆盖握手、短写和音频发送路径。
+
+- [x] **步骤 5：完成检查并提交**
+
+运行：
+
+```bash
+git diff --check
+git add plugins/asr-websocket/src/asr_websocket_engine.c \
+        plugins/asr-websocket/src/funasr_ws_transport.c \
+        plugins/asr-websocket/CMakeLists.txt \
+        plugins/asr-websocket/tests/test_asr_frame_debug_logs.cmake \
+        docs/superpowers/plans/2026-08-10-issue-37-audio-observability.md
+git commit -m "fix(asr): add per-packet debug logging" -m "Refs #37"
+```
+
+预期：仅提交逐包 DEBUG 日志、其跨平台 CMake 契约测试和计划更新。
+
+**执行结果（2026-08-10，macOS Apple Silicon）：**
+
+- 先新增契约测试并确认其因缺少“客户端媒体流入口逐包 DEBUG 日志”失败；实现后通过。
+- 加载 `tools/dev/env-macos.sh` 后，`asr_websocket_funasr_ws_transport` 与 `asr_websocket_frame_debug_logs` CTest 2/2 通过，`asr_websocket` 插件完整构建通过。
+- `git diff --check` 通过；未执行 Windows MSBuild/DLL 加载或 Linux 插件加载/冒烟，二者均标记为未验证。
