@@ -346,7 +346,9 @@ jobs:
             opt/tte-mrcp/lib/libspeexdsp.so \
             opt/tte-mrcp/lib/libspeexdsp.so.1 \
             "opt/tte-mrcp/lib/$speexdsp_real_name"; do
-            unzip -Z1 "$GITHUB_WORKSPACE/$ZIP_NAME" | grep -qx "$archive_entry"
+            # Consume the complete listing so pipefail does not turn grep's
+            # early exit into an unzip SIGPIPE (exit 141).
+            unzip -Z1 "$GITHUB_WORKSPACE/$ZIP_NAME" | grep -Fx "$archive_entry" > /dev/null
           done
           unzip -l "$GITHUB_WORKSPACE/$ZIP_NAME"
           CONTAINER_SCRIPT
