@@ -6,6 +6,7 @@ set (TTS_WEBSOCKET_SOURCES
 	src/tts_websocket_engine.c
 	src/tts_websocket_pcm.c
 	src/tts_websocket_lifecycle.c
+	src/tts_websocket_thread.c
 	src/tts_websocket_ws.c
 )
 source_group ("src" FILES ${TTS_WEBSOCKET_SOURCES})
@@ -90,4 +91,13 @@ if(BUILD_TTS_WEBSOCKET_TESTS)
 	target_link_libraries(test_tts_websocket_ws ${APR_LIBRARIES})
 	set_target_properties(test_tts_websocket_ws PROPERTIES FOLDER "tests")
 	add_test(NAME tts_websocket_ws COMMAND test_tts_websocket_ws)
+	add_executable(test_tts_websocket_thread
+		tests/test_tts_websocket_thread.c
+		src/tts_websocket_thread.c)
+	target_include_directories(test_tts_websocket_thread PRIVATE
+		${PROJECT_SOURCE_DIR}/src
+		${APR_INCLUDE_DIRS})
+	target_link_libraries(test_tts_websocket_thread ${APR_LIBRARIES})
+	set_target_properties(test_tts_websocket_thread PROPERTIES FOLDER "tests")
+	add_test(NAME tts_websocket_thread COMMAND test_tts_websocket_thread)
 endif()

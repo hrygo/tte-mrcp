@@ -19,6 +19,8 @@
 | `plugins/asr-websocket/src/asr_websocket_engine.c` | 根据 session/channel 和 generation 输出节流或终态的结构化汇总。 |
 | `plugins/asr-websocket/tests/test_funasr_ws_transport.c` | 用 fake clock/I/O 验证收发计数、阻塞与终态快照。 |
 | `plugins/tts-websocket/src/tts_websocket_engine.c` | 用 APR 的跨平台线程 API 增强 SPEAK 入口日志。 |
+| `plugins/tts-websocket/src/tts_websocket_thread.[ch]` | 将 APR 线程标识转换隔离为可复用、可单测的跨平台适配。 |
+| `plugins/tts-websocket/tests/test_tts_websocket_thread.c` | 验证当前 APR 线程标识可用。 |
 | `docs/superpowers/plans/2026-08-10-issue-37-audio-observability.md` | 记录并追踪本计划。 |
 
 ### 任务 1：扩展 ASR transport 收发快照
@@ -101,34 +103,36 @@ git commit -m "feat(asr): log correlated audio transport summaries" -m "Refs #37
 
 **文件：**
 - 修改：`plugins/tts-websocket/src/tts_websocket_engine.c`
-- 修改：`plugins/tts-websocket/tests/test_tts_websocket_ws.c`（仅在现有测试 harness 可直接覆盖日志 helper 时）
+- 创建：`plugins/tts-websocket/tests/test_tts_websocket_thread.c`
+- 创建：`plugins/tts-websocket/src/tts_websocket_thread.[ch]`
+- 修改：`plugins/tts-websocket/CMakeLists.txt`、`Makefile.am` 与 Visual Studio 工程文件
 - 修改：`docs/superpowers/plans/2026-08-10-issue-37-audio-observability.md`
 
-- [ ] **步骤 1：编写失败的跨平台 API/日志验证**
+- [x] **步骤 1：编写失败的跨平台 API/日志验证**
 
 在现有 TTS test harness 中增加一个最小断言，验证 SPEAK 入口日志格式含 `thread_id` 和 MRCP session/channel 格式；若 harness 无法构造 engine channel，则增加可独立编译的 helper 测试，禁止调用平台特有 pthread/Windows API。
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`cmake --build /tmp/tte-mrcp-issue37 --target test_tts_websocket_ws && ctest --test-dir /tmp/tte-mrcp-issue37 -R '^tts_websocket_ws$' --output-on-failure`
 
 预期：失败，原因是线程标识尚未进入 SPEAK 日志。
 
-- [ ] **步骤 3：实现最小 TTS 日志改动**
+- [x] **步骤 3：实现最小 TTS 日志改动**
 
 在 `tts_websocket_channel_speak` 入口使用 APR 的线程标识 API 取得当前线程号，并写入既有 `APT_SIDRES` 或 `LOG_WITH_SID` 关联日志。不得记录 `request->body`、不得引入 pthread/Win32 分支，也不得改变 response 或 streaming 路径。
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行步骤 2 的命令；若该独立目标未注册，运行现有 TTS parser/WebSocket 单测并以编译检查记录该 harness 限制。
 
 预期：目标验证通过，或明确记录不影响代码编译的既有测试目标限制。
 
-- [ ] **步骤 5：重构并回归**
+- [x] **步骤 5：重构并回归**
 
 确认格式化符与 APR 线程类型匹配；运行 ASR transport、TTS WebSocket/HTTP parser 测试及 `git diff --check`。
 
-- [ ] **步骤 6：提交**
+- [x] **步骤 6：提交**
 
 ```bash
 git add plugins/tts-websocket/src/tts_websocket_engine.c plugins/tts-websocket/tests/test_tts_websocket_ws.c docs/superpowers/plans/2026-08-10-issue-37-audio-observability.md

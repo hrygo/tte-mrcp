@@ -20,6 +20,9 @@
     <ClCompile Include="src\tts_websocket_lifecycle.c">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="src\tts_websocket_thread.c">
+      <Filter>src</Filter>
+    </ClCompile>
     <ClCompile Include="src\tts_websocket_ws.c">
       <Filter>src</Filter>
     </ClCompile>
@@ -29,6 +32,9 @@
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="src\tts_websocket_lifecycle.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\tts_websocket_thread.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="src\tts_websocket_ws.h">

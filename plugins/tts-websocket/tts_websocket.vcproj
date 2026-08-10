@@ -298,6 +298,10 @@
 				>
 			</File>
 			<File
+				RelativePath=".\src\tts_websocket_thread.c"
+				>
+			</File>
+			<File
 				RelativePath=".\src\tts_websocket_ws.c"
 				>
 			</File>
