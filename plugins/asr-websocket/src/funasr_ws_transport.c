@@ -1766,6 +1766,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
             apt_bool_t generation_failed;
             apt_bool_t generation_drained;
             apt_bool_t tx_audio;
+            apr_size_t tx_audio_bytes;
             apt_bool_t sticky_ready;
             funasr_ws_event_t sticky_event;
             funasr_transport_failure_e terminal_failure;
@@ -1788,6 +1789,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
             generation_failed = FALSE;
             generation_drained = FALSE;
             tx_audio = FALSE;
+            tx_audio_bytes = 0;
             terminal_failure = FUNASR_FAILURE_NONE;
             funasr_ws_decoder_init(
                 &decoder,
@@ -1912,6 +1914,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                     pong_size = 0;
                     pong_pending = FALSE;
                     tx_audio = FALSE;
+                    tx_audio_bytes = 0;
                     write_wait_started_us = now_us;
                 } else if (tx_size == tx_offset &&
                     !end_frame_queued &&
@@ -1934,6 +1937,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                             max_chunk + FUNASR_WS_FRAME_OVERHEAD);
                         tx_offset = 0;
                         tx_audio = TRUE;
+                        tx_audio_bytes = amount;
                         write_wait_started_us = now_us;
                     }
                 }
@@ -1949,6 +1953,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                         max_chunk + FUNASR_WS_FRAME_OVERHEAD);
                     tx_offset = 0;
                     tx_audio = FALSE;
+                    tx_audio_bytes = 0;
                     write_wait_started_us = now_us;
                     end_frame_queued = TRUE;
                 }
@@ -1988,6 +1993,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                             max_chunk + FUNASR_WS_FRAME_OVERHEAD);
                         tx_offset = 0;
                         tx_audio = TRUE;
+                        tx_audio_bytes = amount;
                         write_wait_started_us = now_us;
                     }
                 }
@@ -2004,6 +2010,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                         max_chunk + FUNASR_WS_FRAME_OVERHEAD);
                     tx_offset = 0;
                     tx_audio = FALSE;
+                    tx_audio_bytes = 0;
                     write_wait_started_us = now_us;
                     end_frame_queued = TRUE;
                 }
@@ -2057,6 +2064,23 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                                     (last_write_progress_us -
                                      transport->generation_started_us) / 1000;
                             }
+                            if (tx_offset == tx_size) {
+                                apr_int64_t gap =
+                                    transport->metrics.ws_audio_last_send_us == 0 ?
+                                    0 : last_write_progress_us -
+                                        transport->metrics.ws_audio_last_send_us;
+
+                                transport->metrics.ws_audio_frames++;
+                                transport->metrics.ws_audio_bytes +=
+                                    tx_audio_bytes;
+                                transport->metrics.ws_audio_last_send_us =
+                                    last_write_progress_us;
+                                transport->metrics.ws_audio_gap_last_us = gap;
+                                if (gap >
+                                        transport->metrics.ws_audio_gap_max_us) {
+                                    transport->metrics.ws_audio_gap_max_us = gap;
+                                }
+                            }
                         }
                         apr_thread_mutex_unlock(transport->mutex);
                         write_wait_started_us = last_write_progress_us;
@@ -2085,6 +2109,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                     }
                     if (!had_pending && tx_size != tx_offset) {
                         tx_audio = FALSE;
+                        tx_audio_bytes = 0;
                         write_wait_started_us = now_us;
                     }
                 }

@@ -28,31 +28,31 @@
 - 修改：`plugins/asr-websocket/src/funasr_ws_transport.c`
 - 测试：`plugins/asr-websocket/tests/test_funasr_ws_transport.c`
 
-- [ ] **步骤 1：编写失败的 transport 测试**
+- [x] **步骤 1：编写失败的 transport 测试**
 
-在 fake I/O 已完成 binary audio write 的测试中，断言 metrics 快照同时包含上游 `media_frames`/`valid_audio_bytes` 与下游 `ws_audio_frames`/`ws_audio_bytes`，并且部分写入只在 frame 全部写完后增加下游帧数。
+在 fake I/O 已完成 binary audio write 的测试中，断言 metrics 快照同时包含上游 `media_frames`/`valid_audio_bytes` 与下游 `ws_audio_frames`/`ws_audio_bytes`。该 fixture 当前仅覆盖完整 write；短写握手语义不在本 Issue 范围内。
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`cmake --build /tmp/tte-mrcp-issue37 --target test_funasr_ws_transport && ctest --test-dir /tmp/tte-mrcp-issue37 -R '^asr_websocket_funasr_ws_transport$' --output-on-failure`
 
 预期：失败，原因是下游音频统计字段或断言支持尚不存在。
 
-- [ ] **步骤 3：实现最小统计与快照**
+- [x] **步骤 3：实现最小统计与快照**
 
 在 `funasr_transport_metrics_t` 增加 `ws_audio_frames`、`ws_audio_bytes`、最近成功写入时间和下游相邻帧间隔；只有 worker 成功写完整个 `tx_audio` WebSocket frame 时更新它们。新增带 mutex 的 metrics snapshot API，保留现有字段和 WebSocket/MRCP 行为。
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行步骤 2 的命令。
 
 预期：目标测试通过，且原有 transport 测试继续通过。
 
-- [ ] **步骤 5：重构并回归**
+- [x] **步骤 5：重构并回归**
 
 将时间差计算抽为 transport 内私有 helper，保证上游与下游均以同一个单调 clock 计算，不在音频回调中做日志格式化。
 
-- [ ] **步骤 6：提交**
+- [x] **步骤 6：提交**
 
 ```bash
 git add plugins/asr-websocket/src/funasr_ws_transport.h plugins/asr-websocket/src/funasr_ws_transport.c plugins/asr-websocket/tests/test_funasr_ws_transport.c docs/superpowers/plans/2026-08-10-issue-37-audio-observability.md
