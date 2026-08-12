@@ -96,7 +96,7 @@ git commit -m "fix(asr): correlate packet logs with session id" -m "Refs #42"
 **文件：**
 - 修改：`docs/superpowers/plans/2026-08-12-issue-42-asr-session-id-logging.md`
 
-- [ ] **步骤 1：运行范围验证**
+- [x] **步骤 1：运行范围验证**
 
 运行：
 
@@ -107,11 +107,11 @@ git diff --check
 
 预期：两条命令退出码均为 0。
 
-- [ ] **步骤 2：重新索引并验证关键调用链**
+- [x] **步骤 2：重新索引并验证关键调用链**
 
 重新索引仓库，并检查：`funasr_open_channel_on_task` 调用 `funasr_transport_create`，`funasr_default_io_write` 保持在默认 socket I/O 写入边界。
 
-- [ ] **步骤 3：记录结果并提交**
+- [x] **步骤 3：记录结果并提交**
 
 在本计划附加执行结果，列出 CMake 测试、`git diff --check`、图谱查询结果，以及 Windows/Linux 为“未验证”。然后运行：
 
@@ -119,3 +119,12 @@ git diff --check
 git add docs/superpowers/plans/2026-08-12-issue-42-asr-session-id-logging.md
 git commit -m "test(asr): record issue 42 verification" -m "Refs #42"
 ```
+
+## 执行结果（2026-08-12）
+
+- RED：扩展后的 `asr_websocket_frame_debug_logs` 在旧实现上失败，原因是网络写入日志缺少 session ID 前缀。
+- macOS：加载 `tools/dev/env-macos.sh` 后，`cmake -S . -B /tmp/tte-mrcp-issue42-macos -DCMAKE_POLICY_VERSION_MINIMUM=3.5`、`cmake --build /tmp/tte-mrcp-issue42-macos --target test_funasr_ws_transport asr_websocket -j2` 均通过。
+- 测试：`asr_websocket_funasr_ws_transport` 与 `asr_websocket_frame_debug_logs` 均通过（2/2）。
+- 卫生：`git diff --check` 与所有 `tools/**/*.sh` 的 `bash -n` 通过。
+- 图谱：`tte-mrcp-issue-42` 已重新索引（5,912 nodes / 34,470 edges）；`funasr_transport_begin_generation` 由 `funasr_channel_recognize` 调用，默认 socket 写入边界为 `funasr_default_io_write`。
+- Windows、Linux：未验证；本次未执行 MSBuild/DLL 加载或 Linux 动态插件加载/服务端冒烟。
