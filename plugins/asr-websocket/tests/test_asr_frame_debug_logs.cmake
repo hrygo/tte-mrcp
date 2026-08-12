@@ -78,6 +78,10 @@ if(NOT "${network_send_log}" MATCHES
         "发送 ASR WebSocket 网络数据包，大小=%")
     message(FATAL_ERROR "ASR WebSocket 网络发送出口缺少逐包 DEBUG 日志")
 endif()
+if(NOT "${network_send_log}" MATCHES
+        "asr_websocket: \\[session_id=%s\\] 发送 ASR WebSocket 网络数据包")
+    message(FATAL_ERROR "ASR WebSocket 网络发送日志必须使用 session_id 前缀")
+endif()
 if(NOT "${network_send_log}" MATCHES "\\*size")
     message(FATAL_ERROR "ASR WebSocket 网络发送日志必须记录 *size")
 endif()
@@ -95,4 +99,12 @@ math(EXPR network_send_log_end_in_source
     "${network_send_log_start} + ${network_send_log_end}")
 if(network_return_start LESS_EQUAL network_send_log_end_in_source)
     message(FATAL_ERROR "ASR WebSocket 网络发送日志必须位于 return status; 之前")
+endif()
+
+file(READ
+    "${ASR_WEBSOCKET_SOURCE_DIR}/src/funasr_ws_transport.h"
+    transport_header_source)
+if(NOT "${transport_source}" MATCHES
+        "default_io\\.session_id = transport->call_id;")
+    message(FATAL_ERROR "generation 开始时必须向默认 socket I/O 同步 session_id")
 endif()

@@ -23,6 +23,7 @@
 
 typedef struct funasr_default_io_t {
     apr_pool_t *pool;
+    const char *session_id;
     apr_thread_mutex_t *mutex;
     apr_socket_t *socket;
     apr_pollset_t *pollset;
@@ -1027,7 +1028,8 @@ static apr_status_t funasr_default_io_write(
     status = apr_socket_send(io->socket, (const char *)data, size);
     if (status == APR_SUCCESS && *size != 0) {
         apt_log(APT_LOG_MARK, APT_PRIO_DEBUG,
-            "asr_websocket: 发送 ASR WebSocket 网络数据包，大小=%" APR_SIZE_T_FMT " 字节",
+            "asr_websocket: [session_id=%s] 发送 ASR WebSocket 网络数据包，大小=%" APR_SIZE_T_FMT " 字节",
+            io->session_id ? io->session_id : "N/A",
             *size);
     }
     return status;
@@ -2375,6 +2377,7 @@ apt_bool_t funasr_transport_begin_generation(
         format->call_id,
         strlen(format->call_id) + 1U);
     transport->format.call_id = transport->call_id;
+    transport->default_io.session_id = transport->call_id;
     memset(&transport->metrics, 0, sizeof(transport->metrics));
     transport->metrics.ws_first_send_ms = -1;
     transport->generation_started_us =
