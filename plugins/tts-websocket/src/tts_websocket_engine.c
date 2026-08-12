@@ -1135,6 +1135,7 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 	apr_socket_t *sock;
 	apr_status_t rv;
 	apr_sockaddr_t *sa;
+	apr_sockaddr_t *local_addr = NULL;
 	char *json_body = NULL;
 	char *escaped_text = NULL;
 
@@ -1311,6 +1312,18 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 			tts_engine->tts_server_host, tts_engine->tts_server_port);
 		apr_socket_close(sock);
 		return FALSE;
+	}
+
+	/* TCP connect succeeds only after the OS assigns the actual local source port. */
+	if(apr_socket_addr_get(&local_addr, APR_LOCAL, sock) != APR_SUCCESS) {
+		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+			"[WS] Connected to TTS Server %s:%d, but failed to get client local port",
+			tts_engine->tts_server_host, tts_engine->tts_server_port);
+	} else {
+		apt_log(SYNTH_LOG_MARK, APT_PRIO_INFO,
+			"ZyTTS: Connected to TTS Server: %s:%d, client local port: %d",
+			tts_engine->tts_server_host, tts_engine->tts_server_port,
+			local_addr->port);
 	}
 
 	/* 执行 WebSocket 握手。连接上下文保留 HTTP 101 之后同一次 recv

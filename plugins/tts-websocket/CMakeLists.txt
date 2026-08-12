@@ -100,4 +100,13 @@ if(BUILD_TTS_WEBSOCKET_TESTS)
 	target_link_libraries(test_tts_websocket_thread ${APR_LIBRARIES})
 	set_target_properties(test_tts_websocket_thread PROPERTIES FOLDER "tests")
 	add_test(NAME tts_websocket_thread COMMAND test_tts_websocket_thread)
+	add_executable(test_tts_websocket_connection_log
+		tests/test_tts_websocket_connection_log.c)
+	target_include_directories(test_tts_websocket_connection_log PRIVATE
+		${APR_INCLUDE_DIRS})
+	target_link_libraries(test_tts_websocket_connection_log ${APR_LIBRARIES})
+	set_target_properties(test_tts_websocket_connection_log PROPERTIES FOLDER "tests")
+	add_test(NAME tts_websocket_connection_log
+		COMMAND test_tts_websocket_connection_log
+		${CMAKE_CURRENT_SOURCE_DIR}/src/tts_websocket_engine.c)
 endif()
