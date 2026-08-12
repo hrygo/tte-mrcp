@@ -209,6 +209,9 @@ UNI_PLUGIN_ENABLED(recorder)
 
 AM_CONDITIONAL([RECORDER_PLUGIN],[test "${enable_recorder_plugin}" = "yes"])
 
+dnl TingYun APM instrumentation (TTS/ASR plugins + main executables).
+UNI_TINGYUN_APM
+
 dnl Enable test suites.
 AC_ARG_ENABLE(test-suites,
     [AC_HELP_STRING([--enable-test-suites  ],[build test suites])],
@@ -296,6 +299,7 @@ echo TTS WebSocket plugin....... : $enable_tts_websocket_plugin
 echo ASR WebSocket plugin........... : $enable_asr_websocket_plugin
 echo Demo verifier plugin.......... : $enable_demoverifier_plugin
 echo Recorder plugin............... : $enable_recorder_plugin
+echo TingYun APM instrumentation... : $enable_tingyun
 echo
 echo Installation layout........... : $layout_name
 echo Installation directory........ : $prefix

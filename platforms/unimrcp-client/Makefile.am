@@ -10,7 +10,7 @@ unimrcpclient_SOURCES  = src/main.c \
                          src/demo_bypass_application.c \
                          src/demo_discover_application.c \
                          src/demo_util.c
-unimrcpclient_LDADD    = $(UNIMRCP_CLIENTAPP_LIBS)
+unimrcpclient_LDADD    = $(UNIMRCP_CLIENTAPP_LIBS) $(TINGYUN_LIBADD)
 unimrcpclient_LDFLAGS  = $(UNIMRCP_CLIENTAPP_OPTS)
 
 include $(top_srcdir)/build/rules/uniclientapp.am

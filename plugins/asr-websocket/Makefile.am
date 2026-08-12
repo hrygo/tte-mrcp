@@ -10,6 +10,7 @@ asr_websocket_la_SOURCES   = \
                              src/funasr_json.c src/funasr_json.h \
                              src/funasr_ws_transport.c src/funasr_ws_transport.h
 asr_websocket_la_LDFLAGS   = $(UNIMRCP_PLUGIN_OPTS)
+asr_websocket_la_LIBADD    = $(TINGYUN_LIBADD)
 
 check_PROGRAMS             = test_resample test_json_unescape \
                              test_funasr_ws_transport test_funasr_control

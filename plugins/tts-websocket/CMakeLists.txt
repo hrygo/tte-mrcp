@@ -32,6 +32,12 @@ elseif (UNIX)
 	target_link_libraries(${PROJECT_NAME} m iconv)
 endif ()
 
+# TingYun APM static library (conditional).
+if (ENABLE_TINGYUN_APM AND TINGYUN_FOUND)
+	target_include_directories(${PROJECT_NAME} PRIVATE ${TINGYUN_INCLUDE_DIR})
+	target_link_libraries(${PROJECT_NAME} ${TINGYUN_LIBRARY})
+endif ()
+
 # Preprocessor definitions
 add_definitions (
 	${MRCP_DEFINES}
