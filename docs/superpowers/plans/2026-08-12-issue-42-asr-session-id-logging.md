@@ -4,7 +4,7 @@
 
 **目标：** 使 ASR 客户端媒体包与 WebSocket 实际网络写入的逐包 DEBUG 日志采用相同的 `[session_id=<id>]` 前缀。
 
-**架构：** engine 在打开 channel 时把当前 session ID 放入 transport 配置；transport 创建时在其 APR pool 中复制该值；默认 socket I/O 仅使用这个稳定副本格式化既有成功写入日志，不访问 channel，也不改变写入语义。
+**架构：** `funasr_channel_recognize` 已把当前 session ID 作为 `format.call_id` 传入 generation 开始边界；transport 将此值复制到自有 `call_id` 后同步给默认 socket I/O。写入日志仅使用这个稳定副本，不访问 channel，也不改变写入语义。
 
 **技术栈：** C、APR/UniMRCP、CMake 源码契约测试、codebase-memory。
 
@@ -14,20 +14,16 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `plugins/asr-websocket/src/asr_websocket_engine.c` | 将 channel session ID 写入 transport 配置。 |
-| `plugins/asr-websocket/src/funasr_ws_transport.h` | 声明 transport 配置和默认 I/O 所需的 session ID 字段。 |
-| `plugins/asr-websocket/src/funasr_ws_transport.c` | 复制 ID 并输出具有关联前缀的实际 socket 写入日志。 |
+| `plugins/asr-websocket/src/funasr_ws_transport.c` | 在 generation 边界同步 ID，并输出具有关联前缀的实际 socket 写入日志。 |
 | `plugins/asr-websocket/tests/test_asr_frame_debug_logs.cmake` | 验证逐包日志边界、格式与不变条件。 |
 
 ### 任务 1：以源码契约驱动 session ID 传递与日志格式
 
 **文件：**
 - 修改：`plugins/asr-websocket/tests/test_asr_frame_debug_logs.cmake`
-- 修改：`plugins/asr-websocket/src/funasr_ws_transport.h`
 - 修改：`plugins/asr-websocket/src/funasr_ws_transport.c`
-- 修改：`plugins/asr-websocket/src/asr_websocket_engine.c`
 
-- [ ] **步骤 1：编写失败的源码契约测试（RED）**
+- [x] **步骤 1：编写失败的源码契约测试（RED）**
 
 在 `test_asr_frame_debug_logs.cmake` 增加以下断言：
 
@@ -40,9 +36,9 @@ if(socket_session_log_start EQUAL -1)
 endif()
 ```
 
-同时断言 `funasr_transport_config_t` 包含 `const char *session_id;`、打开 channel 时存在 `config.session_id = channel->session_id;`，以及默认 I/O 使用 APR pool 内的 session ID 副本。保留既有关于 `APR_SUCCESS && *size != 0`、实际 `*size`、媒体日志位置、中文文本和不记录地址/payload 的断言。
+同时断言 `funasr_transport_begin_generation` 在复制 `format->call_id` 到 transport 自有 `call_id` 后，以 `transport->default_io.session_id = transport->call_id;` 同步默认 I/O。保留既有关于 `APR_SUCCESS && *size != 0`、实际 `*size`、媒体日志位置、中文文本和不记录地址/payload 的断言。
 
-- [ ] **步骤 2：运行测试确认失败（RED）**
+- [x] **步骤 2：运行测试确认失败（RED）**
 
 运行：
 
@@ -53,26 +49,12 @@ ctest --test-dir /tmp/tte-mrcp-issue42 -R '^asr_websocket_frame_debug_logs$' --o
 
 预期：失败，提示网络写入日志缺少 session ID 前缀或 transport session ID 传递尚不存在。
 
-- [ ] **步骤 3：实现最小 session ID 传递与日志改动（GREEN）**
+- [x] **步骤 3：实现最小 session ID 传递与日志改动（GREEN）**
 
-在 `funasr_transport_config_t` 中添加：
-
-```c
-const char *session_id;
-```
-
-在 `funasr_open_channel_on_task` 中、设置 event sink 前添加：
+在 `funasr_transport_begin_generation` 中、将 `format->call_id` 复制到 `transport->call_id` 后添加：
 
 ```c
-config.session_id = channel->session_id;
-```
-
-在 `funasr_transport_create` 中使用：
-
-```c
-transport->default_io.session_id = apr_pstrdup(
-    pool,
-    config->session_id ? config->session_id : "N/A");
+transport->default_io.session_id = transport->call_id;
 ```
 
 然后将 `funasr_default_io_write` 的日志改为：
@@ -86,13 +68,13 @@ apt_log(APT_LOG_MARK, APT_PRIO_DEBUG,
 
 不得移动 `apr_socket_send()`、条件 `status == APR_SUCCESS && *size != 0` 或返回语句。
 
-- [ ] **步骤 4：运行测试确认通过（GREEN）**
+- [x] **步骤 4：运行测试确认通过（GREEN）**
 
 运行步骤 2 的两条命令。
 
 预期：`asr_websocket_frame_debug_logs` 通过。
 
-- [ ] **步骤 5：重构并回归（REFACTOR）**
+- [x] **步骤 5：重构并回归（REFACTOR）**
 
 检查 ID 回退值仅存在于 transport 创建或日志读取边界；保留最小字段和赋值，不新增 channel 指针、锁、I/O 或协议改动。运行：
 
@@ -102,7 +84,7 @@ git diff --check
 
 预期：退出码 0。
 
-- [ ] **步骤 6：提交**
+- [x] **步骤 6：提交**
 
 ```bash
 git add plugins/asr-websocket/tests/test_asr_frame_debug_logs.cmake plugins/asr-websocket/src/funasr_ws_transport.h plugins/asr-websocket/src/funasr_ws_transport.c plugins/asr-websocket/src/asr_websocket_engine.c docs/superpowers/plans/2026-08-12-issue-42-asr-session-id-logging.md

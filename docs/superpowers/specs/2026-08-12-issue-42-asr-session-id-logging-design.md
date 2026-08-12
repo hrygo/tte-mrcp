@@ -19,11 +19,11 @@ MPF input → funasr_stream_write → funasr_transport_enqueue_pcm → TX ring
 asr_websocket: [session_id=<id>] 接收客户端媒体流音频数据包，大小=<原始帧字节数> 字节
 ```
 
-`funasr_default_io_write` 位于 transport 的默认 socket I/O 对象中，只能取得 `io`、数据指针和实际写入长度；它目前不含 session ID。`funasr_channel_recognize` 会在每个 generation 前将 MRCP request 的 session ID 复制到 `channel->session_id`，因此在创建 transport 的 channel-open 路径复制这个稳定字符串可避免跨线程反查 channel。
+`funasr_default_io_write` 位于 transport 的默认 socket I/O 对象中，只能取得 `io`、数据指针和实际写入长度；它目前不含 session ID。`funasr_channel_recognize` 会在每个 generation 前将 MRCP request 的 session ID 复制到 `channel->session_id`，并将该值作为 `format.call_id` 传给 `funasr_transport_begin_generation`。transport 已在该函数中把 `format.call_id` 复制到受 mutex 保护的固定 `transport->call_id` 缓冲区，这是 worker 使用 WebSocket handshake `call_id` 的稳定所有权边界。
 
 ## 决策
 
-在 `funasr_transport_config_t` 增加只读 `session_id` 字段；`funasr_open_channel_on_task` 传入 `channel->session_id`；`funasr_transport_create` 将该字符串复制到 transport 所属 APR pool，并把副本赋给默认 I/O 对象。`funasr_default_io_write` 使用完全一致的结构化前缀：
+在 `funasr_transport_begin_generation` 完成 `format.call_id` 到 `transport->call_id` 的既有复制后，把默认 I/O 的 `session_id` 指向这个 transport 自有缓冲区。该同步点与媒体日志使用的 `channel->session_id` 属于同一个 MRCP request，且发生在 worker 被唤醒之前。`funasr_default_io_write` 使用完全一致的结构化前缀：
 
 ```text
 asr_websocket: [session_id=<id>] 发送 ASR WebSocket 网络数据包，大小=<实际写入字节数> 字节
@@ -45,9 +45,7 @@ asr_websocket: [session_id=<id>] 发送 ASR WebSocket 网络数据包，大小=<
 
 | 文件 | 变更 |
 | --- | --- |
-| `plugins/asr-websocket/src/funasr_ws_transport.h` | 为 transport 配置和默认 I/O 对象声明 session ID。 |
-| `plugins/asr-websocket/src/funasr_ws_transport.c` | 复制 session ID，并在既有成功写入日志加入一致前缀。 |
-| `plugins/asr-websocket/src/asr_websocket_engine.c` | 在打开 channel 时将当前 session ID 交给 transport 配置。 |
+| `plugins/asr-websocket/src/funasr_ws_transport.c` | 在 generation 开始时同步 transport 自有的 call ID 到默认 I/O，并在既有成功写入日志加入一致前缀。 |
 | `plugins/asr-websocket/tests/test_asr_frame_debug_logs.cmake` | 以源码契约检查格式、数据流和不变条件。 |
 
 ## 验证
