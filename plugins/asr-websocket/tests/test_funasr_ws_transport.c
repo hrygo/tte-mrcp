@@ -404,6 +404,8 @@ typedef struct fake_io_t {
     apr_size_t read_chunk;
     apr_size_t write_chunk;
     apt_bool_t opened;
+    int open_count;
+    int close_count;
     apt_bool_t handshake_ready;
     apt_bool_t stall_writes;
     int poll_want_write;
@@ -443,6 +445,7 @@ static apr_status_t fake_io_open(
     (void)timeout;
     apr_thread_mutex_lock(io->mutex);
     io->opened = TRUE;
+    io->open_count++;
     io->handshake_request_size = 0;
     io->inbound_size = 0;
     io->inbound_offset = 0;
@@ -650,6 +653,7 @@ static void fake_io_close(void *obj)
 
     apr_thread_mutex_lock(io->mutex);
     io->opened = FALSE;
+    io->close_count++;
     apr_thread_mutex_unlock(io->mutex);
 }
 
@@ -773,6 +777,24 @@ static apt_bool_t fake_io_wait_handshake(fake_io_t *io)
 
         apr_thread_mutex_lock(io->mutex);
         ready = io->handshake_ready;
+        apr_thread_mutex_unlock(io->mutex);
+        if (ready) {
+            return TRUE;
+        }
+        apr_sleep(1000);
+    }
+    return FALSE;
+}
+
+static apt_bool_t fake_io_wait_open_count(fake_io_t *io, int expected)
+{
+    int attempts;
+
+    for (attempts = 0; attempts < 2000; ++attempts) {
+        apt_bool_t ready;
+
+        apr_thread_mutex_lock(io->mutex);
+        ready = io->open_count >= expected && io->handshake_ready;
         apr_thread_mutex_unlock(io->mutex);
         if (ready) {
             return TRUE;
@@ -1100,12 +1122,41 @@ static void test_worker_keeps_media_enqueue_independent_of_partial_rx(
                    transport,
                    12,
                    &format) == TRUE);
-    CHECK_TRUE("next generation can be cancelled",
-               funasr_transport_cancel_generation(transport, 12) == TRUE);
-    CHECK_TRUE("next generation drains",
-               wait_for_collector(&collector, 1, 1) == TRUE);
+    memset(media_frame, 0x6c, sizeof(media_frame));
+    for (index = 0; index < 10; ++index) {
+        CHECK_TRUE("next generation media is accepted",
+                   funasr_transport_enqueue_pcm(
+                       transport,
+                       12,
+                       media_frame,
+                       sizeof(media_frame),
+                       now_us) == FUNASR_ENQUEUE_ACCEPTED);
+        now_us += 20000;
+    }
+    CHECK_TRUE("next generation media uses existing socket",
+               fake_io_wait_outbound(
+                   &io,
+                   sizeof(expected_media) + 10U * sizeof(media_frame)) == TRUE);
+    response_header[0] = 0x81;
+    response_header[1] = 126;
+    response_header[2] = 0;
+    response_header[3] = (unsigned char)(sizeof(response_json) - 1);
+    fake_io_append_inbound(&io, response_header, sizeof(response_header));
+    fake_io_append_inbound(
+        &io,
+        response_json,
+        sizeof(response_json) - 1);
+    funasr_transport_wake(transport);
+    CHECK_TRUE("next generation final arrives",
+               wait_for_collector(&collector, 0, 2) == TRUE);
     CHECK_TRUE("next generation metrics arrive",
                wait_for_collector(&collector, 5, 2) == TRUE);
+    apr_thread_mutex_lock(io.mutex);
+    CHECK_TRUE("two generations reuse one WebSocket open",
+               io.open_count == 1);
+    CHECK_TRUE("healthy WebSocket remains open between generations",
+               io.close_count == 0 && io.opened == TRUE);
+    apr_thread_mutex_unlock(io.mutex);
 
     CHECK_TRUE("close requested",
                funasr_transport_request_close(transport) == TRUE);
@@ -1113,8 +1164,12 @@ static void test_worker_keeps_media_enqueue_independent_of_partial_rx(
                wait_for_collector(&collector, 2, 1) == TRUE);
     CHECK_TRUE("worker joins",
                funasr_transport_join_closed(transport) == APR_SUCCESS);
-    CHECK_TRUE("progress and terminal metrics are both emitted",
-               collector.metrics == 3);
+    apr_thread_mutex_lock(io.mutex);
+    CHECK_TRUE("channel close closes the reused WebSocket once",
+               io.close_count == 1 && io.opened == FALSE);
+    apr_thread_mutex_unlock(io.mutex);
+    CHECK_TRUE("each generation emits terminal metrics",
+               collector.metrics >= 2);
     CHECK_TRUE("POLLOUT requested only for pending bytes",
                io.poll_want_write > 0 && io.poll_without_write > 0);
     CHECK_TRUE("enqueue wakes worker", io.wake_count > 0);
@@ -1677,9 +1732,169 @@ static void test_worker_reads_data_when_poll_reports_eof_with_readable(
     CHECK_TRUE("data survives poll HUP", wait_for_collector(&collector, 0, 1));
     CHECK_TRUE("HUP final text preserved", strcmp(collector.final_text, "hup") == 0);
     CHECK_TRUE("HUP does not report transport failure", collector.failures == 0);
+    apr_thread_mutex_lock(io.mutex);
+    io.eof_with_readable = FALSE;
+    apr_thread_mutex_unlock(io.mutex);
+    format.call_id = "hup-test-next";
+    CHECK_TRUE("generation after final HUP begins",
+               funasr_transport_begin_generation(transport, 82, &format));
+    CHECK_TRUE("final HUP forces next generation reconnect",
+               fake_io_wait_open_count(&io, 2));
+    CHECK_TRUE("generation after final HUP can stop",
+               funasr_transport_cancel_generation(transport, 82));
+    CHECK_TRUE("generation after final HUP drains",
+               wait_for_collector(&collector, 1, 1));
     funasr_transport_request_close(transport);
     CHECK_TRUE("HUP worker closes", wait_for_collector(&collector, 2, 1));
     CHECK_TRUE("HUP worker joins", funasr_transport_join_closed(transport) == APR_SUCCESS);
+}
+
+static void test_worker_reconnects_before_late_idle_result(
+    apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    static const char first_response[] = "{\"code\":0,\"text\":\"first\"}";
+    static const char late_response[] = "{\"code\":0,\"text\":\"late\"}";
+    funasr_transport_config_t config;
+    funasr_audio_format_t format;
+    funasr_transport_t *transport;
+    fake_io_t io;
+    event_collector_t collector;
+    unsigned char frame[2 + sizeof(first_response) - 1];
+
+    memset(&io, 0, sizeof(io));
+    memset(&collector, 0, sizeof(collector));
+    apr_thread_mutex_create(&io.mutex, APR_THREAD_MUTEX_DEFAULT, pool);
+    apr_thread_mutex_create(
+        &collector.mutex,
+        APR_THREAD_MUTEX_DEFAULT,
+        pool);
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+    config.io_vtable = &fake_vtable;
+    config.io_obj = &io;
+    transport = funasr_transport_create(pool, 53, &config);
+    memset(&format, 0, sizeof(format));
+    format.input_sample_rate = 16000;
+    format.output_sample_rate = 16000;
+    format.channel_count = 1;
+    format.sample_width = 2;
+    format.call_id = "late-result-test";
+
+    CHECK_TRUE("late-result first generation begins",
+               funasr_transport_begin_generation(transport, 101, &format));
+    CHECK_TRUE("late-result handshake completes", fake_io_wait_handshake(&io));
+    frame[0] = 0x81;
+    frame[1] = (unsigned char)(sizeof(first_response) - 1U);
+    memcpy(frame + 2, first_response, sizeof(first_response) - 1U);
+    fake_io_append_inbound(&io, frame, sizeof(frame));
+    funasr_transport_wake(transport);
+    CHECK_TRUE("late-result first final arrives",
+               wait_for_collector(&collector, 0, 1));
+
+    frame[0] = 0x81;
+    frame[1] = (unsigned char)(sizeof(late_response) - 1U);
+    memcpy(frame + 2, late_response, sizeof(late_response) - 1U);
+    fake_io_append_inbound(&io, frame, sizeof(frame));
+    format.call_id = "late-result-test-next";
+    CHECK_TRUE("generation after late idle result begins",
+               funasr_transport_begin_generation(transport, 102, &format));
+    CHECK_TRUE("late idle result forces reconnect",
+               fake_io_wait_open_count(&io, 2));
+    CHECK_TRUE("late idle result is not delivered to next generation",
+               collector.final_results == 1 &&
+               strcmp(collector.final_text, "first") == 0);
+    CHECK_TRUE("late-result next generation can stop",
+               funasr_transport_cancel_generation(transport, 102));
+    CHECK_TRUE("late-result next generation drains",
+               wait_for_collector(&collector, 1, 1));
+    funasr_transport_request_close(transport);
+    CHECK_TRUE("late-result worker closes",
+               wait_for_collector(&collector, 2, 1));
+    CHECK_TRUE("late-result worker joins",
+               funasr_transport_join_closed(transport) == APR_SUCCESS);
+}
+
+static void test_worker_reconnects_after_final_with_trailing_close(
+    apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    static const char response[] = "{\"code\":0,\"text\":\"final-close\"}";
+    funasr_transport_config_t config;
+    funasr_audio_format_t format;
+    funasr_transport_t *transport;
+    fake_io_t io;
+    event_collector_t collector;
+    unsigned char frames[2 + sizeof(response) - 1 + 2];
+
+    memset(&io, 0, sizeof(io));
+    memset(&collector, 0, sizeof(collector));
+    apr_thread_mutex_create(&io.mutex, APR_THREAD_MUTEX_DEFAULT, pool);
+    apr_thread_mutex_create(
+        &collector.mutex,
+        APR_THREAD_MUTEX_DEFAULT,
+        pool);
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+    config.io_vtable = &fake_vtable;
+    config.io_obj = &io;
+    transport = funasr_transport_create(pool, 54, &config);
+    memset(&format, 0, sizeof(format));
+    format.input_sample_rate = 16000;
+    format.output_sample_rate = 16000;
+    format.channel_count = 1;
+    format.sample_width = 2;
+    format.call_id = "final-close-test";
+
+    CHECK_TRUE("final-close generation begins",
+               funasr_transport_begin_generation(transport, 111, &format));
+    CHECK_TRUE("final-close handshake completes", fake_io_wait_handshake(&io));
+    frames[0] = 0x81;
+    frames[1] = (unsigned char)(sizeof(response) - 1U);
+    memcpy(frames + 2, response, sizeof(response) - 1U);
+    frames[sizeof(frames) - 2] = 0x88;
+    frames[sizeof(frames) - 1] = 0;
+    fake_io_append_inbound(&io, frames, sizeof(frames));
+    funasr_transport_wake(transport);
+    CHECK_TRUE("final before trailing close is delivered",
+               wait_for_collector(&collector, 0, 1));
+
+    format.call_id = "final-close-test-next";
+    CHECK_TRUE("generation after trailing close begins",
+               funasr_transport_begin_generation(transport, 112, &format));
+    CHECK_TRUE("trailing close forces reconnect",
+               fake_io_wait_open_count(&io, 2));
+    CHECK_TRUE("generation after trailing close can stop",
+               funasr_transport_cancel_generation(transport, 112));
+    CHECK_TRUE("generation after trailing close drains",
+               wait_for_collector(&collector, 1, 1));
+    funasr_transport_request_close(transport);
+    CHECK_TRUE("final-close worker closes",
+               wait_for_collector(&collector, 2, 1));
+    CHECK_TRUE("final-close worker joins",
+               funasr_transport_join_closed(transport) == APR_SUCCESS);
 }
 
 static void test_worker_reports_one_queue_overrun(
@@ -1858,6 +2073,94 @@ static void test_worker_write_stall_uses_fake_clock(
     CHECK_TRUE("stall worker closes",
                wait_for_collector(&collector, 2, 1));
     CHECK_TRUE("stall worker joins",
+               funasr_transport_join_closed(transport) == APR_SUCCESS);
+}
+
+static void test_worker_no_result_timeout_closes_and_reconnects(
+    apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    funasr_transport_config_t config;
+    funasr_audio_format_t format;
+    funasr_transport_t *transport;
+    fake_io_t io;
+    event_collector_t collector;
+    apr_int64_t now_us = 5000000;
+    unsigned char audio[6400];
+
+    memset(&io, 0, sizeof(io));
+    memset(&collector, 0, sizeof(collector));
+    apr_thread_mutex_create(&io.mutex, APR_THREAD_MUTEX_DEFAULT, pool);
+    apr_thread_mutex_create(
+        &collector.mutex,
+        APR_THREAD_MUTEX_DEFAULT,
+        pool);
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.no_result_timeout_us = 20000;
+    config.clock.now_us = fake_now_us;
+    config.clock.obj = &now_us;
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+    config.io_vtable = &fake_vtable;
+    config.io_obj = &io;
+    transport = funasr_transport_create(pool, 52, &config);
+
+    memset(&format, 0, sizeof(format));
+    format.input_sample_rate = 16000;
+    format.output_sample_rate = 16000;
+    format.channel_count = 1;
+    format.sample_width = 2;
+    format.call_id = "timeout-test";
+    CHECK_TRUE("timeout generation begins",
+               funasr_transport_begin_generation(transport, 91, &format));
+    memset(audio, 0x71, sizeof(audio));
+    CHECK_TRUE("timeout audio accepted",
+               funasr_transport_enqueue_pcm(
+                   transport,
+                   91,
+                   audio,
+                   sizeof(audio),
+                   now_us) == FUNASR_ENQUEUE_ACCEPTED);
+    CHECK_TRUE("timeout audio reaches socket",
+               fake_io_wait_outbound(&io, sizeof(audio)));
+    now_us += config.no_result_timeout_us;
+    funasr_transport_wake(transport);
+    CHECK_TRUE("no-result timeout failure arrives",
+               wait_for_collector(&collector, 3, 1));
+    CHECK_TRUE("no-result timeout reason preserved",
+               collector.last_failure == FUNASR_FAILURE_NO_RESULT_TIMEOUT);
+    apr_thread_mutex_lock(io.mutex);
+    CHECK_TRUE("no-result timeout closes WebSocket",
+               io.open_count == 1 && io.close_count == 1 && !io.opened);
+    apr_thread_mutex_unlock(io.mutex);
+
+    format.call_id = "timeout-test-next";
+    CHECK_TRUE("generation after timeout begins",
+               funasr_transport_begin_generation(transport, 92, &format));
+    CHECK_TRUE("generation after timeout reconnects",
+               fake_io_wait_open_count(&io, 2));
+    apr_thread_mutex_lock(io.mutex);
+    CHECK_TRUE("timeout recovery opens a new WebSocket",
+               io.open_count == 2 && io.opened);
+    apr_thread_mutex_unlock(io.mutex);
+    CHECK_TRUE("reconnected generation can stop",
+               funasr_transport_cancel_generation(transport, 92));
+    CHECK_TRUE("reconnected generation drains",
+               wait_for_collector(&collector, 1, 1));
+    funasr_transport_request_close(transport);
+    CHECK_TRUE("timeout worker closes",
+               wait_for_collector(&collector, 2, 1));
+    CHECK_TRUE("timeout worker joins",
                funasr_transport_join_closed(transport) == APR_SUCCESS);
 }
 
@@ -2069,8 +2372,11 @@ int main(void)
     test_twenty_transport_workers_remain_independent(pool);
     test_worker_preserves_handshake_sticky_frame(pool);
     test_worker_reads_data_when_poll_reports_eof_with_readable(pool);
+    test_worker_reconnects_before_late_idle_result(pool);
+    test_worker_reconnects_after_final_with_trailing_close(pool);
     test_worker_reports_one_queue_overrun(pool);
     test_worker_write_stall_uses_fake_clock(pool);
+    test_worker_no_result_timeout_closes_and_reconnects(pool);
     test_stop_interrupts_stalled_handshake(pool);
     test_worker_rejected_close_fence_is_reported(pool);
     test_worker_close_without_generation_has_fence(pool);
