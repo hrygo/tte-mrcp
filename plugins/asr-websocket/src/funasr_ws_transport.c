@@ -1721,6 +1721,8 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
     unsigned char *frame_storage;
     unsigned char *message_storage;
     apr_size_t max_chunk;
+    apt_bool_t connected;
+    funasr_ws_decoder_t decoder;
 
     (void)thread;
     transport = (funasr_transport_t *)obj;
@@ -1739,6 +1741,16 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
     message_storage = apr_palloc(
         transport->pool,
         FUNASR_WS_MESSAGE_LIMIT);
+    connected = FALSE;
+    funasr_ws_decoder_init(
+        &decoder,
+        frame_storage,
+        FUNASR_WS_FRAME_LIMIT + FUNASR_WS_FRAME_OVERHEAD,
+        message_storage,
+        FUNASR_WS_MESSAGE_LIMIT,
+        FUNASR_WS_FRAME_LIMIT,
+        FUNASR_WS_MESSAGE_LIMIT);
+    funasr_ws_decoder_reject_masked(&decoder, TRUE);
 
     for (;;) {
         funasr_generation_t generation;
@@ -1759,7 +1771,6 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
         }
 
         {
-            funasr_ws_decoder_t decoder;
             apr_status_t open_status;
             apr_size_t tx_size;
             apr_size_t tx_offset;
@@ -1781,6 +1792,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
             apt_bool_t tx_audio;
             apr_size_t tx_audio_bytes;
             apt_bool_t sticky_ready;
+            apt_bool_t opened_this_generation;
             funasr_ws_event_t sticky_event;
             funasr_transport_failure_e terminal_failure;
 
@@ -1804,49 +1816,90 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
             tx_audio = FALSE;
             tx_audio_bytes = 0;
             terminal_failure = FUNASR_FAILURE_NONE;
-            funasr_ws_decoder_init(
-                &decoder,
-                frame_storage,
-                FUNASR_WS_FRAME_LIMIT + FUNASR_WS_FRAME_OVERHEAD,
-                message_storage,
-                FUNASR_WS_MESSAGE_LIMIT,
-                FUNASR_WS_FRAME_LIMIT,
-                FUNASR_WS_MESSAGE_LIMIT);
-            funasr_ws_decoder_reject_masked(&decoder, TRUE);
+            opened_this_generation = FALSE;
+            sticky_ready = FALSE;
+            memset(&sticky_event, 0, sizeof(sticky_event));
+            if (connected) {
+                apr_int16_t idle_events = 0;
+                apr_status_t idle_status = transport->io_vtable->poll(
+                    transport->io_obj,
+                    0,
+                    FALSE,
+                    &idle_events);
+                apt_bool_t reusable = idle_status == APR_SUCCESS ||
+                    funasr_status_retryable(idle_status);
 
-            open_status = transport->io_vtable->open(
-                transport->io_obj,
-                transport->host,
-                transport->config.port,
-                transport->config.connect_timeout_us);
-            if (open_status != APR_SUCCESS) {
-                terminal_failure = FUNASR_FAILURE_CONNECT;
-                generation_failed = TRUE;
-            } else if (!funasr_worker_handshake(
-                           transport,
-                           generation,
-                           &decoder,
-                           &sticky_event,
-                           &sticky_ready)) {
-                apt_bool_t cancel;
-                apt_bool_t close;
-                apt_bool_t media_failed;
-                funasr_transport_failure_e media_failure;
-
-                funasr_transport_generation_state(
-                    transport,
-                    generation,
-                    &cancel,
-                    &close,
-                    &media_failed,
-                    &media_failure);
-                if (cancel) {
-                    generation_drained = TRUE;
-                } else if (!close) {
-                    terminal_failure = media_failed ?
-                        media_failure : FUNASR_FAILURE_HANDSHAKE;
-                    generation_failed = TRUE;
+                if ((idle_events & FUNASR_IO_READABLE) != 0) {
+                    reusable = FALSE;
                 }
+                if (!reusable) {
+                    transport->io_vtable->close(transport->io_obj);
+                    connected = FALSE;
+                    tx_size = 0;
+                    tx_offset = 0;
+                    pong_size = 0;
+                    pong_pending = FALSE;
+                }
+            }
+            if (!connected) {
+                funasr_ws_decoder_init(
+                    &decoder,
+                    frame_storage,
+                    FUNASR_WS_FRAME_LIMIT + FUNASR_WS_FRAME_OVERHEAD,
+                    message_storage,
+                    FUNASR_WS_MESSAGE_LIMIT,
+                    FUNASR_WS_FRAME_LIMIT,
+                    FUNASR_WS_MESSAGE_LIMIT);
+                funasr_ws_decoder_reject_masked(&decoder, TRUE);
+                open_status = transport->io_vtable->open(
+                    transport->io_obj,
+                    transport->host,
+                    transport->config.port,
+                    transport->config.connect_timeout_us);
+                if (open_status != APR_SUCCESS) {
+                    terminal_failure = FUNASR_FAILURE_CONNECT;
+                    generation_failed = TRUE;
+                } else {
+                    opened_this_generation = TRUE;
+                    if (!funasr_worker_handshake(
+                            transport,
+                            generation,
+                            &decoder,
+                            &sticky_event,
+                            &sticky_ready)) {
+                        apt_bool_t cancel;
+                        apt_bool_t close;
+                        apt_bool_t media_failed;
+                        funasr_transport_failure_e media_failure;
+
+                        funasr_transport_generation_state(
+                            transport,
+                            generation,
+                            &cancel,
+                            &close,
+                            &media_failed,
+                            &media_failure);
+                        if (cancel) {
+                            generation_drained = TRUE;
+                        } else if (!close) {
+                            terminal_failure = media_failed ?
+                                media_failure : FUNASR_FAILURE_HANDSHAKE;
+                            generation_failed = TRUE;
+                        }
+                    } else {
+                        connected = TRUE;
+                    }
+                }
+            } else {
+                funasr_ws_decoder_init(
+                    &decoder,
+                    frame_storage,
+                    FUNASR_WS_FRAME_LIMIT + FUNASR_WS_FRAME_OVERHEAD,
+                    message_storage,
+                    FUNASR_WS_MESSAGE_LIMIT,
+                    FUNASR_WS_FRAME_LIMIT,
+                    FUNASR_WS_MESSAGE_LIMIT);
+                funasr_ws_decoder_reject_masked(&decoder, TRUE);
             }
             if (!generation_failed && sticky_ready &&
                 !funasr_worker_handle_ws_event(
@@ -2138,6 +2191,12 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                         generation_failed = TRUE;
                         break;
                     }
+                    if (poll_status != APR_SUCCESS &&
+                        !funasr_status_retryable(poll_status)) {
+                        transport->io_vtable->close(transport->io_obj);
+                        connected = FALSE;
+                        opened_this_generation = FALSE;
+                    }
                     if (!had_pending && tx_size != tx_offset) {
                         tx_audio = FALSE;
                         tx_audio_bytes = 0;
@@ -2168,7 +2227,18 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                     break;
                 }
             }
-            transport->io_vtable->close(transport->io_obj);
+            if (connected &&
+                (decoder.frame_storage_size != 0 ||
+                 decoder.fragment_active)) {
+                transport->io_vtable->close(transport->io_obj);
+                connected = FALSE;
+                opened_this_generation = FALSE;
+            }
+            if (generation_failed ||
+                (opened_this_generation && !connected)) {
+                transport->io_vtable->close(transport->io_obj);
+                connected = FALSE;
+            }
             {
                 apt_bool_t cancel;
                 apt_bool_t close;
@@ -2232,7 +2302,9 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
         }
     }
 
-    transport->io_vtable->close(transport->io_obj);
+    if (connected) {
+        transport->io_vtable->close(transport->io_obj);
+    }
     funasr_emit_close_fence(transport);
     apr_thread_mutex_lock(transport->mutex);
     transport->worker_closed = TRUE;
