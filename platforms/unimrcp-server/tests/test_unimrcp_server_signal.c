@@ -30,6 +30,11 @@ static int wait_for_child(pid_t pid, int *status)
 			return 1;
 		}
 		if(result < 0) {
+			if(errno == EINTR) {
+				continue;
+			}
+			kill(pid, SIGKILL);
+			waitpid(pid, status, 0);
 			return 0;
 		}
 		usleep(10000);
