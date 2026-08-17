@@ -439,8 +439,9 @@ static apt_bool_t mrcp_server_session_offer_process(mrcp_server_session_t *sessi
 			session->base.name,
 			session,5,session->base.pool);
 	}
-	apt_log(APT_LOG_MARK,APT_PRIO_INFO,"Receive Offer " APT_NAMESID_FMT" [c:%d a:%d v:%d]",
-		MRCP_SESSION_NAMESID(session),
+	apt_log(APT_LOG_MARK,APT_PRIO_INFO,"Receive Offer %s sessionid=" APT_SID_FMT " [c:%d a:%d v:%d]",
+		session->base.name,
+		MRCP_SESSION_SID(&session->base),
 		descriptor->control_media_arr->nelts,
 		descriptor->audio_media_arr->nelts,
 		descriptor->video_media_arr->nelts);
