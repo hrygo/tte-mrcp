@@ -233,6 +233,8 @@ struct tts_websocket_channel_t {
 	int      pcm_accum_len;
 	/** TTS 服务返回音频采样率（8000 或 24000），默认 24000 保持旧行为 */
 	unsigned int input_sample_rate;
+	/** 本流是否已对缺失 sample_rate 字段做过兜底告警（避免逐句刷屏） */
+	apt_bool_t input_sample_rate_warned;
 
 	/* ========== 录音保存相关字段 ========== */
 	/** 录音输出文件（最终8kHz μ-law格式，即MRCP客户端收到的格式） */
@@ -773,11 +775,22 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 					/* 保存到 channel，供 PCM 处理路径决定是否需要重采样 */
 					if(sample_rate == 8000 || sample_rate == 24000) {
 						synth_channel->input_sample_rate = (unsigned int)sample_rate;
+						synth_channel->input_sample_rate_warned = TRUE;
 					}
 					else {
 						LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
 							"[WS] Unsupported sample rate %d, keeping previous %u",
 							sample_rate, synth_channel->input_sample_rate);
+					}
+				}
+				else {
+					/* 服务端未下发 sample_rate：按当前兜底值处理，首次提醒，
+					 * 避免服务端切换到 8kHz 后因字段缺失被静默 3:1 错转。 */
+					if(!synth_channel->input_sample_rate_warned) {
+						LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+							"[WS] sample_rate missing in audio.start, using %u Hz fallback",
+							synth_channel->input_sample_rate);
+						synth_channel->input_sample_rate_warned = TRUE;
 					}
 				}
 			}
@@ -878,7 +891,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 						if(gap > synth_channel->stream_max_inter_arrival_us) {
 							synth_channel->stream_max_inter_arrival_us = gap;
 						}
-						/* 超过50ms间隔打WARNING（24kHz PCM，正常每帧约20-40ms音频） */
+						/* 超过50ms间隔打WARNING（正常每帧约20-40ms音频） */
 						if(gap > 50000) {
 							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[TIMING] Audio frame gap > 50ms: gap=%"APR_TIME_T_FMT"us (%.1fms), frame=%u",
 								gap, gap / 1000.0, synth_channel->stream_audio_frame_count);
@@ -1229,6 +1242,7 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 	synth_channel->pcm_accum_len = 0;
 	/* 采样率默认 24kHz（旧服务）；audio.start 中的 sample_rate 会覆盖 */
 	synth_channel->input_sample_rate = 24000;
+	synth_channel->input_sample_rate_warned = FALSE;
 
 	/* 分配环形缓冲区（512KB，高并发下TTS服务响应可能变慢，需要更大缓冲防止句子间underrun） */
 	synth_channel->stream_buffer_size = 512 * 1024;
