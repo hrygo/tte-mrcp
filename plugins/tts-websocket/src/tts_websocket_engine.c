@@ -683,7 +683,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 
 		if(is_text_frame) {
 			/* JSON 文本消息 */
-			LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Received JSON message (len=%d): %.*s%s", (int)len,
+			LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Received JSON message (len=%d): %.*s%s", (int)len,
 				(int)len > 200 ? 200 : (int)len, buffer, (int)len > 200 ? "..." : "");
 
 			/* 解析消息类型 - 支持带空格和不带空格的格式 */
@@ -3440,7 +3440,7 @@ static void hex_dump(const char *label, const char *data, apr_size_t len)
 	int hex_pos = 0;
 	int ascii_pos = 0;
 
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_INFO,"zyTTS: Hex dump [%s] (%"APR_SIZE_T_FMT" bytes):", label, len);
+	apt_log(SYNTH_LOG_MARK,APT_PRIO_DEBUG,"zyTTS: Hex dump [%s] (%"APR_SIZE_T_FMT" bytes):", label, len);
 
 	for(i = 0; i < len; i++) {
 		/* 十六进制部分 */
@@ -3459,7 +3459,7 @@ static void hex_dump(const char *label, const char *data, apr_size_t len)
 			while((i + 1) % 16 != 0 && hex_pos < sizeof(hex_buf)) {
 				hex_pos += snprintf(hex_buf + hex_pos, sizeof(hex_buf) - hex_pos, "   ");
 			}
-			apt_log(SYNTH_LOG_MARK,APT_PRIO_INFO,"zyTTS:   %s  |  %s", hex_buf, ascii_buf);
+			apt_log(SYNTH_LOG_MARK,APT_PRIO_DEBUG,"zyTTS:   %s  |  %s", hex_buf, ascii_buf);
 			hex_pos = 0;
 			ascii_pos = 0;
 		}
