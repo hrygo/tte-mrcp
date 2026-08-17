@@ -231,11 +231,13 @@ struct tts_websocket_channel_t {
 	char     pcm_accum[6];  /* 6字节防御性预留：PCM帧恒为偶数，process_len%6∈{0,2,4} */
 	/** 累积缓冲区中的字节数 (0-5) */
 	int      pcm_accum_len;
+	/** TTS 服务返回音频采样率（8000 或 24000），默认 24000 保持旧行为 */
+	unsigned int input_sample_rate;
 
 	/* ========== 录音保存相关字段 ========== */
 	/** 录音输出文件（最终8kHz μ-law格式，即MRCP客户端收到的格式） */
 	FILE    *record_file;
-	/** 录音输出文件（原始24kHz PCM格式，TTS服务端原始返回） */
+	/** 录音输出文件（原始 PCM 格式，TTS 服务端原始返回，8k 或 24k） */
 	FILE    *record_file_orig;
 
 };
@@ -257,9 +259,7 @@ static apt_bool_t tts_websocket_msg_signal(tts_websocket_msg_type_e type, mrcp_e
 static apt_bool_t tts_websocket_msg_process(apt_task_t *task, apt_task_msg_t *msg);
 static void hex_dump(const char *label, const char *data, apr_size_t len);
 static char* gbk_to_utf8(const char *gbk_str, apr_size_t gbk_len, apr_size_t *utf8_len, apr_pool_t *pool);
-static char* resample_pcm_to_8k(const char *input_pcm, apr_size_t input_size, apr_size_t *output_size, apr_pool_t *pool);
 static char* resample_ulaw_to_8k(const char *input_ulaw, apr_size_t input_size, apr_size_t *output_size, apr_pool_t *pool);
-static char* convert_16bit_to_ulaw(const char *input_pcm, apr_size_t input_size, apr_size_t *output_size, apr_pool_t *pool);
 
 /* ========== 流式TTS处理函数声明 ========== */
 static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void *data);
@@ -707,7 +707,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 				 * 句子间flush的残留数据已在环形缓冲中，新句子音频到来后可直接播放，
 				 * 每句重新预缓冲反而导致每句开头大量静音帧（压测silence_frame_count普遍40） */
 				/* 丢弃上一句末尾不足3采样(6字节)的残留PCM字节。
-				 * 残留量最多4字节 = 2个16-bit采样 = 0.083ms@24kHz，完全不可闻。
+				 * 残留量最多4字节 = 2个16-bit采样 = 0.083ms@24kHz / 0.25ms@8kHz，完全不可闻。
 				 * 零填充flush会引入波形跳变 → 句子间爆音，直接丢弃远优于补零。 */
 				if(synth_channel->pcm_accum_len > 0) {
 					LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Discarding %d residual accum bytes at audio.start (inaudible)",
@@ -770,6 +770,15 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 					while(*p == ' ' || *p == ':' || *p == '"' || *p == '\'') p++;
 					int sample_rate = atoi(p);
 					LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Sample rate: %d Hz", sample_rate);
+					/* 保存到 channel，供 PCM 处理路径决定是否需要重采样 */
+					if(sample_rate == 8000 || sample_rate == 24000) {
+						synth_channel->input_sample_rate = (unsigned int)sample_rate;
+					}
+					else {
+						LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+							"[WS] Unsupported sample rate %d, keeping previous %u",
+							sample_rate, synth_channel->input_sample_rate);
+					}
 				}
 			}
 			else if(strcmp(msg_type, "audio.done") == 0) {
@@ -890,17 +899,20 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 					continue;
 				}
 
-				/* 保存原始TTS服务端返回的24kHz PCM（在重采样和格式转换之前） */
+				/* 保存原始TTS服务端返回的 PCM（重采样/格式转换之前，8k 或 24k） */
 				tts_websocket_recording_write_orig(synth_channel, buffer, (apr_size_t)len);
 
-				/* 服务端返回的是 24kHz 16-bit little-endian PCM
+				/* 服务端返回 16-bit little-endian PCM
 				 * ("response_format":"pcm" 在标准x86服务器上即为LE)
 				 * 不再使用启发式字节序检测（该检测在LSB接近0时会误判为big-endian导致偶发噪声）
-				 * 直接按 little-endian 处理 */
+				 * 直接按 little-endian 处理。
+				 * 采样率由 audio.start 的 sample_rate 字段决定：
+				 * 8kHz 直通，24kHz 走 3:1 降采样（旧服务）。 */
 
-				/* 重采样：24kHz -> 8kHz。网络块可在任意字节处分割，
-				 * accumulate 会把未达到 6 字节（3 个 16-bit 采样）的尾部
-				 * 保留到下一块，保证输入字节流不丢失、不重排。 */
+				/* 网络块可在任意字节处分割，accumulate 会把未达到对齐
+				 * 字节数的尾部保留到下一块，保证输入字节流不丢失、不重排。
+				 * 统一按 6 字节对齐（3 个 16-bit 采样）：8kHz 直通时
+				 * 6 字节块是合法偶数长度，可直接编码。 */
 				{
 					apr_size_t combined_capacity = (apr_size_t)synth_channel->pcm_accum_len + (apr_size_t)len;
 					char *combined = apr_palloc(frame_pool, combined_capacity > 0 ? combined_capacity : 1);
@@ -921,25 +933,29 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 						(unsigned char *)combined, combined_capacity, 6);
 					synth_channel->pcm_accum_len = (int)carry_len;
 
-					/* 处理对齐部分 */
+					/* 处理对齐部分：8kHz 输入跳过重采样，直接编码 μ-law；
+					 * 24kHz 输入先做 3:1 移动平均降采样再编码。两种路径的
+					 * 输出都是 8kHz PCMU，MRCP 客户端收到的 RTP 始终为 8kHz。 */
 					if(aligned_len >= 6) {
-						apr_size_t resampled_size = 0;
-						char *resampled_data = resample_pcm_to_8k(combined, aligned_len, &resampled_size, frame_pool);
-						if(!resampled_data) {
-							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Resampling failed, dropping frame");
-							continue;
-						}
-						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Resampled: %"APR_SIZE_T_FMT" bytes -> %"APR_SIZE_T_FMT" bytes (accum=%d)",
-							aligned_len, resampled_size, synth_channel->pcm_accum_len);
-
-						/* 2. 格式转换：16-bit PCM -> 8-bit μ-law (PCMU) */
+						/* 输出上限为 aligned_len/2 字节（8k 直通），此容量恒足够 */
 						apr_size_t ulaw_size = 0;
-						char *ulaw_data = convert_16bit_to_ulaw(resampled_data, resampled_size, &ulaw_size, frame_pool);
+						char *ulaw_data = apr_palloc(frame_pool, aligned_len);
 						if(!ulaw_data) {
-							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] μ-law conversion failed, dropping frame");
+							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Failed to allocate μ-law buffer, dropping frame");
 							continue;
 						}
-						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Converted to μ-law: %d bytes", (int)ulaw_size);
+						ulaw_size = tts_websocket_pcm_to_ulaw(
+							(const unsigned char*)combined, aligned_len,
+							synth_channel->input_sample_rate,
+							(unsigned char*)ulaw_data, aligned_len);
+						if(ulaw_size == 0) {
+							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+								"[WS] PCM→μ-law conversion failed (input_rate=%u, aligned_len=%"APR_SIZE_T_FMT"), dropping frame",
+								synth_channel->input_sample_rate, aligned_len);
+							continue;
+						}
+						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Encoded to μ-law: %"APR_SIZE_T_FMT" bytes (input_rate=%u, accum=%d)",
+							ulaw_size, synth_channel->input_sample_rate, synth_channel->pcm_accum_len);
 
 						/* 8k 录音已移至 MPF 发帧点（tts_websocket_stream_read_safe），
 						 * 录制内容与客户端实际收到的 RTP 载荷流一致，
@@ -964,6 +980,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 	}
 
 	/* 丢弃session末尾不足3采样(6字节)的残留PCM字节（最多4字节=0.083ms），
+	 * 8kHz 输入下为 0.25ms，同样不可闻。
 	 * 直接丢弃避免补零flush造成的波形跳变/爆音。 */
 	if(session_done_received && synth_channel->pcm_accum_len > 0) {
 		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Discarding %d residual accum bytes at session.done (inaudible)",
@@ -1057,7 +1074,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 		LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Socket already closed by cleanup, skipping");
 	}
 
-	/* 本线程仍是 24k 原始录音（record_file_orig）的唯一 writer，退出前 flush/close。
+	/* 本线程仍是原始录音（record_file_orig）的唯一 writer，退出前 flush/close。
 	 * 8k 最终录音（record_file）的 writer 已改为 MPF 发帧线程（read_safe），
 	 * 必须保持打开直至 post-roll 结束、SPEAK-COMPLETE 发出，
 	 * 由 read_safe 在播放完成时关闭；异常/停止路径由 cleanup_audio 幂等关闭。
@@ -1210,6 +1227,8 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 	synth_channel->stream_completion_cause = SYNTHESIZER_COMPLETION_CAUSE_NORMAL;
 	/* 重置PCM累积缓冲区 */
 	synth_channel->pcm_accum_len = 0;
+	/* 采样率默认 24kHz（旧服务）；audio.start 中的 sample_rate 会覆盖 */
+	synth_channel->input_sample_rate = 24000;
 
 	/* 分配环形缓冲区（512KB，高并发下TTS服务响应可能变慢，需要更大缓冲防止句子间underrun） */
 	synth_channel->stream_buffer_size = 512 * 1024;
@@ -1700,7 +1719,7 @@ static mrcp_engine_channel_t* tts_websocket_engine_channel_create(mrcp_engine_t 
  *   1. 受 engine->recording_enabled 开关控制，关闭时不创建文件
  *   2. 同时打开两个文件：
  *      - record_file:     最终输出（8kHz μ-law），MRCP 客户端收到的格式
- *      - record_file_orig: 原始返回（24kHz PCM），TTS 服务端原始返回
+ *      - record_file_orig: 原始返回（PCM，8k 或 24k），TTS 服务端原始返回
  *   3. 文件名格式: tts-{fmt}-{session_id}-{timestamp}.{ext}
  *   4. 使用 sync 模式确保数据完整写入磁盘
  */
@@ -1754,8 +1773,8 @@ static apt_bool_t tts_websocket_recording_open(tts_websocket_channel_t *synth_ch
 		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[RECORD] Failed to compose final audio file path");
 	}
 
-	/* --- 打开原始输出文件（24kHz PCM） --- */
-	file_name_orig = apr_psprintf(pool, "tts-orig-24kHz-%s-%"APR_TIME_T_FMT".pcm",
+	/* --- 打开原始输出文件（PCM，8k 或 24k） --- */
+	file_name_orig = apr_psprintf(pool, "tts-orig-raw-%s-%"APR_TIME_T_FMT".pcm",
 		session_id ? session_id : "unknown", now);
 	file_path_orig = apt_vardir_filepath_get(dir_layout, file_name_orig, pool);
 	if (file_path_orig) {
@@ -1800,7 +1819,7 @@ static void tts_websocket_recording_write_final(tts_websocket_channel_t *synth_c
 }
 
 /**
- * @brief 写入原始音频数据（24kHz PCM，TTS 服务端原始返回）
+ * @brief 写入原始音频数据（PCM，TTS 服务端原始返回，8k 或 24k）
  * @param synth_channel TTS WebSocket 合成通道对象
  * @param data 音频数据指针
  * @param size 数据大小（字节数）
@@ -2003,175 +2022,6 @@ static apt_bool_t tts_websocket_channel_close(mrcp_engine_channel_t *channel)
 static apt_bool_t tts_websocket_channel_request_process(mrcp_engine_channel_t *channel, mrcp_message_t *request)
 {
 	return tts_websocket_msg_signal(TTS_WEBSOCKET_MSG_REQUEST_PROCESS,channel,request);
-}
-
-/* ---------- audio resample function ---------- */
-/**
- * @brief 将24kHz PCM音频降采样到8kHz（带抗混叠滤波）
- * @param input_pcm 输入PCM数据（16位单声道）
- * @param input_size 输入数据大小（字节数）
- * @param output_size 输出参数，返回输出数据大小
- * @param pool APR内存池
- * @return 返回重采样后的PCM数据，失败返回NULL
- * 说明：
- *   1. 输入为24kHz采样率（TTS服务返回）
- *   2. 使用3:1降采样，先进行移动平均滤波再抽取
- *   3. 输出为8kHz采样率，16位单声道PCM
- * @deprecated 流式场景请使用 resample_pcm_to_8k_stateful 避免帧边界爆音
- */
-static char* resample_pcm_to_8k(const char *input_pcm, apr_size_t input_size, apr_size_t *output_size, apr_pool_t *pool)
-{
-	/* 降采样比例 = 24000 / 8000 = 3 */
-	const int decimation_factor = 3;
-	apr_size_t input_samples = input_size / 2;  /* 16位采样，2字节/采样 */
-	apr_size_t output_samples = input_samples / decimation_factor;
-	apr_size_t output_bytes = output_samples * 2;
-	unsigned char *input_bytes = (unsigned char*)input_pcm;
-	short *output;
-	apr_size_t i;
-
-	if(!input_pcm || input_size == 0 || !output_size || !pool) {
-		return NULL;
-	}
-
-	/* ========== 修复：防御性检查 — 输入大小必须是6字节（3个16-bit采样）的整数倍 ==========
-	 * 非对齐输入会导致末尾采样被整数除法静默丢弃。
-	 * 虽然调用方通过 pcm_accum 机制保证了 6 字节对齐，但此检查可防止
-	 * 未来代码变更引入非对齐调用导致的数据丢失。 */
-	if(input_size % 6 != 0) {
-		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING,
-			"zyTTS: resample_pcm_to_8k: input_size %"APR_SIZE_T_FMT" is not a multiple of 6, "
-			"last %"APR_SIZE_T_FMT" bytes will be dropped",
-			input_size, input_size % 6);
-	}
-
-	output = apr_palloc(pool, output_bytes);
-	if(!output) {
-		apt_log(SYNTH_LOG_MARK,APT_PRIO_WARNING,"zyTTS: Failed to allocate memory for resampled audio");
-		return NULL;
-	}
-
-	/* 调试：打印原始前几个字节 */
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_DEBUG,"zyTTS: Resample input: first 10 bytes = %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-		input_bytes[0], input_bytes[1], input_bytes[2], input_bytes[3], input_bytes[4],
-		input_bytes[5], input_bytes[6], input_bytes[7], input_bytes[8], input_bytes[9]);
-
-	/* 降采样：使用移动平均滤波来减少混叠失真
-	 * 每3个采样点取平均值，而不是简单抽取
-	 * 注意：TTS服务返回的音频通常是little-endian格式
-	 */
-	for(i = 0; i < output_samples; i++) {
-		int sum = 0;
-		/* 对每3个采样点求平均 */
-		apr_size_t j;
-		for(j = 0; j < decimation_factor; j++) {
-			/* 从little-endian字节序读取16位采样值 */
-			apr_size_t sample_idx = (i * decimation_factor + j) * 2;
-			short sample = (short)((input_bytes[sample_idx + 1] << 8) | input_bytes[sample_idx]);
-			sum += sample;
-		}
-		output[i] = (short)(sum / decimation_factor);
-	}
-
-	/* 调试：打印输出前几个采样值 */
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_DEBUG,"zyTTS: Resample output: first 5 samples = %d, %d, %d, %d, %d",
-		output[0], output[1], output[2], output[3], output[4]);
-
-	*output_size = output_bytes;
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_DEBUG,"zyTTS: Resampled audio: %d samples (%d bytes) -> %d samples (%d bytes)",
-		(int)input_samples, (int)input_size, (int)output_samples, (int)output_bytes);
-
-	return (char*)output;
-}
-
-/* ---------- audio bit depth conversion function (16-bit linear to 8-bit mu-law) ---------- */
-/**
- * @brief μ-law编码查找表 (ITU-T G.711标准)
- * 将14位有符号数 (-8159 到 8159) 转换为8位μ-law编码
- * @return 8位μ-law编码字节
- *
- * 使用标准ITU-T G.711 μ-law编码算法
- */
-static inline unsigned char linear_to_ulaw(short sample)
-{
-	int magnitude;
-	int exponent;
-	int mantissa;
-	int exponent_mask;
-	unsigned char ulaw_byte;
-
-	/* 处理符号和幅度，处理-32768边界情况 */
-	/* 注意：C标准规定带符号负数的右移是实现定义行为，改用比较判断避免移植风险 */
-	int sign = (sample < 0) ? 0x80 : 0;
-	if (sign) {
-		magnitude = (sample == -32768) ? 32767 : -sample;
-	} else {
-		magnitude = sample;
-	}
-
-	/* 添加偏移量 BIAS = 0x84 = 132 */
-	magnitude += 0x84;
-	/* 限制幅度在15位范围内 (0-32767)，防止溢出 */
-	if (magnitude > 32767) {
-		magnitude = 32767;
-	}
-
-	/* 计算指数 (3位) */
-	exponent = 7;
-	for(exponent_mask = 0x4000; !(magnitude & exponent_mask); exponent_mask >>= 1) {
-		exponent--;
-	}
-
-	/* 提取尾数 (4位) */
-	mantissa = (magnitude >> (exponent + 3)) & 0x0F;
-
-	/* 组合: S EEEE MMMM */
-	ulaw_byte = (unsigned char)(sign | (exponent << 4) | mantissa);
-
-	/* 按位取反 (μ-law特性) */
-	return ~ulaw_byte;
-}
-
-/**
- * @brief 将16位线性PCM音频批量转换为8位μ-law音频 (PCMU/G.711)
- * @param input_pcm 输入PCM数据（16位单声道线性）
- * @param input_size 输入数据大小（字节数）
- * @param output_size 输出参数，返回输出数据大小
- * @param pool APR内存池
- * @return 返回8位μ-law数据，失败返回NULL
- * 说明：
- *   1. 输入为16位有符号线性PCM（每个采样2字节）
- *   2. 输出为8位μ-law压缩编码（每个采样1字节）
- *   3. μ-law是ITU-T G.711标准，用于电话通信，PCMU格式
- */
-static char* convert_16bit_to_ulaw(const char *input_pcm, apr_size_t input_size, apr_size_t *output_size, apr_pool_t *pool)
-{
-	apr_size_t input_samples = input_size / 2;  /* 16位采样，2字节/采样 */
-	apr_size_t output_bytes = input_samples;    /* 8位μ-law采样，1字节/采样 */
-	short *input = (short*)input_pcm;
-	unsigned char *output;
-
-	if(!input_pcm || input_size == 0 || !output_size || !pool) {
-		return NULL;
-	}
-
-	output = apr_palloc(pool, output_bytes);
-	if(!output) {
-		apt_log(SYNTH_LOG_MARK,APT_PRIO_WARNING,"zyTTS: Failed to allocate memory for μ-law audio");
-		return NULL;
-	}
-
-	/* 批量转换: 16-bit linear -> 8-bit μ-law */
-	apr_size_t i;
-	for(i = 0; i < input_samples; i++) {
-		output[i] = linear_to_ulaw(input[i]);
-	}
-
-	*output_size = output_bytes;
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_DEBUG,"zyTTS: μ-law conversion: %d samples (%d bytes 16bit linear) -> %d samples (%d bytes 8bit μ-law/PCMU)",
-		(int)input_samples, (int)input_size, (int)input_samples, (int)output_bytes);
-
-	return (char*)output;
 }
 
 /* ---------- audio resample function for 8-bit μ-law ---------- */
