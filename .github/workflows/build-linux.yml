@@ -34,9 +34,49 @@ jobs:
           fi
           printf 'artifact_suffix=%s\n' "$suffix" >> "$GITHUB_OUTPUT"
 
+  prune-artifacts:
+    name: Prune stale artifacts
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Delete artifacts from prior runs
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          current_run="$GITHUB_RUN_ID"
+          # Keep artifacts that belong to the current run or to any run that is
+          # still in progress so concurrent workflows keep their inputs; delete
+          # everything else to stay under the Actions artifact storage quota.
+          keep_runs="$(gh api "repos/$repo/actions/runs?status=in_progress&per_page=100" \
+            --jq '.workflow_runs[].id')"
+          keep_set="$(printf '%s\n%s\n' "$current_run" "$keep_runs" \
+            | sort -n | uniq | tr '\n' ' ')"
+          deleted=0
+          while IFS=$'\t' read -r artifact_id run_id name; do
+            case " $keep_set " in
+              *" $run_id "*) ;;
+              *)
+                echo "Deleting artifact $artifact_id ($name) from run $run_id"
+                gh api -X DELETE "repos/$repo/actions/artifacts/$artifact_id" \
+                  >/dev/null || true
+                deleted=$((deleted + 1))
+                ;;
+            esac
+          done < <(
+            gh api --paginate "repos/$repo/actions/artifacts?per_page=100" \
+              | jq -sr '[.[].artifacts[]] | map(select(.name | startswith("tte-mrcp-"))) | .[] | "\(.id)\t\(.workflow_run.id)\t\(.name)"'
+          )
+          echo "Deleted $deleted stale artifact(s)"
+
   build-linux:
     name: ${{ matrix.target }}
-    needs: artifact_naming
+    needs: [artifact_naming, prune-artifacts]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -332,6 +372,7 @@ jobs:
             ${{ matrix.zip_name }}.sha256
             ${{ matrix.zip_name }}.metadata
           if-no-files-found: error
+          retention-days: 1
 
   # Runtime verification of the packaged tree in a Linux container:
   # plugin load, RTP/MRCP link smoke and the 20-session ASR WebSocket loopback
@@ -900,6 +941,7 @@ jobs:
             rapid_stop_results/
             websocket-e2e-results/
           if-no-files-found: ignore
+          retention-days: 1
 
   release:
     name: Publish GitHub Release
