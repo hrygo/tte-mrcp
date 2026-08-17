@@ -397,12 +397,12 @@ git diff --stat origin/main...HEAD
 ## 执行记录
 
 - RED：服务端信号测试在 helper 未实现时因 `unimrcp_server_signals_init` 未定义而链接失败。
-- GREEN：断连基线子进程由 SIGPIPE 终止；初始化防护后的子进程存活并收到 EPIPE。独立测试和 CTest 均通过，并增加 5 秒子进程超时保护。
+- GREEN：断连基线子进程由 SIGPIPE 终止；初始化防护后的原生写入与 APR `apr_socket_send()` 均连续两次收到 EPIPE。独立测试 3/3 和 CTest 均通过，并增加子进程及 CTest 双层超时保护。
 - CMake/CTest：服务端信号测试和六组 TTS 测试共 7/7 通过；HTTP parser 保持 13/13。
 - 完整 macOS CMake 服务端目标构建通过；存在 AGENTS.md 已记录的 `JB_TRACE/RTP_TRACE` 参数警告以及其他上游编译警告，本变更未修改对应公共库。
 - Autotools：`bootstrap` 与 `configure --help` 通过；隔离构建中的 signal test 可编译并通过。仅执行子目录 `make check` 时，应用目标因上游 `libunimrcpserver.la` 尚未构建而停止，因此改为直接构建并运行该测试目标。
 - Windows：helper 的 `_WIN32` no-op 分支通过本机交叉预处理编译，VS 新旧工程 XML 解析通过；未在真实 Windows/MSBuild 环境验证。
 - Linux：源码路径和 POSIX 行为已覆盖，但未在 RHEL/Linux 目标环境运行，状态为未验证。
 - 图谱：moderate 模式重新索引成功，5926 个节点、35251 条边；确认 `main` 和测试调用 `unimrcp_server_signals_init`，`websocket_send_all` 继续调用 APR 发送路径。
-- 安全检查：未安装自定义 signal handler，未在信号上下文记录日志，未增加无限重试或外部监听；敏感正文和逐帧日志从 INFO 降为 DEBUG。
+- 安全检查：未安装自定义 signal handler，未在信号上下文记录日志，未增加无限重试或外部监听；包括 JSON 响应片段、MRCP request body hex dump 在内的敏感正文和逐帧日志均从 INFO 降为 DEBUG。
 - 范围检查：未修改共享 consumer、MRCP session/channel 状态机或 APR/MPF/MRCP 公共 API。
