@@ -131,13 +131,16 @@ int main(int argc, char **argv)
 		"[WS] Sentence text:",
 		"[WS] Sent session.config:",
 		"[WS] Request body:",
-		"[WS] Original text:"
+		"[WS] Original text:",
+		"[WS] Received JSON message",
+		"zyTTS: Hex dump [",
+		"zyTTS:   %s  |  %s"
 	};
 	apr_pool_t *pool = NULL;
 	char *source;
 	size_t i;
 	int passed = 0;
-	int expected = argc == 2 ? 9 : 1;
+	int expected = argc == 2 ? 12 : 1;
 
 	if(argc > 2) {
 		fprintf(stderr, "usage: %s [tts_websocket_engine.c]\n", argv[0]);
