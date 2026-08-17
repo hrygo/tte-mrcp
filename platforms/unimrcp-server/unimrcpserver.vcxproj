@@ -111,9 +111,13 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\main.c" />
+    <ClCompile Include="src\unimrcp_server_signal.c" />
     <ClCompile Include="src\uni_cmdline.c" />
     <ClCompile Include="src\uni_daemon.c" />
     <ClCompile Include="src\uni_service.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\unimrcp_server_signal.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="unimrcpserver.rc">

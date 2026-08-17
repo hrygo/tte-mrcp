@@ -53,6 +53,29 @@ static int test_local_port_is_logged_after_connect(const char *source)
 	return local_addr_call && local_port_log && local_addr_call < local_port_log;
 }
 
+static int log_statement_uses_priority(
+	const char *source, const char *message, const char *priority)
+{
+	const char *hit = strstr(source, message);
+	const char *line;
+	const char *line_end;
+	const char *priority_hit;
+
+	if(!hit) {
+		return 0;
+	}
+	line = hit;
+	while(line > source && line[-1] != '\n') {
+		--line;
+	}
+	line_end = strchr(hit, '\n');
+	if(!line_end) {
+		line_end = hit + strlen(hit);
+	}
+	priority_hit = strstr(line, priority);
+	return priority_hit && priority_hit < hit && priority_hit < line_end;
+}
+
 static int test_local_port_is_available_after_connect(apr_pool_t *pool)
 {
 	apr_socket_t *server = NULL;
@@ -102,9 +125,22 @@ cleanup:
 
 int main(int argc, char **argv)
 {
+	static const char *debug_messages[] = {
+		"[WS] websocket_recv_message returned",
+		"[TIMING] Audio frame #",
+		"[WS] Sentence text:",
+		"[WS] Sent session.config:",
+		"[WS] Request body:",
+		"[WS] Original text:",
+		"[WS] Received JSON message",
+		"zyTTS: Hex dump [",
+		"zyTTS:   %s  |  %s"
+	};
 	apr_pool_t *pool = NULL;
 	char *source;
+	size_t i;
 	int passed = 0;
+	int expected = argc == 2 ? 12 : 1;
 
 	if(argc > 2) {
 		fprintf(stderr, "usage: %s [tts_websocket_engine.c]\n", argv[0]);
@@ -137,11 +173,30 @@ int main(int argc, char **argv)
 			apr_terminate();
 			return 1;
 		}
-		free(source);
 		passed++;
+		for(i = 0; i < sizeof(debug_messages) / sizeof(debug_messages[0]); ++i) {
+			if(!log_statement_uses_priority(source, debug_messages[i], "APT_PRIO_DEBUG")) {
+				fprintf(stderr, "%s must use DEBUG priority\n", debug_messages[i]);
+				free(source);
+				apr_pool_destroy(pool);
+				apr_terminate();
+				return 1;
+			}
+			passed++;
+		}
+		if(!log_statement_uses_priority(
+				source, "[TIMING] ========== Session Summary ==========", "APT_PRIO_INFO")) {
+			fprintf(stderr, "session summary must remain at INFO priority\n");
+			free(source);
+			apr_pool_destroy(pool);
+			apr_terminate();
+			return 1;
+		}
+		passed++;
+		free(source);
 	}
 	apr_pool_destroy(pool);
 	apr_terminate();
-	printf("%d/%d connection log tests passed\n", passed, argc == 2 ? 2 : 1);
+	printf("%d/%d connection log tests passed\n", passed, expected);
 	return 0;
 }

@@ -280,6 +280,10 @@
 				>
 			</File>
 			<File
+				RelativePath=".\src\unimrcp_server_signal.c"
+				>
+			</File>
+			<File
 				RelativePath=".\src\uni_cmdline.c"
 				>
 			</File>
@@ -297,6 +301,10 @@
 			Filter="h;hpp;hxx;hm;inl;inc;xsd"
 			UniqueIdentifier="{93995380-89BD-4b04-88EB-625FBE52EBFB}"
 			>
+			<File
+				RelativePath=".\src\unimrcp_server_signal.h"
+				>
+			</File>
 		</Filter>
 		<File
 			RelativePath=".\unimrcpserver.rc"

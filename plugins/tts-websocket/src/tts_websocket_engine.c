@@ -651,7 +651,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 
 		LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Calling websocket_recv_message...");
 		len = websocket_recv_message(synth_channel->stream_ws, buffer, 2097152, &is_text_frame);
-		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] websocket_recv_message returned: len=%d, is_text_frame=%d", (int)len, is_text_frame);
+		LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] websocket_recv_message returned: len=%d, is_text_frame=%d", (int)len, is_text_frame);
 
 		if(len < 0) {
 			/* 连接关闭或出错 */
@@ -683,7 +683,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 
 		if(is_text_frame) {
 			/* JSON 文本消息 */
-			LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Received JSON message (len=%d): %.*s%s", (int)len,
+			LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Received JSON message (len=%d): %.*s%s", (int)len,
 				(int)len > 200 ? 200 : (int)len, buffer, (int)len > 200 ? "..." : "");
 
 			/* 解析消息类型 - 支持带空格和不带空格的格式 */
@@ -739,7 +739,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 						char *end = strchr(start, '"');
 						if(end) {
 							*end = '\0'; /* 临时终止以记录 */
-							LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Sentence text: %s", start);
+							LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Sentence text: %s", start);
 							*end = '"'; /* 恢复 */
 						}
 					}
@@ -874,7 +874,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[TIMING] Audio frame gap > 50ms: gap=%"APR_TIME_T_FMT"us (%.1fms), frame=%u",
 								gap, gap / 1000.0, synth_channel->stream_audio_frame_count);
 						} else {
-							LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[TIMING] Audio frame #%u: %"APR_SIZE_T_FMT" bytes, gap=%"APR_TIME_T_FMT"us (%.1fms)",
+							LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[TIMING] Audio frame #%u: %"APR_SIZE_T_FMT" bytes, gap=%"APR_TIME_T_FMT"us (%.1fms)",
 								synth_channel->stream_audio_frame_count, len, gap, gap / 1000.0);
 						}
 					}
@@ -1356,15 +1356,15 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 		apr_socket_close(sock);
 		return FALSE;
 	}
-	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Sent session.config: %s", json_body);
+	LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Sent session.config: %s", json_body);
 
 	/* 发送 input.text 消息（包含完整文本） */
 	json_body = apr_psprintf(pool, "{\"type\":\"input.text\",\"text\":\"%s\"}", escaped_text);
 	/* 打印WebSocket请求参数信息 */
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] ========== Sending input.text to TTS Server ==========");
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Server: %s:%d", tts_engine->tts_server_host, tts_engine->tts_server_port);
-	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Request body: %s", json_body);
-	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Original text: %s", text);
+	LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Request body: %s", json_body);
+	LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Original text: %s", text);
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Text length: %zu", strlen(text));
 	if(!json_body || !websocket_send_text(sock, json_body, strlen(json_body), pool)) {
 		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Failed to send input.text");
@@ -3440,7 +3440,7 @@ static void hex_dump(const char *label, const char *data, apr_size_t len)
 	int hex_pos = 0;
 	int ascii_pos = 0;
 
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_INFO,"zyTTS: Hex dump [%s] (%"APR_SIZE_T_FMT" bytes):", label, len);
+	apt_log(SYNTH_LOG_MARK,APT_PRIO_DEBUG,"zyTTS: Hex dump [%s] (%"APR_SIZE_T_FMT" bytes):", label, len);
 
 	for(i = 0; i < len; i++) {
 		/* 十六进制部分 */
@@ -3459,7 +3459,7 @@ static void hex_dump(const char *label, const char *data, apr_size_t len)
 			while((i + 1) % 16 != 0 && hex_pos < sizeof(hex_buf)) {
 				hex_pos += snprintf(hex_buf + hex_pos, sizeof(hex_buf) - hex_pos, "   ");
 			}
-			apt_log(SYNTH_LOG_MARK,APT_PRIO_INFO,"zyTTS:   %s  |  %s", hex_buf, ascii_buf);
+			apt_log(SYNTH_LOG_MARK,APT_PRIO_DEBUG,"zyTTS:   %s  |  %s", hex_buf, ascii_buf);
 			hex_pos = 0;
 			ascii_pos = 0;
 		}
