@@ -33,6 +33,7 @@ static int child_write_result(int initialize_signals)
 	pid = fork();
 	if(pid == 0) {
 		char byte = 'x';
+		alarm(5);
 		signal(SIGPIPE, SIG_DFL);
 		if(initialize_signals && unimrcp_server_signals_init() != 0) {
 			_exit(10);
