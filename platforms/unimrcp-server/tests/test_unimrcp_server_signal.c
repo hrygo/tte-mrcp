@@ -2,7 +2,7 @@
 
 #include "unimrcp_server_signal.h"
 
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN32)
 
 int main(void)
 {

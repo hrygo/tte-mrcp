@@ -21,6 +21,7 @@
 #include "apt_dir_layout.h"
 #include "apt_log.h"
 #include "uni_revision.h"
+#include "unimrcp_server_signal.h"
 
 typedef struct {
 	const char   *root_dir_path;
@@ -183,6 +184,11 @@ int main(int argc, const char * const *argv)
 	if(apr_initialize() != APR_SUCCESS) {
 		apr_terminate();
 		return 0;
+	}
+	if(unimrcp_server_signals_init() != 0) {
+		fprintf(stderr,"Failed to initialize server signal handling\n");
+		apr_terminate();
+		return 1;
 	}
 
 	/* create APR pool */
