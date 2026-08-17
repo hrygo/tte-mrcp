@@ -123,7 +123,8 @@ am_test_unimrcp_server_signal_OBJECTS = tests/test_unimrcp_server_signal-test_un
 	src/test_unimrcp_server_signal-unimrcp_server_signal.$(OBJEXT)
 test_unimrcp_server_signal_OBJECTS =  \
 	$(am_test_unimrcp_server_signal_OBJECTS)
-test_unimrcp_server_signal_LDADD = $(LDADD)
+am__DEPENDENCIES_1 =
+test_unimrcp_server_signal_DEPENDENCIES = $(am__DEPENDENCIES_1)
 AM_V_lt = $(am__v_lt_@AM_V@)
 am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
 am__v_lt_0 = --silent
@@ -572,7 +573,10 @@ test_unimrcp_server_signal_SOURCES = \
                          tests/test_unimrcp_server_signal.c \
                          src/unimrcp_server_signal.c
 
-test_unimrcp_server_signal_CPPFLAGS = -I$(top_srcdir)/platforms/unimrcp-server/src
+test_unimrcp_server_signal_CPPFLAGS = -I$(top_srcdir)/platforms/unimrcp-server/src \
+                         $(UNIMRCP_APR_INCLUDES)
+
+test_unimrcp_server_signal_LDADD = $(UNIMRCP_APR_LIBS)
 MAINTAINERCLEANFILES = Makefile.in
 
 # Includes

@@ -12,6 +12,8 @@ TESTS = $(check_PROGRAMS)
 test_unimrcp_server_signal_SOURCES = \
                          tests/test_unimrcp_server_signal.c \
                          src/unimrcp_server_signal.c
-test_unimrcp_server_signal_CPPFLAGS = -I$(top_srcdir)/platforms/unimrcp-server/src
+test_unimrcp_server_signal_CPPFLAGS = -I$(top_srcdir)/platforms/unimrcp-server/src \
+                         $(UNIMRCP_APR_INCLUDES)
+test_unimrcp_server_signal_LDADD = $(UNIMRCP_APR_LIBS)
 
 include $(top_srcdir)/build/rules/uniserverapp.am
