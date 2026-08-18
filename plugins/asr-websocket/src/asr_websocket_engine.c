@@ -643,18 +643,19 @@ static apt_bool_t funasr_control_send_close(void *obj)
 {
     funasr_channel_t *channel = obj;
     funasr_engine_t *engine = channel->engine;
-    apt_bool_t result = TRUE;
 
+    if (channel->close_response_pending) {
+        if (!mrcp_engine_channel_close_respond(channel->channel)) {
+            return FALSE;
+        }
+        channel->close_response_pending = FALSE;
+    }
     if (channel->registry_entry) {
         funasr_registry_remove(engine, channel->registry_entry);
     }
     channel->transport = NULL;
-    if (channel->close_response_pending) {
-        channel->close_response_pending = FALSE;
-        result = mrcp_engine_channel_close_respond(channel->channel);
-    }
     funasr_engine_maybe_close_respond(engine);
-    return result;
+    return TRUE;
 }
 
 static apt_bool_t funasr_control_cancel(
