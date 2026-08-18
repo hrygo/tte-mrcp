@@ -79,3 +79,59 @@ uint64_t tts_websocket_completion_timeout_ms(
 	timeout_ms = tts_websocket_completion_add_saturated(timeout_ms, grace_ms);
 	return timeout_ms < minimum_ms ? minimum_ms : timeout_ms;
 }
+
+void tts_websocket_watchdog_init(
+	tts_websocket_watchdog_t *watchdog,
+	uint64_t now_us,
+	uint64_t timeout_ms)
+{
+	uint64_t timeout_us;
+
+	if(!watchdog) {
+		return;
+	}
+	timeout_us = timeout_ms > UINT64_MAX / 1000
+		? UINT64_MAX : timeout_ms * 1000;
+	watchdog->deadline_us =
+		tts_websocket_completion_add_saturated(now_us, timeout_us);
+	watchdog->pause_started_us = 0;
+}
+
+int tts_websocket_watchdog_expired(
+	tts_websocket_watchdog_t *watchdog,
+	uint64_t now_us,
+	int paused)
+{
+	if(!watchdog) {
+		return 1;
+	}
+	if(paused) {
+		if(watchdog->pause_started_us == 0) {
+			watchdog->pause_started_us = now_us;
+		}
+		return 0;
+	}
+	if(watchdog->pause_started_us != 0) {
+		uint64_t paused_us = now_us >= watchdog->pause_started_us
+			? now_us - watchdog->pause_started_us : 0;
+		watchdog->deadline_us = tts_websocket_completion_add_saturated(
+			watchdog->deadline_us, paused_us);
+		watchdog->pause_started_us = 0;
+	}
+	return now_us >= watchdog->deadline_us;
+}
+
+int tts_websocket_watchdog_should_claim(
+	tts_websocket_watchdog_t *watchdog,
+	const tts_websocket_completion_t *completion,
+	uint64_t generation,
+	uint64_t now_us,
+	int paused,
+	int stop_requested)
+{
+	if(!completion || stop_requested || !completion->active ||
+	   completion->generation != generation) {
+		return 0;
+	}
+	return tts_websocket_watchdog_expired(watchdog, now_us, paused);
+}

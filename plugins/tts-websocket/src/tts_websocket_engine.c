@@ -641,7 +641,8 @@ static void tts_websocket_completion_watchdog_wait(
 	apr_size_t remaining_bytes = 0;
 	uint64_t generation;
 	uint64_t timeout_ms;
-	apr_time_t deadline;
+	tts_websocket_watchdog_t watchdog;
+	apt_bool_t expired = FALSE;
 	mrcp_message_t *request = NULL;
 
 	if(!synth_channel->completion_mutex || !synth_channel->completion_cond) {
@@ -659,7 +660,8 @@ static void tts_websocket_completion_watchdog_wait(
 		(uint64_t)synth_channel->tts_engine->completion_postroll_ms,
 		TTS_WEBSOCKET_COMPLETION_GRACE_MS,
 		TTS_WEBSOCKET_COMPLETION_MINIMUM_MS);
-	deadline = apr_time_now() + (apr_interval_time_t)(timeout_ms * 1000);
+	tts_websocket_watchdog_init(
+		&watchdog, (uint64_t)apr_time_now(), timeout_ms);
 
 	apr_thread_mutex_lock(synth_channel->completion_mutex);
 	generation = synth_channel->speak_generation;
@@ -671,18 +673,32 @@ static void tts_websocket_completion_watchdog_wait(
 	while(synth_channel->completion.active &&
 	      synth_channel->completion.generation == generation &&
 	      !synth_channel->stream_stop_requested) {
-		apr_time_t now = apr_time_now();
-		if(now >= deadline) {
+		uint64_t now_us = (uint64_t)apr_time_now();
+		expired = tts_websocket_watchdog_should_claim(
+			&watchdog, &synth_channel->completion, generation, now_us,
+			synth_channel->paused ? 1 : 0,
+			synth_channel->stream_stop_requested ? 1 : 0);
+		if(expired) {
 			break;
 		}
-		apr_thread_cond_timedwait(
-			synth_channel->completion_cond,
-			synth_channel->completion_mutex,
-			deadline - now);
+		if(synth_channel->paused) {
+			apr_thread_cond_wait(
+				synth_channel->completion_cond,
+				synth_channel->completion_mutex);
+		} else {
+			uint64_t wait_us = watchdog.deadline_us - now_us;
+			if(wait_us > (uint64_t)INT64_MAX) {
+				wait_us = (uint64_t)INT64_MAX;
+			}
+			apr_thread_cond_timedwait(
+				synth_channel->completion_cond,
+				synth_channel->completion_mutex,
+				(apr_interval_time_t)wait_us);
+		}
 	}
 	if(synth_channel->completion.active &&
 	   synth_channel->completion.generation == generation &&
-	   !synth_channel->stream_stop_requested && apr_time_now() >= deadline) {
+	   !synth_channel->stream_stop_requested && expired) {
 		request = tts_websocket_completion_claim_request_locked(
 			synth_channel, generation,
 			TTS_WEBSOCKET_COMPLETION_OWNER_WATCHDOG);
@@ -2553,7 +2569,10 @@ static apt_bool_t tts_websocket_channel_stop(mrcp_engine_channel_t *channel, mrc
 static apt_bool_t tts_websocket_channel_pause(mrcp_engine_channel_t *channel, mrcp_message_t *request, mrcp_message_t *response)
 {
 	tts_websocket_channel_t *synth_channel = channel->method_obj;
+	apr_thread_mutex_lock(synth_channel->completion_mutex);
 	synth_channel->paused = TRUE;
+	apr_thread_cond_broadcast(synth_channel->completion_cond);
+	apr_thread_mutex_unlock(synth_channel->completion_mutex);
 	/* send asynchronous response */
 	mrcp_engine_channel_message_send(channel,response);
 	return TRUE;
@@ -2572,7 +2591,10 @@ static apt_bool_t tts_websocket_channel_pause(mrcp_engine_channel_t *channel, mr
 static apt_bool_t tts_websocket_channel_resume(mrcp_engine_channel_t *channel, mrcp_message_t *request, mrcp_message_t *response)
 {
 	tts_websocket_channel_t *synth_channel = channel->method_obj;
+	apr_thread_mutex_lock(synth_channel->completion_mutex);
 	synth_channel->paused = FALSE;
+	apr_thread_cond_broadcast(synth_channel->completion_cond);
+	apr_thread_mutex_unlock(synth_channel->completion_mutex);
 	/* send asynchronous response */
 	mrcp_engine_channel_message_send(channel,response);
 	return TRUE;
