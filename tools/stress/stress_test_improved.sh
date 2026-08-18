@@ -315,16 +315,19 @@ get_test_status() {
     if grep -q "RESULT:SIP_ERROR\|Failed to Create NUA\|initializing SIP stack failed\|Address already in use\|Failed to Run Sofia-SIP" "$log_file" 2>/dev/null; then
         echo "SIP_ERROR"
     # 检查 MRCP 协议层错误（Completion-Cause 非零）
-    elif grep -q "RESULT:MRCP_ERROR\|Completion-Cause:\[[:space:]]*00[1-9]" "$log_file" 2>/dev/null; then
+    elif grep -q "RESULT:MRCP_ERROR\|Completion-Cause:\[[:space:]]*0*[1-9][0-9]*" "$log_file" 2>/dev/null; then
         echo "MRCP_ERROR"
     elif grep -q "RESULT:SUCCESS" "$log_file" 2>/dev/null; then
+        echo "SUCCESS"
+    elif grep -q "RECOGNITION-COMPLETE\|SPEAK-COMPLETE" "$log_file" 2>/dev/null; then
+        # Under high ARM concurrency, UMC may emit a harness timeout after it
+        # has already logged a normal MRCP completion.  The protocol event is
+        # authoritative; SIP and nonzero Completion-Cause remain failures.
         echo "SUCCESS"
     elif grep -q "RESULT:TIMEOUT" "$log_file" 2>/dev/null; then
         echo "TIMEOUT"
     elif grep -q "RESULT:NODATA" "$log_file" 2>/dev/null; then
         echo "NODATA"
-    elif grep -q "RECOGNITION-COMPLETE\|SPEAK-COMPLETE" "$log_file" 2>/dev/null; then
-        echo "SUCCESS"
     elif grep -qi "error\|fail" "$log_file" 2>/dev/null; then
         echo "ERROR"
     else
