@@ -36,6 +36,16 @@ static int test_missing_or_non_numeric_sample_rate_fails(void)
             string_value, sizeof(string_value) - 1, "sample_rate", &value);
 }
 
+static int test_overflowing_sample_rate_fails_without_writing_value(void)
+{
+    const char json[] = "{\"sample_rate\":4294967296}";
+    unsigned int value = 8000;
+
+    return !tts_websocket_json_get_uint(
+               json, sizeof(json) - 1, "sample_rate", &value) &&
+        value == 8000;
+}
+
 int main(void)
 {
     if (!test_top_level_sample_rate_ignores_sentence_text()) {
@@ -50,6 +60,10 @@ int main(void)
         fprintf(stderr, "test_missing_or_non_numeric_sample_rate_fails failed\n");
         return 1;
     }
-    puts("3/3 JSON parser tests passed");
+    if (!test_overflowing_sample_rate_fails_without_writing_value()) {
+        fprintf(stderr, "test_overflowing_sample_rate_fails_without_writing_value failed\n");
+        return 1;
+    }
+    puts("4/4 JSON parser tests passed");
     return 0;
 }
