@@ -239,9 +239,18 @@ static void funasr_close_fence_retain(void *obj, funasr_transport_event_t *event
     (void)obj;
     apt_log(APT_LOG_MARK, APT_PRIO_ERROR, "asr_websocket: retaining registry after unjoined close fence transport=%lu", (unsigned long)event->transport_id);
 }
+static void *funasr_close_fence_retry_allocate(
+    void *obj,
+    apr_pool_t *pool,
+    apr_size_t size)
+{
+    (void)obj;
+    return apr_pcalloc(pool, size);
+}
 static const funasr_close_fence_retry_vtable_t funasr_close_fence_retry_vtable = {
     funasr_close_fence_requeue, funasr_close_fence_release, funasr_close_fence_joined,
-    funasr_close_fence_fallback, funasr_close_fence_retain
+    funasr_close_fence_fallback, funasr_close_fence_retain,
+    funasr_close_fence_retry_allocate
 };
 
 static apt_bool_t funasr_transport_event_sink(

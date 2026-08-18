@@ -15,7 +15,9 @@ typedef struct retry_test_t {
     int releases;
     int fallbacks;
     int retains;
+    int allocations;
     apt_bool_t joined;
+    apt_bool_t reject_allocation;
     apt_bool_t reject_requeue;
     funasr_transport_event_t *event;
 } retry_test_t;
@@ -48,7 +50,15 @@ static void release(void *obj, funasr_transport_event_t *event) { ((retry_test_t
 static apt_bool_t joined(void *obj, funasr_transport_event_t *event) { (void)event; return ((retry_test_t *)obj)->joined; }
 static void fallback(void *obj, funasr_transport_event_t *event) { (void)event; ((retry_test_t *)obj)->fallbacks++; }
 static void retain(void *obj, funasr_transport_event_t *event) { (void)event; ((retry_test_t *)obj)->retains++; }
-static const funasr_close_fence_retry_vtable_t vtable = { requeue, release, joined, fallback, retain };
+static void *allocate(void *obj, apr_pool_t *pool, apr_size_t size)
+{
+    retry_test_t *state = obj;
+    state->allocations++;
+    return state->reject_allocation ? NULL : apr_pcalloc(pool, size);
+}
+static const funasr_close_fence_retry_vtable_t vtable = {
+    requeue, release, joined, fallback, retain, allocate
+};
 
 static funasr_transport_event_t *event_create(void)
 {
@@ -116,9 +126,23 @@ static void test_three_failures_unjoined(void)
     CHECK("third terminal", !funasr_close_fence_retry_attempt(state.consumer,state.pool,event,&vtable,&state));
     CHECK("unjoined retained", state.fallbacks == 0 && state.retains == 1 && state.releases == 1); teardown(&state);
 }
+static void test_allocation_failure_joined(void)
+{
+    retry_test_t state; funasr_transport_event_t *event;
+    setup(&state); state.joined = TRUE; state.reject_allocation = TRUE; event = event_create();
+    CHECK("allocation failure terminal", !funasr_close_fence_retry_attempt(state.consumer,state.pool,event,&vtable,&state));
+    CHECK("joined allocation failure consumed once", state.allocations == 1 && state.requeues == 0 && state.fallbacks == 1 && state.retains == 0 && state.releases == 1); teardown(&state);
+}
+static void test_allocation_failure_unjoined(void)
+{
+    retry_test_t state; funasr_transport_event_t *event;
+    setup(&state); state.reject_allocation = TRUE; event = event_create();
+    CHECK("allocation failure terminal", !funasr_close_fence_retry_attempt(state.consumer,state.pool,event,&vtable,&state));
+    CHECK("unjoined allocation failure retained once", state.allocations == 1 && state.requeues == 0 && state.fallbacks == 0 && state.retains == 1 && state.releases == 1); teardown(&state);
+}
 int main(void)
 {
-    apr_initialize(); test_transfer(); test_requeue_failure_once(); test_three_failures_joined(); test_three_failures_unjoined(); apr_terminate();
+    apr_initialize(); test_transfer(); test_requeue_failure_once(); test_three_failures_joined(); test_three_failures_unjoined(); test_allocation_failure_joined(); test_allocation_failure_unjoined(); apr_terminate();
     if (failures) { fprintf(stderr, "%d failures\n", failures); return 1; }
     printf("PASS test_funasr_close_fence_retry\n"); return 0;
 }
