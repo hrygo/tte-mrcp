@@ -721,7 +721,7 @@ tests/$(DEPDIR)/$(am__dirstamp):
 tests/test_tts_websocket_connection_log.$(OBJEXT):  \
 	tests/$(am__dirstamp) tests/$(DEPDIR)/$(am__dirstamp)
 
-test_tts_websocket_connection_log$(EXEEXT): $(test_tts_websocket_connection_log_OBJECTS) $(test_tts_websocket_connection_log_DEPENDENCIES) $(EXTRA_test_tts_websocket_connection_log_DEPENDENCIES) 
+test_tts_websocket_connection_log$(EXEEXT): $(test_tts_websocket_connection_log_OBJECTS) $(test_tts_websocket_connection_log_DEPENDENCIES) $(EXTRA_test_tts_websocket_connection_log_DEPENDENCIES)
 	@rm -f test_tts_websocket_connection_log$(EXEEXT)
 	$(AM_V_CCLD)$(LINK) $(test_tts_websocket_connection_log_OBJECTS) $(test_tts_websocket_connection_log_LDADD) $(LIBS)
 tests/test_tts_websocket_json-test_tts_websocket_json.$(OBJEXT):  \
@@ -729,7 +729,7 @@ tests/test_tts_websocket_json-test_tts_websocket_json.$(OBJEXT):  \
 src/test_tts_websocket_json-tts_websocket_json.$(OBJEXT):  \
 	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
 
-test_tts_websocket_json$(EXEEXT): $(test_tts_websocket_json_OBJECTS) $(test_tts_websocket_json_DEPENDENCIES) $(EXTRA_test_tts_websocket_json_DEPENDENCIES) 
+test_tts_websocket_json$(EXEEXT): $(test_tts_websocket_json_OBJECTS) $(test_tts_websocket_json_DEPENDENCIES) $(EXTRA_test_tts_websocket_json_DEPENDENCIES)
 	@rm -f test_tts_websocket_json$(EXEEXT)
 	$(AM_V_CCLD)$(test_tts_websocket_json_LINK) $(test_tts_websocket_json_OBJECTS) $(test_tts_websocket_json_LDADD) $(LIBS)
 tests/test_tts_websocket_pcm-test_tts_websocket_pcm.$(OBJEXT):  \
@@ -737,7 +737,7 @@ tests/test_tts_websocket_pcm-test_tts_websocket_pcm.$(OBJEXT):  \
 src/test_tts_websocket_pcm-tts_websocket_pcm.$(OBJEXT):  \
 	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
 
-test_tts_websocket_pcm$(EXEEXT): $(test_tts_websocket_pcm_OBJECTS) $(test_tts_websocket_pcm_DEPENDENCIES) $(EXTRA_test_tts_websocket_pcm_DEPENDENCIES) 
+test_tts_websocket_pcm$(EXEEXT): $(test_tts_websocket_pcm_OBJECTS) $(test_tts_websocket_pcm_DEPENDENCIES) $(EXTRA_test_tts_websocket_pcm_DEPENDENCIES)
 	@rm -f test_tts_websocket_pcm$(EXEEXT)
 	$(AM_V_CCLD)$(test_tts_websocket_pcm_LINK) $(test_tts_websocket_pcm_OBJECTS) $(test_tts_websocket_pcm_LDADD) $(LIBS)
 
