@@ -57,6 +57,22 @@ static int test_mismatched_nested_container_fails_without_writing_value(void)
         value == 24000;
 }
 
+static int test_malformed_nested_value_fails_without_writing_value(void)
+{
+    const char trailing_token[] =
+        "{\"meta\":{\"x\":0 garbage},\"sample_rate\":8000}";
+    const char missing_comma[] =
+        "{\"meta\":{\"x\":0 \"y\":1},\"sample_rate\":8000}";
+    unsigned int value = 24000;
+
+    if (tts_websocket_json_get_uint(trailing_token, sizeof(trailing_token) - 1,
+            "sample_rate", &value) || value != 24000) {
+        return 0;
+    }
+    return !tts_websocket_json_get_uint(missing_comma, sizeof(missing_comma) - 1,
+        "sample_rate", &value) && value == 24000;
+}
+
 int main(void)
 {
     if (!test_top_level_sample_rate_ignores_sentence_text()) {
@@ -79,6 +95,10 @@ int main(void)
         fprintf(stderr, "test_mismatched_nested_container_fails_without_writing_value failed\n");
         return 1;
     }
-    puts("5/5 JSON parser tests passed");
+    if (!test_malformed_nested_value_fails_without_writing_value()) {
+        fprintf(stderr, "test_malformed_nested_value_fails_without_writing_value failed\n");
+        return 1;
+    }
+    puts("6/6 JSON parser tests passed");
     return 0;
 }
