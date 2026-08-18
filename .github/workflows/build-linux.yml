@@ -300,7 +300,8 @@ jobs:
               --target test_resample test_json_unescape \
                      test_funasr_ws_transport test_funasr_control \
                      test_tts_websocket_http_parse \
-                     test_tts_websocket_pcm test_tts_websocket_lifecycle \
+                     test_tts_websocket_pcm test_tts_websocket_json \
+                     test_tts_websocket_lifecycle \
                      test_tts_websocket_ws test_tts_websocket_thread \
                      test_tts_websocket_connection_log \
               -j"$(getconf _NPROCESSORS_ONLN)" \

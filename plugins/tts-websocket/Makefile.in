@@ -90,7 +90,9 @@ PRE_UNINSTALL = :
 POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
-check_PROGRAMS = test_tts_websocket_connection_log$(EXEEXT)
+check_PROGRAMS = test_tts_websocket_connection_log$(EXEEXT) \
+	test_tts_websocket_json$(EXEEXT) \
+	test_tts_websocket_pcm$(EXEEXT)
 subdir = plugins/tts-websocket
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/build/acmacros/opencore_amr.m4 \
@@ -145,7 +147,7 @@ LTLIBRARIES = $(plugin_LTLIBRARIES)
 tts_websocket_la_LIBADD =
 am__dirstamp = $(am__leading_dot)dirstamp
 am_tts_websocket_la_OBJECTS = src/tts_websocket_engine.lo \
-	src/tts_websocket_completion.lo src/tts_websocket_pcm.lo \
+	src/tts_websocket_completion.lo src/tts_websocket_json.lo src/tts_websocket_pcm.lo \
 	src/tts_websocket_lifecycle.lo src/tts_websocket_thread.lo \
 	src/tts_websocket_ws.lo
 tts_websocket_la_OBJECTS = $(am_tts_websocket_la_OBJECTS)
@@ -164,6 +166,24 @@ test_tts_websocket_connection_log_OBJECTS =  \
 am__DEPENDENCIES_1 =
 test_tts_websocket_connection_log_DEPENDENCIES =  \
 	$(am__DEPENDENCIES_1)
+am_test_tts_websocket_json_OBJECTS = tests/test_tts_websocket_json-test_tts_websocket_json.$(OBJEXT) \
+	src/test_tts_websocket_json-tts_websocket_json.$(OBJEXT)
+test_tts_websocket_json_OBJECTS =  \
+	$(am_test_tts_websocket_json_OBJECTS)
+test_tts_websocket_json_LDADD = $(LDADD)
+test_tts_websocket_json_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC \
+	$(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=link $(CCLD) \
+	$(test_tts_websocket_json_CFLAGS) $(CFLAGS) $(AM_LDFLAGS) \
+	$(LDFLAGS) -o $@
+am_test_tts_websocket_pcm_OBJECTS =  \
+	tests/test_tts_websocket_pcm-test_tts_websocket_pcm.$(OBJEXT) \
+	src/test_tts_websocket_pcm-tts_websocket_pcm.$(OBJEXT)
+test_tts_websocket_pcm_OBJECTS = $(am_test_tts_websocket_pcm_OBJECTS)
+test_tts_websocket_pcm_LDADD = $(LDADD)
+test_tts_websocket_pcm_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC \
+	$(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=link $(CCLD) \
+	$(test_tts_websocket_pcm_CFLAGS) $(CFLAGS) $(AM_LDFLAGS) \
+	$(LDFLAGS) -o $@
 AM_V_P = $(am__v_P_@AM_V@)
 am__v_P_ = $(am__v_P_@AM_DEFAULT_V@)
 am__v_P_0 = false
@@ -179,13 +199,19 @@ am__v_at_1 =
 DEFAULT_INCLUDES = 
 depcomp = $(SHELL) $(top_srcdir)/build/depcomp
 am__maybe_remake_depfiles = depfiles
-am__depfiles_remade = src/$(DEPDIR)/tts_websocket_completion.Plo \
+
+am__depfiles_remade =  src/$(DEPDIR)/tts_websocket_completion.Plo \
+	src/$(DEPDIR)/test_tts_websocket_json-tts_websocket_json.Po \
+	src/$(DEPDIR)/test_tts_websocket_pcm-tts_websocket_pcm.Po \
 	src/$(DEPDIR)/tts_websocket_engine.Plo \
+	src/$(DEPDIR)/tts_websocket_json.Plo \
 	src/$(DEPDIR)/tts_websocket_lifecycle.Plo \
 	src/$(DEPDIR)/tts_websocket_pcm.Plo \
 	src/$(DEPDIR)/tts_websocket_thread.Plo \
 	src/$(DEPDIR)/tts_websocket_ws.Plo \
-	tests/$(DEPDIR)/test_tts_websocket_connection_log.Po
+	tests/$(DEPDIR)/test_tts_websocket_connection_log.Po \
+	tests/$(DEPDIR)/test_tts_websocket_json-test_tts_websocket_json.Po \
+	tests/$(DEPDIR)/test_tts_websocket_pcm-test_tts_websocket_pcm.Po
 am__mv = mv -f
 COMPILE = $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) \
 	$(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
@@ -206,9 +232,13 @@ am__v_CCLD_ = $(am__v_CCLD_@AM_DEFAULT_V@)
 am__v_CCLD_0 = @echo "  CCLD    " $@;
 am__v_CCLD_1 = 
 SOURCES = $(tts_websocket_la_SOURCES) \
-	$(test_tts_websocket_connection_log_SOURCES)
+	$(test_tts_websocket_connection_log_SOURCES) \
+	$(test_tts_websocket_json_SOURCES) \
+	$(test_tts_websocket_pcm_SOURCES)
 DIST_SOURCES = $(tts_websocket_la_SOURCES) \
-	$(test_tts_websocket_connection_log_SOURCES)
+	$(test_tts_websocket_connection_log_SOURCES) \
+	$(test_tts_websocket_json_SOURCES) \
+	$(test_tts_websocket_pcm_SOURCES)
 am__can_run_installinfo = \
   case $$AM_UPDATE_INFO_DIR in \
     n|no|NO) false;; \
@@ -565,11 +595,17 @@ top_srcdir = @top_srcdir@
 vardir = @vardir@
 AM_CPPFLAGS = $(UNIMRCP_PLUGIN_INCLUDES) -I$(srcdir)/src
 plugin_LTLIBRARIES = tts_websocket.la
-tts_websocket_la_SOURCES = src/tts_websocket_engine.c src/tts_websocket_completion.c src/tts_websocket_completion.h src/tts_websocket_pcm.c src/tts_websocket_lifecycle.c src/tts_websocket_thread.c src/tts_websocket_ws.c
+tts_websocket_la_SOURCES = src/tts_websocket_engine.c src/tts_websocket_completion.c src/tts_websocket_completion.h src/tts_websocket_json.c src/tts_websocket_pcm.c src/tts_websocket_lifecycle.c src/tts_websocket_thread.c src/tts_websocket_ws.c
 tts_websocket_la_LDFLAGS = $(UNIMRCP_PLUGIN_OPTS)
 TESTS = $(check_PROGRAMS)
 test_tts_websocket_connection_log_SOURCES = tests/test_tts_websocket_connection_log.c
 test_tts_websocket_connection_log_LDADD = $(UNIMRCP_APR_LIBS)
+test_tts_websocket_json_SOURCES = tests/test_tts_websocket_json.c src/tts_websocket_json.c
+test_tts_websocket_pcm_SOURCES = tests/test_tts_websocket_pcm.c src/tts_websocket_pcm.c
+# Target-specific flags force Automake to give unit-test objects distinct names
+# from the same sources compiled into the libtool plug-in.
+test_tts_websocket_json_CFLAGS = -DTEST_TTS_WEBSOCKET_JSON
+test_tts_websocket_pcm_CFLAGS = -DTEST_TTS_WEBSOCKET_PCM
 MAINTAINERCLEANFILES = Makefile.in
 
 # Includes
@@ -665,6 +701,7 @@ src/$(DEPDIR)/$(am__dirstamp):
 src/tts_websocket_engine.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
 src/tts_websocket_completion.lo: src/$(am__dirstamp) \
+src/tts_websocket_json.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
 src/tts_websocket_pcm.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
@@ -689,6 +726,22 @@ tests/test_tts_websocket_connection_log.$(OBJEXT):  \
 test_tts_websocket_connection_log$(EXEEXT): $(test_tts_websocket_connection_log_OBJECTS) $(test_tts_websocket_connection_log_DEPENDENCIES) $(EXTRA_test_tts_websocket_connection_log_DEPENDENCIES)
 	@rm -f test_tts_websocket_connection_log$(EXEEXT)
 	$(AM_V_CCLD)$(LINK) $(test_tts_websocket_connection_log_OBJECTS) $(test_tts_websocket_connection_log_LDADD) $(LIBS)
+tests/test_tts_websocket_json-test_tts_websocket_json.$(OBJEXT):  \
+	tests/$(am__dirstamp) tests/$(DEPDIR)/$(am__dirstamp)
+src/test_tts_websocket_json-tts_websocket_json.$(OBJEXT):  \
+	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+
+test_tts_websocket_json$(EXEEXT): $(test_tts_websocket_json_OBJECTS) $(test_tts_websocket_json_DEPENDENCIES) $(EXTRA_test_tts_websocket_json_DEPENDENCIES)
+	@rm -f test_tts_websocket_json$(EXEEXT)
+	$(AM_V_CCLD)$(test_tts_websocket_json_LINK) $(test_tts_websocket_json_OBJECTS) $(test_tts_websocket_json_LDADD) $(LIBS)
+tests/test_tts_websocket_pcm-test_tts_websocket_pcm.$(OBJEXT):  \
+	tests/$(am__dirstamp) tests/$(DEPDIR)/$(am__dirstamp)
+src/test_tts_websocket_pcm-tts_websocket_pcm.$(OBJEXT):  \
+	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+
+test_tts_websocket_pcm$(EXEEXT): $(test_tts_websocket_pcm_OBJECTS) $(test_tts_websocket_pcm_DEPENDENCIES) $(EXTRA_test_tts_websocket_pcm_DEPENDENCIES)
+	@rm -f test_tts_websocket_pcm$(EXEEXT)
+	$(AM_V_CCLD)$(test_tts_websocket_pcm_LINK) $(test_tts_websocket_pcm_OBJECTS) $(test_tts_websocket_pcm_LDADD) $(LIBS)
 
 mostlyclean-compile:
 	-rm -f *.$(OBJEXT)
@@ -700,12 +753,17 @@ distclean-compile:
 	-rm -f *.tab.c
 
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_completion.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_tts_websocket_json-tts_websocket_json.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_tts_websocket_pcm-tts_websocket_pcm.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_engine.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_json.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_lifecycle.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_pcm.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_thread.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_ws.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_tts_websocket_connection_log.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_tts_websocket_json-test_tts_websocket_json.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_tts_websocket_pcm-test_tts_websocket_pcm.Po@am__quote@ # am--include-marker
 
 $(am__depfiles_remade):
 	@$(MKDIR_P) $(@D)
@@ -736,6 +794,62 @@ am--depfiles: $(am__depfiles_remade)
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LTCOMPILE) -c -o $@ $<
+
+tests/test_tts_websocket_json-test_tts_websocket_json.o: tests/test_tts_websocket_json.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(test_tts_websocket_json_CFLAGS) $(CFLAGS) -MT tests/test_tts_websocket_json-test_tts_websocket_json.o -MD -MP -MF tests/$(DEPDIR)/test_tts_websocket_json-test_tts_websocket_json.Tpo -c -o tests/test_tts_websocket_json-test_tts_websocket_json.o `test -f 'tests/test_tts_websocket_json.c' || echo '$(srcdir)/'`tests/test_tts_websocket_json.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_tts_websocket_json-test_tts_websocket_json.Tpo tests/$(DEPDIR)/test_tts_websocket_json-test_tts_websocket_json.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_tts_websocket_json.c' object='tests/test_tts_websocket_json-test_tts_websocket_json.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(test_tts_websocket_json_CFLAGS) $(CFLAGS) -c -o tests/test_tts_websocket_json-test_tts_websocket_json.o `test -f 'tests/test_tts_websocket_json.c' || echo '$(srcdir)/'`tests/test_tts_websocket_json.c
+
+tests/test_tts_websocket_json-test_tts_websocket_json.obj: tests/test_tts_websocket_json.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(test_tts_websocket_json_CFLAGS) $(CFLAGS) -MT tests/test_tts_websocket_json-test_tts_websocket_json.obj -MD -MP -MF tests/$(DEPDIR)/test_tts_websocket_json-test_tts_websocket_json.Tpo -c -o tests/test_tts_websocket_json-test_tts_websocket_json.obj `if test -f 'tests/test_tts_websocket_json.c'; then $(CYGPATH_W) 'tests/test_tts_websocket_json.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_tts_websocket_json.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_tts_websocket_json-test_tts_websocket_json.Tpo tests/$(DEPDIR)/test_tts_websocket_json-test_tts_websocket_json.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_tts_websocket_json.c' object='tests/test_tts_websocket_json-test_tts_websocket_json.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(test_tts_websocket_json_CFLAGS) $(CFLAGS) -c -o tests/test_tts_websocket_json-test_tts_websocket_json.obj `if test -f 'tests/test_tts_websocket_json.c'; then $(CYGPATH_W) 'tests/test_tts_websocket_json.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_tts_websocket_json.c'; fi`
+
+src/test_tts_websocket_json-tts_websocket_json.o: src/tts_websocket_json.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(test_tts_websocket_json_CFLAGS) $(CFLAGS) -MT src/test_tts_websocket_json-tts_websocket_json.o -MD -MP -MF src/$(DEPDIR)/test_tts_websocket_json-tts_websocket_json.Tpo -c -o src/test_tts_websocket_json-tts_websocket_json.o `test -f 'src/tts_websocket_json.c' || echo '$(srcdir)/'`src/tts_websocket_json.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_tts_websocket_json-tts_websocket_json.Tpo src/$(DEPDIR)/test_tts_websocket_json-tts_websocket_json.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_json.c' object='src/test_tts_websocket_json-tts_websocket_json.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(test_tts_websocket_json_CFLAGS) $(CFLAGS) -c -o src/test_tts_websocket_json-tts_websocket_json.o `test -f 'src/tts_websocket_json.c' || echo '$(srcdir)/'`src/tts_websocket_json.c
+
+src/test_tts_websocket_json-tts_websocket_json.obj: src/tts_websocket_json.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(test_tts_websocket_json_CFLAGS) $(CFLAGS) -MT src/test_tts_websocket_json-tts_websocket_json.obj -MD -MP -MF src/$(DEPDIR)/test_tts_websocket_json-tts_websocket_json.Tpo -c -o src/test_tts_websocket_json-tts_websocket_json.obj `if test -f 'src/tts_websocket_json.c'; then $(CYGPATH_W) 'src/tts_websocket_json.c'; else $(CYGPATH_W) '$(srcdir)/src/tts_websocket_json.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_tts_websocket_json-tts_websocket_json.Tpo src/$(DEPDIR)/test_tts_websocket_json-tts_websocket_json.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_json.c' object='src/test_tts_websocket_json-tts_websocket_json.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(test_tts_websocket_json_CFLAGS) $(CFLAGS) -c -o src/test_tts_websocket_json-tts_websocket_json.obj `if test -f 'src/tts_websocket_json.c'; then $(CYGPATH_W) 'src/tts_websocket_json.c'; else $(CYGPATH_W) '$(srcdir)/src/tts_websocket_json.c'; fi`
+
+tests/test_tts_websocket_pcm-test_tts_websocket_pcm.o: tests/test_tts_websocket_pcm.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(test_tts_websocket_pcm_CFLAGS) $(CFLAGS) -MT tests/test_tts_websocket_pcm-test_tts_websocket_pcm.o -MD -MP -MF tests/$(DEPDIR)/test_tts_websocket_pcm-test_tts_websocket_pcm.Tpo -c -o tests/test_tts_websocket_pcm-test_tts_websocket_pcm.o `test -f 'tests/test_tts_websocket_pcm.c' || echo '$(srcdir)/'`tests/test_tts_websocket_pcm.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_tts_websocket_pcm-test_tts_websocket_pcm.Tpo tests/$(DEPDIR)/test_tts_websocket_pcm-test_tts_websocket_pcm.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_tts_websocket_pcm.c' object='tests/test_tts_websocket_pcm-test_tts_websocket_pcm.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(test_tts_websocket_pcm_CFLAGS) $(CFLAGS) -c -o tests/test_tts_websocket_pcm-test_tts_websocket_pcm.o `test -f 'tests/test_tts_websocket_pcm.c' || echo '$(srcdir)/'`tests/test_tts_websocket_pcm.c
+
+tests/test_tts_websocket_pcm-test_tts_websocket_pcm.obj: tests/test_tts_websocket_pcm.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(test_tts_websocket_pcm_CFLAGS) $(CFLAGS) -MT tests/test_tts_websocket_pcm-test_tts_websocket_pcm.obj -MD -MP -MF tests/$(DEPDIR)/test_tts_websocket_pcm-test_tts_websocket_pcm.Tpo -c -o tests/test_tts_websocket_pcm-test_tts_websocket_pcm.obj `if test -f 'tests/test_tts_websocket_pcm.c'; then $(CYGPATH_W) 'tests/test_tts_websocket_pcm.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_tts_websocket_pcm.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_tts_websocket_pcm-test_tts_websocket_pcm.Tpo tests/$(DEPDIR)/test_tts_websocket_pcm-test_tts_websocket_pcm.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_tts_websocket_pcm.c' object='tests/test_tts_websocket_pcm-test_tts_websocket_pcm.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(test_tts_websocket_pcm_CFLAGS) $(CFLAGS) -c -o tests/test_tts_websocket_pcm-test_tts_websocket_pcm.obj `if test -f 'tests/test_tts_websocket_pcm.c'; then $(CYGPATH_W) 'tests/test_tts_websocket_pcm.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_tts_websocket_pcm.c'; fi`
+
+src/test_tts_websocket_pcm-tts_websocket_pcm.o: src/tts_websocket_pcm.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(test_tts_websocket_pcm_CFLAGS) $(CFLAGS) -MT src/test_tts_websocket_pcm-tts_websocket_pcm.o -MD -MP -MF src/$(DEPDIR)/test_tts_websocket_pcm-tts_websocket_pcm.Tpo -c -o src/test_tts_websocket_pcm-tts_websocket_pcm.o `test -f 'src/tts_websocket_pcm.c' || echo '$(srcdir)/'`src/tts_websocket_pcm.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_tts_websocket_pcm-tts_websocket_pcm.Tpo src/$(DEPDIR)/test_tts_websocket_pcm-tts_websocket_pcm.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_pcm.c' object='src/test_tts_websocket_pcm-tts_websocket_pcm.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(test_tts_websocket_pcm_CFLAGS) $(CFLAGS) -c -o src/test_tts_websocket_pcm-tts_websocket_pcm.o `test -f 'src/tts_websocket_pcm.c' || echo '$(srcdir)/'`src/tts_websocket_pcm.c
+
+src/test_tts_websocket_pcm-tts_websocket_pcm.obj: src/tts_websocket_pcm.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(test_tts_websocket_pcm_CFLAGS) $(CFLAGS) -MT src/test_tts_websocket_pcm-tts_websocket_pcm.obj -MD -MP -MF src/$(DEPDIR)/test_tts_websocket_pcm-tts_websocket_pcm.Tpo -c -o src/test_tts_websocket_pcm-tts_websocket_pcm.obj `if test -f 'src/tts_websocket_pcm.c'; then $(CYGPATH_W) 'src/tts_websocket_pcm.c'; else $(CYGPATH_W) '$(srcdir)/src/tts_websocket_pcm.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_tts_websocket_pcm-tts_websocket_pcm.Tpo src/$(DEPDIR)/test_tts_websocket_pcm-tts_websocket_pcm.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/tts_websocket_pcm.c' object='src/test_tts_websocket_pcm-tts_websocket_pcm.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(test_tts_websocket_pcm_CFLAGS) $(CFLAGS) -c -o src/test_tts_websocket_pcm-tts_websocket_pcm.obj `if test -f 'src/tts_websocket_pcm.c'; then $(CYGPATH_W) 'src/tts_websocket_pcm.c'; else $(CYGPATH_W) '$(srcdir)/src/tts_websocket_pcm.c'; fi`
 
 mostlyclean-libtool:
 	-rm -f *.lo
@@ -969,6 +1083,20 @@ test_tts_websocket_connection_log.log: test_tts_websocket_connection_log$(EXEEXT
 	--log-file $$b.log --trs-file $$b.trs \
 	$(am__common_driver_flags) $(AM_LOG_DRIVER_FLAGS) $(LOG_DRIVER_FLAGS) -- $(LOG_COMPILE) \
 	"$$tst" $(AM_TESTS_FD_REDIRECT)
+test_tts_websocket_json.log: test_tts_websocket_json$(EXEEXT)
+	@p='test_tts_websocket_json$(EXEEXT)'; \
+	b='test_tts_websocket_json'; \
+	$(am__check_pre) $(LOG_DRIVER) --test-name "$$f" \
+	--log-file $$b.log --trs-file $$b.trs \
+	$(am__common_driver_flags) $(AM_LOG_DRIVER_FLAGS) $(LOG_DRIVER_FLAGS) -- $(LOG_COMPILE) \
+	"$$tst" $(AM_TESTS_FD_REDIRECT)
+test_tts_websocket_pcm.log: test_tts_websocket_pcm$(EXEEXT)
+	@p='test_tts_websocket_pcm$(EXEEXT)'; \
+	b='test_tts_websocket_pcm'; \
+	$(am__check_pre) $(LOG_DRIVER) --test-name "$$f" \
+	--log-file $$b.log --trs-file $$b.trs \
+	$(am__common_driver_flags) $(AM_LOG_DRIVER_FLAGS) $(LOG_DRIVER_FLAGS) -- $(LOG_COMPILE) \
+	"$$tst" $(AM_TESTS_FD_REDIRECT)
 .test.log:
 	@p='$<'; \
 	$(am__set_b); \
@@ -1071,12 +1199,17 @@ clean-am: clean-checkPROGRAMS clean-generic clean-libtool \
 
 distclean: distclean-am
 	-rm -f src/$(DEPDIR)/tts_websocket_completion.Plo
+	-rm -f src/$(DEPDIR)/test_tts_websocket_json-tts_websocket_json.Po
+	-rm -f src/$(DEPDIR)/test_tts_websocket_pcm-tts_websocket_pcm.Po
 	-rm -f src/$(DEPDIR)/tts_websocket_engine.Plo
+	-rm -f src/$(DEPDIR)/tts_websocket_json.Plo
 	-rm -f src/$(DEPDIR)/tts_websocket_lifecycle.Plo
 	-rm -f src/$(DEPDIR)/tts_websocket_pcm.Plo
 	-rm -f src/$(DEPDIR)/tts_websocket_thread.Plo
 	-rm -f src/$(DEPDIR)/tts_websocket_ws.Plo
 	-rm -f tests/$(DEPDIR)/test_tts_websocket_connection_log.Po
+	-rm -f tests/$(DEPDIR)/test_tts_websocket_json-test_tts_websocket_json.Po
+	-rm -f tests/$(DEPDIR)/test_tts_websocket_pcm-test_tts_websocket_pcm.Po
 	-rm -f Makefile
 distclean-am: clean-am distclean-compile distclean-generic \
 	distclean-tags
@@ -1123,12 +1256,17 @@ installcheck-am:
 
 maintainer-clean: maintainer-clean-am
 	-rm -f src/$(DEPDIR)/tts_websocket_completion.Plo
+	-rm -f src/$(DEPDIR)/test_tts_websocket_json-tts_websocket_json.Po
+	-rm -f src/$(DEPDIR)/test_tts_websocket_pcm-tts_websocket_pcm.Po
 	-rm -f src/$(DEPDIR)/tts_websocket_engine.Plo
+	-rm -f src/$(DEPDIR)/tts_websocket_json.Plo
 	-rm -f src/$(DEPDIR)/tts_websocket_lifecycle.Plo
 	-rm -f src/$(DEPDIR)/tts_websocket_pcm.Plo
 	-rm -f src/$(DEPDIR)/tts_websocket_thread.Plo
 	-rm -f src/$(DEPDIR)/tts_websocket_ws.Plo
 	-rm -f tests/$(DEPDIR)/test_tts_websocket_connection_log.Po
+	-rm -f tests/$(DEPDIR)/test_tts_websocket_json-test_tts_websocket_json.Po
+	-rm -f tests/$(DEPDIR)/test_tts_websocket_pcm-test_tts_websocket_pcm.Po
 	-rm -f Makefile
 maintainer-clean-am: distclean-am maintainer-clean-generic
 

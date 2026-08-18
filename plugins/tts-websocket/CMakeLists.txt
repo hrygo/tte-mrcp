@@ -5,6 +5,7 @@ project (tts_websocket)
 set (TTS_WEBSOCKET_SOURCES
 	src/tts_websocket_engine.c
 	src/tts_websocket_completion.c
+	src/tts_websocket_json.c
 	src/tts_websocket_pcm.c
 	src/tts_websocket_lifecycle.c
 	src/tts_websocket_thread.c
@@ -72,6 +73,11 @@ if(BUILD_TTS_WEBSOCKET_TESTS)
 		src/tts_websocket_pcm.c)
 	set_target_properties(test_tts_websocket_pcm PROPERTIES FOLDER "tests")
 	add_test(NAME tts_websocket_pcm COMMAND test_tts_websocket_pcm)
+	add_executable(test_tts_websocket_json
+		tests/test_tts_websocket_json.c
+		src/tts_websocket_json.c)
+	set_target_properties(test_tts_websocket_json PROPERTIES FOLDER "tests")
+	add_test(NAME tts_websocket_json COMMAND test_tts_websocket_json)
 	add_executable(test_tts_websocket_lifecycle
 		tests/test_tts_websocket_lifecycle.c
 		src/tts_websocket_lifecycle.c)
