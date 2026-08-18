@@ -6,6 +6,7 @@ set (ASR_WEBSOCKET_SOURCES
 	src/asr_websocket_engine.c
 	src/funasr_audio.c
 	src/funasr_clock.c
+	src/funasr_close_fence_retry.c
 	src/funasr_control.c
 	src/funasr_json.c
 	src/funasr_ws_transport.c
@@ -114,6 +115,15 @@ if(BUILD_ASR_WEBSOCKET_TESTS)
 	target_include_directories(test_funasr_control PRIVATE ${ASR_WEBSOCKET_TEST_INCLUDE_DIRS})
 	set_target_properties(test_funasr_control PROPERTIES FOLDER "tests")
 	add_test(NAME asr_websocket_funasr_control COMMAND test_funasr_control)
+
+	add_executable(test_funasr_close_fence_retry
+		tests/test_funasr_close_fence_retry.c
+		src/funasr_close_fence_retry.c
+		$<TARGET_OBJECTS:aprtoolkit>)
+	target_include_directories(test_funasr_close_fence_retry PRIVATE ${ASR_WEBSOCKET_TEST_INCLUDE_DIRS})
+	target_link_libraries(test_funasr_close_fence_retry ${APU_LIBRARIES} ${APR_LIBRARIES})
+	set_target_properties(test_funasr_close_fence_retry PROPERTIES FOLDER "tests")
+	add_test(NAME asr_websocket_close_fence_retry COMMAND test_funasr_close_fence_retry)
 
 	add_test(NAME asr_websocket_frame_debug_logs
 		COMMAND ${CMAKE_COMMAND}

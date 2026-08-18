@@ -3,6 +3,7 @@
 #include "apt_log.h"
 #include "funasr_audio.h"
 #include "funasr_clock.h"
+#include "funasr_close_fence_retry.h"
 #include "funasr_control.h"
 #include "funasr_ws_transport.h"
 
@@ -16,15 +17,12 @@
 #define FUNASR_SERVER_PORT 8888
 #define FUNASR_SERVER_PATH "/ws/audio"
 #define FUNASR_RESAMPLE_WINDOW_MS 200U
-#define FUNASR_CLOSE_FENCE_RETRY_LIMIT 3U
-#define FUNASR_CLOSE_FENCE_RETRY_DELAY_MS 25U
 
 typedef struct funasr_engine_t funasr_engine_t;
 typedef struct funasr_channel_t funasr_channel_t;
 typedef struct funasr_registry_entry_t funasr_registry_entry_t;
 typedef struct funasr_event_bridge_t funasr_event_bridge_t;
 typedef struct funasr_msg_t funasr_msg_t;
-typedef struct funasr_close_fence_retry_t funasr_close_fence_retry_t;
 
 #define LOG_WITH_SID(channel, priority, format, ...) \
     apt_log(APT_LOG_MARK, priority, "asr_websocket: [session_id=%s] " format, \
@@ -80,11 +78,6 @@ struct funasr_channel_t {
 struct funasr_event_bridge_t {
     funasr_engine_t *engine;
     apt_task_msg_t *close_fence_msg;
-};
-
-struct funasr_close_fence_retry_t {
-    funasr_engine_t *engine;
-    funasr_transport_event_t *event;
 };
 
 struct funasr_msg_t {
@@ -184,10 +177,10 @@ static void funasr_close_fence_abort(
     funasr_channel_t *channel = entry->channel;
 
     if (!channel || !channel->control.worker_joined) {
-        LOG_WITH_SID(
-            channel,
+        apt_log(
+            APT_LOG_MARK,
             APT_PRIO_ERROR,
-            "refusing unsafe STOP close fence fallback before worker join");
+            "asr_websocket: refusing unsafe STOP close fence fallback before worker join");
         return;
     }
     LOG_WITH_SID(
@@ -219,62 +212,37 @@ static void funasr_close_fence_abort(
     funasr_engine_maybe_close_respond(engine);
 }
 
-static void funasr_close_fence_retry_on_timer(apt_timer_t *timer, void *obj)
+static apt_bool_t funasr_close_fence_requeue(void *obj, funasr_transport_event_t *event)
 {
-    funasr_close_fence_retry_t *retry = obj;
-    funasr_transport_event_t *event = retry->event;
-    funasr_registry_entry_t *entry;
-
-    (void)timer;
-    if (!event) {
-        return;
-    }
-    if (funasr_task_signal(
-            retry->engine,
-            FUNASR_MSG_TRANSPORT_EVENT,
-            NULL,
-            NULL,
-            event)) {
-        retry->event = NULL;
-        return;
-    }
-    entry = funasr_registry_find(retry->engine, event->transport_id);
-    if (entry && entry->channel && entry->channel->control.worker_joined) {
-        funasr_close_fence_abort(retry->engine, entry, event);
-    } else {
-        apt_log(
-            APT_LOG_MARK,
-            APT_PRIO_ERROR,
-            "asr_websocket: failed to requeue close fence safely transport=%lu",
-            (unsigned long)event->transport_id);
-    }
-    retry->event = NULL;
+    return funasr_task_signal(obj, FUNASR_MSG_TRANSPORT_EVENT, NULL, NULL, event);
+}
+static void funasr_close_fence_release(void *obj, funasr_transport_event_t *event)
+{
+    (void)obj;
     funasr_transport_event_destroy(event);
 }
-
-static apt_bool_t funasr_close_fence_retry_schedule(
-    funasr_engine_t *engine,
-    funasr_transport_event_t *event)
+static apt_bool_t funasr_close_fence_joined(void *obj, funasr_transport_event_t *event)
 {
-    funasr_close_fence_retry_t *retry;
-    apt_timer_t *timer;
-
-    retry = apr_pcalloc(engine->pool, sizeof(*retry));
-    if (!retry) {
-        return FALSE;
-    }
-    retry->engine = engine;
-    retry->event = event;
-    timer = apt_consumer_task_timer_create(
-        engine->task,
-        funasr_close_fence_retry_on_timer,
-        retry,
-        engine->pool);
-    if (!timer) {
-        return FALSE;
-    }
-    return apt_timer_set(timer, FUNASR_CLOSE_FENCE_RETRY_DELAY_MS);
+    funasr_engine_t *engine = obj;
+    funasr_registry_entry_t *entry;
+    entry = funasr_registry_find(engine, event->transport_id);
+    return entry && entry->channel && entry->channel->control.worker_joined;
 }
+static void funasr_close_fence_fallback(void *obj, funasr_transport_event_t *event)
+{
+    funasr_engine_t *engine = obj;
+    funasr_registry_entry_t *entry = funasr_registry_find(engine, event->transport_id);
+    if (entry) funasr_close_fence_abort(engine, entry, event);
+}
+static void funasr_close_fence_retain(void *obj, funasr_transport_event_t *event)
+{
+    (void)obj;
+    apt_log(APT_LOG_MARK, APT_PRIO_ERROR, "asr_websocket: retaining registry after unjoined close fence transport=%lu", (unsigned long)event->transport_id);
+}
+static const funasr_close_fence_retry_vtable_t funasr_close_fence_retry_vtable = {
+    funasr_close_fence_requeue, funasr_close_fence_release, funasr_close_fence_joined,
+    funasr_close_fence_fallback, funasr_close_fence_retain
+};
 
 static apt_bool_t funasr_transport_event_sink(
     void *obj,
@@ -1085,35 +1053,11 @@ static void funasr_transport_event_on_task(
         event,
         &control_vtable,
         entry->channel);
-    if (!handled && event->type == FUNASR_EVENT_WORKER_CLOSED &&
-        event->close_fence_retry_count < FUNASR_CLOSE_FENCE_RETRY_LIMIT) {
-        event->close_fence_retry_count++;
-        LOG_WITH_SID(
-            entry->channel,
-            APT_PRIO_WARNING,
-            "retrying failed STOP close fence generation=%lu attempt=%u",
-            (unsigned long)event->generation,
-            (unsigned int)event->close_fence_retry_count);
-        if (funasr_close_fence_retry_schedule(engine, event)) {
-            return;
-        }
-        LOG_WITH_SID(
-            entry->channel,
-            APT_PRIO_ERROR,
-            "failed to schedule STOP close fence retry generation=%lu",
-            (unsigned long)event->generation);
-    }
     if (!handled && event->type == FUNASR_EVENT_WORKER_CLOSED) {
-        if (entry->channel->control.worker_joined) {
-            funasr_close_fence_abort(engine, entry, event);
-        } else {
-            LOG_WITH_SID(
-                entry->channel,
-                APT_PRIO_ERROR,
-                "STOP close fence retries exhausted before worker join generation=%lu; "
-                "retaining transport registry",
-                (unsigned long)event->generation);
-        }
+        if (funasr_close_fence_retry_attempt(
+                engine->task, engine->pool, event,
+                &funasr_close_fence_retry_vtable, engine)) return;
+        return;
     } else if (!handled) {
         LOG_WITH_SID(
             entry->channel,
