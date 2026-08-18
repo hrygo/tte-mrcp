@@ -8,6 +8,8 @@ ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 }
 
 WORKFLOW="$ROOT_DIR/.github/workflows/build-linux.yml"
+PACKAGE_VERIFY_SCRIPT="$ROOT_DIR/tools/ci/verify-linux-package.sh"
+STRESS_SCRIPT="$ROOT_DIR/tools/stress/stress_test_improved.sh"
 DEPLOYMENT_DOC="$ROOT_DIR/docs/deployment/release-artifacts.md"
 README="$ROOT_DIR/README.md"
 
@@ -71,6 +73,8 @@ has_v_tag_trigger() {
 }
 
 require_file "$WORKFLOW"
+require_file "$PACKAGE_VERIFY_SCRIPT"
+require_file "$STRESS_SCRIPT"
 require_file "$DEPLOYMENT_DOC"
 require_file "$README"
 
@@ -81,6 +85,11 @@ fi
 require_match "$WORKFLOW" 'release/\*\*' 'release/** branch trigger'
 require_match "$WORKFLOW" 'sha256sum' 'sha256sum checksum handling'
 require_match "$WORKFLOW" 'tools/ci/verify-linux-package\.sh' 'in-job runtime verification'
+require_match "$WORKFLOW" 'test_funasr_close_fence_retry' 'close-fence retry CMake test build target'
+require_match "$PACKAGE_VERIFY_SCRIPT" 'mixed_server\.log' 'mixed server diagnostic log'
+require_match "$PACKAGE_VERIFY_SCRIPT" 'mixed_tts_fixture\.log' 'mixed TTS fixture diagnostic log'
+require_match "$PACKAGE_VERIFY_SCRIPT" 'mixed_asr_fixture\.log' 'mixed ASR fixture diagnostic log'
+require_match "$STRESS_SCRIPT" 'Mixed failure diagnostics' 'mixed worker failure diagnostics'
 
 if [ -f "$WORKFLOW" ]; then
   prune_job=$(job_block prune-artifacts)

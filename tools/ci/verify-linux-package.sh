@@ -372,11 +372,21 @@ fi
 sleep 2
 
 cd "$GITHUB_WORKSPACE"
-bash tools/stress/stress_test_improved.sh \
+if ! bash tools/stress/stress_test_improved.sh \
   -t mixed -c "$CONCURRENCY" -i 1 \
   -r "$GITHUB_WORKSPACE" \
   -a "$GITHUB_WORKSPACE/data" \
-  --tts-save --tts-var-dir "$GITHUB_WORKSPACE/var"
+  --tts-save --tts-var-dir "$GITHUB_WORKSPACE/var"; then
+  echo "Mixed stress gate failed; diagnostic log tails follow" >&2
+  for mixed_log in \
+    "$GITHUB_WORKSPACE/mixed_server.log" \
+    "$GITHUB_WORKSPACE/mixed_tts_fixture.log" \
+    "$GITHUB_WORKSPACE/mixed_asr_fixture.log"; do
+    echo "===== ${mixed_log##*/} =====" >&2
+    tail -n 120 "$mixed_log" >&2 || true
+  done
+  exit 1
+fi
 
 kill "$mixed_server_pid" "$mixed_tts_pid" "$mixed_asr_pid" 2>/dev/null || true
 for wait_i in 1 2 3 4 5; do

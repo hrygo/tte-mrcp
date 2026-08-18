@@ -299,6 +299,7 @@ jobs:
             cmake --build "$GITHUB_WORKSPACE/build/ci-cmake" \
               --target test_resample test_json_unescape \
                      test_funasr_ws_transport test_funasr_control \
+                     test_funasr_close_fence_retry \
                      test_tts_websocket_http_parse \
                      test_tts_websocket_pcm test_tts_websocket_json \
                      test_tts_websocket_lifecycle \

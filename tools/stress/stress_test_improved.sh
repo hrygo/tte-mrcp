@@ -790,6 +790,8 @@ main() {
 
         local mixed_success=0
         local mixed_fail=0
+        local -a mixed_types=()
+        local -a mixed_test_ids=()
 
         for ((iter = 1; iter <= ITERATIONS; iter++)); do
             local tts_cnt=$(( (CONCURRENCY + 1) / 2 ))
@@ -797,17 +799,22 @@ main() {
             echo -e "${CYAN}--- Mixed 第 ${iter}/${ITERATIONS} 轮 (TTS×${tts_cnt} + ASR×${asr_cnt}) ---${NC}"
 
             pids=()
+            mixed_types=()
+            mixed_test_ids=()
             for ((worker = 0; worker < CONCURRENCY; worker++)); do
                 ((current_test++))
                 if (( worker % 2 == 0 )); then
-                    run_test "tts" "mixed_${worker}_${iter}" "$worker" >/dev/null &
+                    mixed_types+=("tts")
                 else
-                    run_test "asr" "mixed_${worker}_${iter}" "$worker" >/dev/null &
+                    mixed_types+=("asr")
                 fi
+                mixed_test_ids+=("mixed_${worker}_${iter}")
+                run_test "${mixed_types[$worker]}" "${mixed_test_ids[$worker]}" "$worker" >/dev/null &
                 pids+=($!)
             done
 
-            for pid in "${pids[@]}"; do
+            for worker in "${!pids[@]}"; do
+                pid="${pids[$worker]}"
                 wait "$pid"
                 if [[ $? -eq 0 ]]; then
                     ((mixed_success++))
@@ -815,6 +822,13 @@ main() {
                 else
                     ((mixed_fail++))
                     ((fail_count++))
+                    log_file="$RESULT_DIR/${mixed_types[$worker]}_${mixed_test_ids[$worker]}.log"
+                    echo -e "${RED}Mixed failure diagnostics: worker=${worker} type=${mixed_types[$worker]} iteration=${iter}${NC}" >&2
+                    if [[ -f "$log_file" ]]; then
+                        tail -n 120 "$log_file" >&2
+                    else
+                        echo "missing worker log: $log_file" >&2
+                    fi
                 fi
             done
 
