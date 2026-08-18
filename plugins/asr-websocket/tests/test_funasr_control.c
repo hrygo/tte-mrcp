@@ -16,6 +16,7 @@ typedef struct fake_sink_t {
     int close_requests;
     int joins;
     apt_bool_t reject_cancel;
+    apt_bool_t reject_join;
     apt_bool_t reject_stop;
     mrcp_recog_completion_cause_e last_cause;
     char last_text[64];
@@ -102,7 +103,7 @@ static apr_status_t fake_join(void *obj)
     fake_sink_t *sink = obj;
     sink->joins++;
     fake_sink_record_call(sink, 'J');
-    return APR_SUCCESS;
+    return sink->reject_join ? APR_EGENERAL : APR_SUCCESS;
 }
 
 static const funasr_control_vtable_t fake_vtable = {
@@ -300,6 +301,7 @@ static void test_worker_close_settles_pending_stop(void)
     CHECK_TRUE("worker close responses are ordered after join",
                strcmp(sink.call_order, "JSC") == 0);
     CHECK_TRUE("worker close commits closed state", control.worker_closed);
+    CHECK_TRUE("worker close records joined worker", control.worker_joined);
     CHECK_TRUE("worker close settles STOP state", !control.stop_pending);
     CHECK_TRUE("worker close commits terminal state", control.terminal);
 }
@@ -338,6 +340,29 @@ static void test_worker_close_retries_stop_after_send_failure(void)
     CHECK_TRUE("retried close commits terminal state", control.terminal);
 }
 
+static void test_worker_close_join_failure_preserves_fence(void)
+{
+    funasr_control_t control;
+    fake_sink_t sink;
+    funasr_transport_event_t event;
+
+    memset(&sink, 0, sizeof(sink));
+    sink.reject_join = TRUE;
+    funasr_control_init(&control);
+    funasr_control_begin_generation(&control, 11);
+    CHECK_TRUE("STOP requests transport cancel",
+               funasr_control_request_stop(&control, &fake_vtable, &sink));
+    event = event_make(11, FUNASR_EVENT_WORKER_CLOSED);
+    CHECK_TRUE("worker close reports join failure",
+               !funasr_control_handle_event(&control, &event, &fake_vtable, &sink));
+    CHECK_TRUE("rejected join attempted once", sink.joins == 1);
+    CHECK_TRUE("rejected join sends no STOP response", sink.stop_responses == 0);
+    CHECK_TRUE("rejected join sends no close response", sink.close_responses == 0);
+    CHECK_TRUE("rejected join leaves worker unjoined", !control.worker_joined);
+    CHECK_TRUE("rejected join leaves fence uncommitted", !control.worker_closed);
+    CHECK_TRUE("rejected join keeps STOP pending", control.stop_pending);
+}
+
 static void test_unexpected_close_fence_releases_transport(void)
 {
     funasr_control_t control;
@@ -372,6 +397,7 @@ int main(void)
     test_close_fence_is_only_close_release();
     test_worker_close_settles_pending_stop();
     test_worker_close_retries_stop_after_send_failure();
+    test_worker_close_join_failure_preserves_fence();
     test_unexpected_close_fence_releases_transport();
     if (failures != 0) {
         fprintf(stderr, "%d control assertion(s) failed\n", failures);

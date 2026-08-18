@@ -103,6 +103,7 @@ apt_bool_t funasr_control_handle_event(
         if (vtable->join_closed(obj) != APR_SUCCESS) {
             return FALSE;
         }
+        control->worker_joined = TRUE;
         if (control->stop_pending) {
             if (!vtable->send_stop_response(obj, control->generation)) {
                 return FALSE;

@@ -183,6 +183,13 @@ static void funasr_close_fence_abort(
 {
     funasr_channel_t *channel = entry->channel;
 
+    if (!channel || !channel->control.worker_joined) {
+        LOG_WITH_SID(
+            channel,
+            APT_PRIO_ERROR,
+            "refusing unsafe STOP close fence fallback before worker join");
+        return;
+    }
     LOG_WITH_SID(
         channel,
         APT_PRIO_ERROR,
@@ -232,13 +239,13 @@ static void funasr_close_fence_retry_on_timer(apt_timer_t *timer, void *obj)
         return;
     }
     entry = funasr_registry_find(retry->engine, event->transport_id);
-    if (entry && entry->channel) {
+    if (entry && entry->channel && entry->channel->control.worker_joined) {
         funasr_close_fence_abort(retry->engine, entry, event);
     } else {
         apt_log(
             APT_LOG_MARK,
             APT_PRIO_ERROR,
-            "asr_websocket: failed to requeue close fence transport=%lu",
+            "asr_websocket: failed to requeue close fence safely transport=%lu",
             (unsigned long)event->transport_id);
     }
     retry->event = NULL;
@@ -1073,15 +1080,11 @@ static void funasr_transport_event_on_task(
             (int)event->metrics.completion_failure);
     }
     handled = FALSE;
-    if (event->type != FUNASR_EVENT_WORKER_CLOSED ||
-        (entry->transport &&
-         funasr_transport_join_closed(entry->transport) == APR_SUCCESS)) {
-        handled = funasr_control_handle_event(
-            &entry->channel->control,
-            event,
-            &control_vtable,
-            entry->channel);
-    }
+    handled = funasr_control_handle_event(
+        &entry->channel->control,
+        event,
+        &control_vtable,
+        entry->channel);
     if (!handled && event->type == FUNASR_EVENT_WORKER_CLOSED &&
         event->close_fence_retry_count < FUNASR_CLOSE_FENCE_RETRY_LIMIT) {
         event->close_fence_retry_count++;
@@ -1101,7 +1104,16 @@ static void funasr_transport_event_on_task(
             (unsigned long)event->generation);
     }
     if (!handled && event->type == FUNASR_EVENT_WORKER_CLOSED) {
-        funasr_close_fence_abort(engine, entry, event);
+        if (entry->channel->control.worker_joined) {
+            funasr_close_fence_abort(engine, entry, event);
+        } else {
+            LOG_WITH_SID(
+                entry->channel,
+                APT_PRIO_ERROR,
+                "STOP close fence retries exhausted before worker join generation=%lu; "
+                "retaining transport registry",
+                (unsigned long)event->generation);
+        }
     } else if (!handled) {
         LOG_WITH_SID(
             entry->channel,
