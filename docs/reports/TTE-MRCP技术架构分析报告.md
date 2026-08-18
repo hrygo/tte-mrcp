@@ -6,6 +6,11 @@
 
 原则：以当前代码为 SSOT。文档、注释和历史备份只作为线索，不作为事实来源；凡是架构结论均回到当前源码、构建文件或配置文件确认。
 
+> **状态：历史/非 SSOT（2026-08-17 更新）**
+> 文中链路为 `demo-synth` 时代架构；正式 TTS 为 `plugins/tts-websocket`。
+> 音频链路已支持服务端 8kHz 直通（8kHz 输入跳过 24k→8k 重采样），文中 "24k PCM -> 8k PCMU"
+> 及 `demo_synth_*` 命名不再反映现行代码，不作为当前行为依据。
+
 ## 1. 结论摘要
 
 这个项目的运行时架构本身并不是完全混乱。它仍保留 UniMRCP 的典型分层：`platforms` 负责进程入口和装配，`libs` 提供 MRCP/MPF/APT 等框架库，`modules` 提供 SIP/RTSP 信令适配，`plugins` 提供 MRCP 资源引擎。根构建文件也明确把一级模块限定为 `build conf data libs modules plugins platforms`，测试套件按开关追加，见 `Makefile.am:26-29`。

@@ -4,6 +4,8 @@ project (tts_websocket)
 # Set source files
 set (TTS_WEBSOCKET_SOURCES
 	src/tts_websocket_engine.c
+	src/tts_websocket_completion.c
+	src/tts_websocket_json.c
 	src/tts_websocket_pcm.c
 	src/tts_websocket_lifecycle.c
 	src/tts_websocket_thread.c
@@ -71,6 +73,11 @@ if(BUILD_TTS_WEBSOCKET_TESTS)
 		src/tts_websocket_pcm.c)
 	set_target_properties(test_tts_websocket_pcm PROPERTIES FOLDER "tests")
 	add_test(NAME tts_websocket_pcm COMMAND test_tts_websocket_pcm)
+	add_executable(test_tts_websocket_json
+		tests/test_tts_websocket_json.c
+		src/tts_websocket_json.c)
+	set_target_properties(test_tts_websocket_json PROPERTIES FOLDER "tests")
+	add_test(NAME tts_websocket_json COMMAND test_tts_websocket_json)
 	add_executable(test_tts_websocket_lifecycle
 		tests/test_tts_websocket_lifecycle.c
 		src/tts_websocket_lifecycle.c)
@@ -109,4 +116,37 @@ if(BUILD_TTS_WEBSOCKET_TESTS)
 	add_test(NAME tts_websocket_connection_log
 		COMMAND test_tts_websocket_connection_log
 		${CMAKE_CURRENT_SOURCE_DIR}/src/tts_websocket_engine.c)
+	add_executable(test_tts_websocket_completion
+		tests/test_tts_websocket_completion.c
+		src/tts_websocket_completion.c)
+	target_include_directories(test_tts_websocket_completion PRIVATE
+		${PROJECT_SOURCE_DIR}/src)
+	set_target_properties(test_tts_websocket_completion PROPERTIES FOLDER "tests")
+	add_test(NAME tts_websocket_completion COMMAND test_tts_websocket_completion)
+	include(CheckCXXSourceCompiles)
+	find_package(Threads QUIET)
+	set(_tts_completion_saved_required_flags "${CMAKE_REQUIRED_FLAGS}")
+	set(_tts_completion_saved_required_libraries "${CMAKE_REQUIRED_LIBRARIES}")
+	if(NOT MSVC)
+		set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -std=c++11")
+	endif()
+	set(CMAKE_REQUIRED_LIBRARIES "${CMAKE_THREAD_LIBS_INIT}")
+	check_cxx_source_compiles("#include <thread>\nint main() { std::thread t([]() {}); t.join(); return 0; }"
+		TTS_WEBSOCKET_HAS_CXX11_THREADS)
+	set(CMAKE_REQUIRED_FLAGS "${_tts_completion_saved_required_flags}")
+	set(CMAKE_REQUIRED_LIBRARIES "${_tts_completion_saved_required_libraries}")
+	if(TTS_WEBSOCKET_HAS_CXX11_THREADS)
+		add_executable(test_tts_websocket_completion_race
+			tests/test_tts_websocket_completion_race.cpp
+			src/tts_websocket_completion.c)
+		target_include_directories(test_tts_websocket_completion_race PRIVATE
+			${PROJECT_SOURCE_DIR}/src)
+		if(NOT MSVC)
+			set_source_files_properties(tests/test_tts_websocket_completion_race.cpp PROPERTIES
+				COMPILE_FLAGS "-std=c++11")
+		endif()
+		target_link_libraries(test_tts_websocket_completion_race ${CMAKE_THREAD_LIBS_INIT})
+		set_target_properties(test_tts_websocket_completion_race PROPERTIES FOLDER "tests")
+		add_test(NAME tts_websocket_completion_race COMMAND test_tts_websocket_completion_race)
+	endif()
 endif()

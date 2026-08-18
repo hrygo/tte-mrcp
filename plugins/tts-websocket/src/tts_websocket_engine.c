@@ -28,6 +28,8 @@
  */
 
 #include "mrcp_synth_engine.h"
+#include "tts_websocket_completion.h"
+#include "tts_websocket_json.h"
 #include "tts_websocket_pcm.h"
 #include "tts_websocket_lifecycle.h"
 #include "tts_websocket_thread.h"
@@ -136,6 +138,12 @@ struct tts_websocket_channel_t {
 	mrcp_message_t        *speak_request;
 	/** Pending stop response */
 	mrcp_message_t        *stop_response;
+	/** Exactly-once completion arbitration. */
+	tts_websocket_completion_t completion;
+	uint64_t               speak_generation;
+	apr_thread_mutex_t     *completion_mutex;
+	apr_thread_cond_t      *completion_cond;
+	volatile apr_time_t    stream_last_mpf_read_time;
 	/** Estimated time to complete */
 	apr_size_t             time_to_complete;
 	/** Is paused */
@@ -231,11 +239,15 @@ struct tts_websocket_channel_t {
 	char     pcm_accum[6];  /* 6字节防御性预留：PCM帧恒为偶数，process_len%6∈{0,2,4} */
 	/** 累积缓冲区中的字节数 (0-5) */
 	int      pcm_accum_len;
+	/** TTS 服务返回音频采样率（8000 或 24000），默认 24000 保持旧行为 */
+	unsigned int input_sample_rate;
+	/** 本流是否已对缺失 sample_rate 字段做过兜底告警（避免逐句刷屏） */
+	apt_bool_t input_sample_rate_warned;
 
 	/* ========== 录音保存相关字段 ========== */
 	/** 录音输出文件（最终8kHz μ-law格式，即MRCP客户端收到的格式） */
 	FILE    *record_file;
-	/** 录音输出文件（原始24kHz PCM格式，TTS服务端原始返回） */
+	/** 录音输出文件（原始 PCM 格式，TTS 服务端原始返回，8k 或 24k） */
 	FILE    *record_file_orig;
 
 };
@@ -257,15 +269,14 @@ static apt_bool_t tts_websocket_msg_signal(tts_websocket_msg_type_e type, mrcp_e
 static apt_bool_t tts_websocket_msg_process(apt_task_t *task, apt_task_msg_t *msg);
 static void hex_dump(const char *label, const char *data, apr_size_t len);
 static char* gbk_to_utf8(const char *gbk_str, apr_size_t gbk_len, apr_size_t *utf8_len, apr_pool_t *pool);
-static char* resample_pcm_to_8k(const char *input_pcm, apr_size_t input_size, apr_size_t *output_size, apr_pool_t *pool);
 static char* resample_ulaw_to_8k(const char *input_ulaw, apr_size_t input_size, apr_size_t *output_size, apr_pool_t *pool);
-static char* convert_16bit_to_ulaw(const char *input_pcm, apr_size_t input_size, apr_size_t *output_size, apr_pool_t *pool);
 
 /* ========== 流式TTS处理函数声明 ========== */
 static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void *data);
 static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_channel, const char *text, apr_size_t text_size, const char *voice_name);
 static apr_size_t tts_websocket_stream_read_audio(tts_websocket_channel_t *synth_channel, char *buffer, apr_size_t size, apt_bool_t *eof);
 static apt_bool_t tts_websocket_stream_write_audio(tts_websocket_channel_t *synth_channel, const char *data, apr_size_t size);
+static apt_bool_t tts_websocket_pcm_write_aligned(tts_websocket_channel_t *synth_channel, const char *pcm, apr_size_t pcm_size, apr_pool_t *pool);
 static void tts_websocket_stream_pool_destroy(tts_websocket_channel_t *synth_channel);
 static char* json_escape(const char *str, apr_size_t len, apr_pool_t *pool);
 static const char* json_get_type(const char *json, apr_size_t len, char *type_buf, apr_size_t type_buf_size);
@@ -304,6 +315,8 @@ MRCP_PLUGIN_LOG_SOURCE_IMPLEMENT(SYNTH_PLUGIN,"SYNTH-PLUGIN")
 #define TTS_WEBSOCKET_DEFAULT_POSTROLL_MS 600
 #define TTS_WEBSOCKET_DEFAULT_RTP_PTIME_MS 20
 #define TTS_WEBSOCKET_MAX_POSTROLL_MS 5000
+#define TTS_WEBSOCKET_COMPLETION_GRACE_MS 1500
+#define TTS_WEBSOCKET_COMPLETION_MINIMUM_MS 500
 
 /* Log macros with session_id */
 #define LOG_WITH_SID(synth_channel, prio, fmt, ...) \
@@ -316,6 +329,79 @@ MRCP_PLUGIN_LOG_SOURCE_IMPLEMENT(SYNTH_PLUGIN,"SYNTH-PLUGIN")
         } \
         apt_log(SYNTH_LOG_MARK, prio, "zyTTS: [session_id=%s] " fmt, _sid, ##__VA_ARGS__); \
     } while(0)
+
+static const char *tts_websocket_completion_owner_name(
+	tts_websocket_completion_owner_e owner)
+{
+	switch(owner) {
+		case TTS_WEBSOCKET_COMPLETION_OWNER_MPF:
+			return "mpf";
+		case TTS_WEBSOCKET_COMPLETION_OWNER_WATCHDOG:
+			return "watchdog";
+		case TTS_WEBSOCKET_COMPLETION_OWNER_CANCELLED:
+			return "cancelled";
+		default:
+			return "none";
+	}
+}
+
+/* completion_mutex must be held.  Claim the active request without calling
+ * the MRCP API under the mutex. */
+static mrcp_message_t *tts_websocket_completion_claim_request_locked(
+	tts_websocket_channel_t *synth_channel,
+	uint64_t generation,
+	tts_websocket_completion_owner_e owner)
+{
+	mrcp_message_t *request;
+
+	if(!tts_websocket_completion_claim(
+		&synth_channel->completion, generation, owner)) {
+		return NULL;
+	}
+	request = synth_channel->speak_request;
+	synth_channel->speak_request = NULL;
+	synth_channel->stream_output_state = TTS_WEBSOCKET_OUTPUT_IDLE;
+	if(synth_channel->completion_cond) {
+		apr_thread_cond_broadcast(synth_channel->completion_cond);
+	}
+	return request;
+}
+
+static apt_bool_t tts_websocket_completion_event_send(
+	tts_websocket_channel_t *synth_channel,
+	mrcp_message_t *request,
+	mrcp_synth_completion_cause_e cause,
+	tts_websocket_completion_owner_e owner)
+{
+	mrcp_message_t *message;
+	mrcp_synth_header_t *synth_header;
+	apt_bool_t sent;
+
+	if(!synth_channel || !request) {
+		return FALSE;
+	}
+	message = mrcp_event_create(
+		request, SYNTHESIZER_SPEAK_COMPLETE, request->pool);
+	if(!message) {
+		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING,
+			"zyTTS: Failed to create SPEAK-COMPLETE owner=%s " APT_SIDRES_FMT,
+			tts_websocket_completion_owner_name(owner), MRCP_MESSAGE_SIDRES(request));
+		return FALSE;
+	}
+	synth_header = mrcp_resource_header_prepare(message);
+	if(synth_header) {
+		synth_header->completion_cause = cause;
+		mrcp_resource_header_property_add(
+			message, SYNTHESIZER_HEADER_COMPLETION_CAUSE);
+	}
+	message->start_line.request_state = MRCP_REQUEST_STATE_COMPLETE;
+	sent = mrcp_engine_channel_message_send(synth_channel->channel, message);
+	apt_log(SYNTH_LOG_MARK, sent ? APT_PRIO_INFO : APT_PRIO_WARNING,
+		"zyTTS: SPEAK-COMPLETE owner=%s cause=%d sent=%d " APT_SIDRES_FMT,
+		tts_websocket_completion_owner_name(owner), (int)cause, sent,
+		MRCP_MESSAGE_SIDRES(request));
+	return sent;
+}
 
 
 
@@ -449,6 +535,30 @@ static apt_bool_t tts_websocket_stream_write_audio(tts_websocket_channel_t *synt
 	return TRUE;
 }
 
+static apt_bool_t tts_websocket_pcm_write_aligned(tts_websocket_channel_t *synth_channel, const char *pcm, apr_size_t pcm_size, apr_pool_t *pool)
+{
+	apr_size_t ulaw_size;
+	char *ulaw_data = apr_palloc(pool, pcm_size);
+
+	if(!ulaw_data) {
+		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Failed to allocate μ-law buffer, dropping frame");
+		return FALSE;
+	}
+	ulaw_size = tts_websocket_pcm_to_ulaw((const unsigned char*)pcm, pcm_size,
+		synth_channel->input_sample_rate, (unsigned char*)ulaw_data, pcm_size);
+	if(ulaw_size == 0) {
+		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+			"[WS] PCM→μ-law conversion failed (input_rate=%u, aligned_len=%"APR_SIZE_T_FMT"), dropping frame",
+			synth_channel->input_sample_rate, pcm_size);
+		return FALSE;
+	}
+	if(!tts_websocket_stream_write_audio(synth_channel, ulaw_data, ulaw_size)) {
+		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Write interrupted by stop request, %d bytes not written", (int)ulaw_size);
+		return FALSE;
+	}
+	return TRUE;
+}
+
 /**
  * @brief 从环形缓冲区读取音频数据（带同步通知）
  * @param synth_channel synthesizer channel
@@ -551,6 +661,93 @@ static apr_size_t tts_websocket_stream_read_audio(tts_websocket_channel_t *synth
 	}
 
 	return to_read;
+}
+
+static void tts_websocket_completion_watchdog_wait(
+	tts_websocket_channel_t *synth_channel)
+{
+	apr_size_t remaining_bytes = 0;
+	uint64_t generation;
+	uint64_t timeout_ms;
+	tts_websocket_watchdog_t watchdog;
+	apt_bool_t expired = FALSE;
+	mrcp_message_t *request = NULL;
+
+	if(!synth_channel->completion_mutex || !synth_channel->completion_cond) {
+		return;
+	}
+	if(synth_channel->stream_buffer_mutex && synth_channel->stream_buffer_size > 1) {
+		apr_thread_mutex_lock(synth_channel->stream_buffer_mutex);
+		remaining_bytes =
+			(synth_channel->stream_write_pos + synth_channel->stream_buffer_size
+			 - synth_channel->stream_read_pos) % synth_channel->stream_buffer_size;
+		apr_thread_mutex_unlock(synth_channel->stream_buffer_mutex);
+	}
+	timeout_ms = tts_websocket_completion_timeout_ms(
+		(uint64_t)remaining_bytes,
+		(uint64_t)synth_channel->tts_engine->completion_postroll_ms,
+		TTS_WEBSOCKET_COMPLETION_GRACE_MS,
+		TTS_WEBSOCKET_COMPLETION_MINIMUM_MS);
+	tts_websocket_watchdog_init(
+		&watchdog, (uint64_t)apr_time_now(), timeout_ms);
+
+	apr_thread_mutex_lock(synth_channel->completion_mutex);
+	generation = synth_channel->speak_generation;
+	LOG_WITH_SID(synth_channel, APT_PRIO_INFO,
+		"[WATCHDOG] Armed: generation=%"APR_UINT64_T_FMT", remaining=%"APR_SIZE_T_FMT
+		"B, timeout=%"APR_UINT64_T_FMT"ms, output_state=%d",
+		(apr_uint64_t)generation, remaining_bytes, (apr_uint64_t)timeout_ms,
+		(int)synth_channel->stream_output_state);
+	while(synth_channel->completion.active &&
+	      synth_channel->completion.generation == generation &&
+	      !synth_channel->stream_stop_requested) {
+		uint64_t now_us = (uint64_t)apr_time_now();
+		expired = tts_websocket_watchdog_should_claim(
+			&watchdog, &synth_channel->completion, generation, now_us,
+			synth_channel->paused ? 1 : 0,
+			synth_channel->stream_stop_requested ? 1 : 0);
+		if(expired) {
+			break;
+		}
+		if(synth_channel->paused) {
+			apr_thread_cond_wait(
+				synth_channel->completion_cond,
+				synth_channel->completion_mutex);
+		} else {
+			uint64_t wait_us = watchdog.deadline_us - now_us;
+			if(wait_us > (uint64_t)INT64_MAX) {
+				wait_us = (uint64_t)INT64_MAX;
+			}
+			apr_thread_cond_timedwait(
+				synth_channel->completion_cond,
+				synth_channel->completion_mutex,
+				(apr_interval_time_t)wait_us);
+		}
+	}
+	if(synth_channel->completion.active &&
+	   synth_channel->completion.generation == generation &&
+	   !synth_channel->stream_stop_requested && expired) {
+		request = tts_websocket_completion_claim_request_locked(
+			synth_channel, generation,
+			TTS_WEBSOCKET_COMPLETION_OWNER_WATCHDOG);
+	}
+	apr_thread_mutex_unlock(synth_channel->completion_mutex);
+
+	if(request) {
+		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING,
+			"zyTTS: [WATCHDOG] Completion deadline exceeded: generation=%"APR_UINT64_T_FMT
+			", ring_written=%"APR_SIZE_T_FMT"B, ring_read=%"APR_SIZE_T_FMT
+			"B, last_mpf_age=%"APR_TIME_T_FMT"us, output_state=%d " APT_SIDRES_FMT,
+			(apr_uint64_t)generation,
+			synth_channel->stream_ring_bytes_written,
+			synth_channel->stream_ring_bytes_read,
+			apr_time_now() - synth_channel->stream_last_mpf_read_time,
+			(int)synth_channel->stream_output_state,
+			MRCP_MESSAGE_SIDRES(request));
+		tts_websocket_completion_event_send(
+			synth_channel, request, SYNTHESIZER_COMPLETION_CAUSE_ERROR,
+			TTS_WEBSOCKET_COMPLETION_OWNER_WATCHDOG);
+	}
 }
 
 /**
@@ -707,7 +904,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 				 * 句子间flush的残留数据已在环形缓冲中，新句子音频到来后可直接播放，
 				 * 每句重新预缓冲反而导致每句开头大量静音帧（压测silence_frame_count普遍40） */
 				/* 丢弃上一句末尾不足3采样(6字节)的残留PCM字节。
-				 * 残留量最多4字节 = 2个16-bit采样 = 0.083ms@24kHz，完全不可闻。
+				 * 残留量最多4字节 = 2个16-bit采样 = 0.083ms@24kHz / 0.25ms@8kHz，完全不可闻。
 				 * 零填充flush会引入波形跳变 → 句子间爆音，直接丢弃远优于补零。 */
 				if(synth_channel->pcm_accum_len > 0) {
 					LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Discarding %d residual accum bytes at audio.start (inaudible)",
@@ -764,12 +961,31 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 					}
 				}
 
-				p = strstr(buffer, "sample_rate");
-				if(p) {
-					p += 11; /* strlen("sample_rate") */
-					while(*p == ' ' || *p == ':' || *p == '"' || *p == '\'') p++;
-					int sample_rate = atoi(p);
-					LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Sample rate: %d Hz", sample_rate);
+				{
+					unsigned int sample_rate;
+					if(tts_websocket_json_get_uint(buffer, (size_t)len, "sample_rate", &sample_rate)) {
+						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Sample rate: %u Hz", sample_rate);
+					/* 保存到 channel，供 PCM 处理路径决定是否需要重采样 */
+					if(sample_rate == 8000 || sample_rate == 24000) {
+						synth_channel->input_sample_rate = sample_rate;
+						synth_channel->input_sample_rate_warned = TRUE;
+					}
+					else {
+						LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+							"[WS] Unsupported sample rate %u, keeping previous %u",
+							sample_rate, synth_channel->input_sample_rate);
+					}
+					}
+					else {
+					/* 服务端未下发 sample_rate：按当前兜底值处理，首次提醒，
+					 * 避免服务端切换到 8kHz 后因字段缺失被静默 3:1 错转。 */
+					if(!synth_channel->input_sample_rate_warned) {
+						LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+							"[WS] sample_rate missing in audio.start, using %u Hz fallback",
+							synth_channel->input_sample_rate);
+						synth_channel->input_sample_rate_warned = TRUE;
+					}
+					}
 				}
 			}
 			else if(strcmp(msg_type, "audio.done") == 0) {
@@ -808,11 +1024,17 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 				}
 			}
 
-			/* 丢弃句子末尾不足3采样(6字节)的残留PCM字节（最多4字节，
-			 * = 0.083ms@24kHz），直接丢弃避免补零flush造成的波形跳变/爆音。 */
+			/* 8kHz 的完整 16-bit 尾采样可直接编码；24kHz 保持原有
+			 * 6 字节（3 采样）契约，不足一个块的字节仍丢弃。 */
 			if(synth_channel->pcm_accum_len > 0) {
-				LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Discarding %d residual accum bytes at audio.done (inaudible)",
-					synth_channel->pcm_accum_len);
+				if(synth_channel->input_sample_rate == 8000 && synth_channel->pcm_accum_len % 2 == 0) {
+					tts_websocket_pcm_write_aligned(synth_channel, synth_channel->pcm_accum,
+						synth_channel->pcm_accum_len, frame_pool);
+				}
+				else {
+					LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Discarding %d residual accum bytes at audio.done (inaudible)",
+						synth_channel->pcm_accum_len);
+				}
 			}
 			synth_channel->pcm_accum_len = 0;
 
@@ -869,7 +1091,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 						if(gap > synth_channel->stream_max_inter_arrival_us) {
 							synth_channel->stream_max_inter_arrival_us = gap;
 						}
-						/* 超过50ms间隔打WARNING（24kHz PCM，正常每帧约20-40ms音频） */
+						/* 超过50ms间隔打WARNING（正常每帧约20-40ms音频） */
 						if(gap > 50000) {
 							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[TIMING] Audio frame gap > 50ms: gap=%"APR_TIME_T_FMT"us (%.1fms), frame=%u",
 								gap, gap / 1000.0, synth_channel->stream_audio_frame_count);
@@ -890,24 +1112,25 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 					continue;
 				}
 
-				/* 保存原始TTS服务端返回的24kHz PCM（在重采样和格式转换之前） */
+				/* 保存原始TTS服务端返回的 PCM（重采样/格式转换之前，8k 或 24k） */
 				tts_websocket_recording_write_orig(synth_channel, buffer, (apr_size_t)len);
 
-				/* 服务端返回的是 24kHz 16-bit little-endian PCM
+				/* 服务端返回 16-bit little-endian PCM
 				 * ("response_format":"pcm" 在标准x86服务器上即为LE)
 				 * 不再使用启发式字节序检测（该检测在LSB接近0时会误判为big-endian导致偶发噪声）
-				 * 直接按 little-endian 处理 */
+				 * 直接按 little-endian 处理。
+				 * 采样率由 audio.start 的 sample_rate 字段决定：
+				 * 8kHz 直通，24kHz 走 3:1 降采样（旧服务）。 */
 
-				/* 重采样：24kHz -> 8kHz。网络块可在任意字节处分割，
-				 * accumulate 会把未达到 6 字节（3 个 16-bit 采样）的尾部
-				 * 保留到下一块，保证输入字节流不丢失、不重排。 */
+				/* 网络块可在任意字节处分割：8kHz 按 2 字节采样，24kHz 按 6 字节降采样块累积。 */
 				{
+					size_t alignment = tts_websocket_pcm_alignment(synth_channel->input_sample_rate);
 					apr_size_t combined_capacity = (apr_size_t)synth_channel->pcm_accum_len + (apr_size_t)len;
 					char *combined = apr_palloc(frame_pool, combined_capacity > 0 ? combined_capacity : 1);
 					apr_size_t aligned_len;
 					size_t carry_len = (size_t)synth_channel->pcm_accum_len;
 
-					if(!combined) {
+					if(alignment == 0 || !combined) {
 						LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
 							"[WS] Failed to allocate PCM accumulation buffer, terminating stream without dropping bytes");
 						synth_channel->stream_error = 1;
@@ -918,40 +1141,14 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 						(unsigned char *)synth_channel->pcm_accum,
 						&carry_len,
 						(const unsigned char *)buffer, (apr_size_t)len,
-						(unsigned char *)combined, combined_capacity, 6);
+						(unsigned char *)combined, combined_capacity, alignment);
 					synth_channel->pcm_accum_len = (int)carry_len;
 
-					/* 处理对齐部分 */
-					if(aligned_len >= 6) {
-						apr_size_t resampled_size = 0;
-						char *resampled_data = resample_pcm_to_8k(combined, aligned_len, &resampled_size, frame_pool);
-						if(!resampled_data) {
-							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Resampling failed, dropping frame");
-							continue;
-						}
-						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Resampled: %"APR_SIZE_T_FMT" bytes -> %"APR_SIZE_T_FMT" bytes (accum=%d)",
-							aligned_len, resampled_size, synth_channel->pcm_accum_len);
-
-						/* 2. 格式转换：16-bit PCM -> 8-bit μ-law (PCMU) */
-						apr_size_t ulaw_size = 0;
-						char *ulaw_data = convert_16bit_to_ulaw(resampled_data, resampled_size, &ulaw_size, frame_pool);
-						if(!ulaw_data) {
-							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] μ-law conversion failed, dropping frame");
-							continue;
-						}
-						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Converted to μ-law: %d bytes", (int)ulaw_size);
-
-						/* 8k 录音已移至 MPF 发帧点（tts_websocket_stream_read_safe），
-						 * 录制内容与客户端实际收到的 RTP 载荷流一致，
-						 * 用于定位 ring→RTP 之间的丢音；此处不再落盘。 */
-
-						/* 3. 写入环形缓冲区 */
-						if(!tts_websocket_stream_write_audio(synth_channel, ulaw_data, ulaw_size)) {
-							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Write interrupted by stop request, %d bytes not written",
-								(int)ulaw_size);
-						} else {
-							LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Written to ring buffer: %d bytes", (int)ulaw_size);
-						}
+					/* 处理对齐部分：8kHz 输入跳过重采样，直接编码 μ-law；
+					 * 24kHz 输入先做 3:1 移动平均降采样再编码。两种路径的
+					 * 输出都是 8kHz PCMU，MRCP 客户端收到的 RTP 始终为 8kHz。 */
+					if(aligned_len >= alignment) {
+						tts_websocket_pcm_write_aligned(synth_channel, combined, aligned_len, frame_pool);
 					} else {
 						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Accumulated %d bytes (total accum=%d), waiting for more",
 							(int)len, synth_channel->pcm_accum_len);
@@ -964,6 +1161,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 	}
 
 	/* 丢弃session末尾不足3采样(6字节)的残留PCM字节（最多4字节=0.083ms），
+	 * 8kHz 输入下为 0.25ms，同样不可闻。
 	 * 直接丢弃避免补零flush造成的波形跳变/爆音。 */
 	if(session_done_received && synth_channel->pcm_accum_len > 0) {
 		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Discarding %d residual accum bytes at session.done (inaudible)",
@@ -1057,7 +1255,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 		LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Socket already closed by cleanup, skipping");
 	}
 
-	/* 本线程仍是 24k 原始录音（record_file_orig）的唯一 writer，退出前 flush/close。
+	/* 本线程仍是原始录音（record_file_orig）的唯一 writer，退出前 flush/close。
 	 * 8k 最终录音（record_file）的 writer 已改为 MPF 发帧线程（read_safe），
 	 * 必须保持打开直至 post-roll 结束、SPEAK-COMPLETE 发出，
 	 * 由 read_safe 在播放完成时关闭；异常/停止路径由 cleanup_audio 幂等关闭。
@@ -1067,6 +1265,9 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 		fclose(synth_channel->record_file_orig);
 		synth_channel->record_file_orig = NULL;
 		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[RECORD] Original audio file closed");
+	}
+	if(session_done_received && !synth_channel->stream_stop_requested) {
+		tts_websocket_completion_watchdog_wait(synth_channel);
 	}
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Stream thread exiting, stream_complete=%d", synth_channel->stream_complete);
 	/* 销毁线程私有临时pool，释放所有本轮session累积的临时分配 */
@@ -1210,6 +1411,9 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 	synth_channel->stream_completion_cause = SYNTHESIZER_COMPLETION_CAUSE_NORMAL;
 	/* 重置PCM累积缓冲区 */
 	synth_channel->pcm_accum_len = 0;
+	/* 采样率默认 24kHz（旧服务）；audio.start 中的 sample_rate 会覆盖 */
+	synth_channel->input_sample_rate = 24000;
+	synth_channel->input_sample_rate_warned = FALSE;
 
 	/* 分配环形缓冲区（512KB，高并发下TTS服务响应可能变慢，需要更大缓冲防止句子间underrun） */
 	synth_channel->stream_buffer_size = 512 * 1024;
@@ -1252,6 +1456,12 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Step 2: Before ring buffer log");
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Step 3: Ring buffer initialized");
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Step 4: After all logs");
+
+	apr_thread_mutex_lock(synth_channel->completion_mutex);
+	synth_channel->speak_generation =
+		tts_websocket_completion_begin(&synth_channel->completion);
+	synth_channel->stream_last_mpf_read_time = apr_time_now();
+	apr_thread_mutex_unlock(synth_channel->completion_mutex);
 
 	/* MPF read 回调的入口屏障：仅在 ring buffer 与 mutex/cond 全部就绪后才
 	 * 放行回调，避免 setup 窗口内回调看到 NULL buffer/mutex（trylock(NULL)）
@@ -1625,10 +1835,18 @@ static mrcp_engine_channel_t* tts_websocket_engine_channel_create(mrcp_engine_t 
 	mpf_termination_t *termination; 
 
 	/* create TTS WebSocket channel */
-	tts_websocket_channel_t *synth_channel = apr_palloc(pool,sizeof(tts_websocket_channel_t));
+	tts_websocket_channel_t *synth_channel = apr_pcalloc(pool,sizeof(tts_websocket_channel_t));
 	synth_channel->tts_engine = engine->obj;
 	synth_channel->speak_request = NULL;
 	synth_channel->stop_response = NULL;
+	tts_websocket_completion_init(&synth_channel->completion);
+	if(apr_thread_mutex_create(
+		&synth_channel->completion_mutex, APR_THREAD_MUTEX_DEFAULT, pool) != APR_SUCCESS ||
+	   apr_thread_cond_create(&synth_channel->completion_cond, pool) != APR_SUCCESS) {
+		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING,
+			"ZyTTS: Failed to create completion synchronization objects");
+		return NULL;
+	}
 	synth_channel->time_to_complete = 0;
 	synth_channel->paused = FALSE;
 	synth_channel->audio_file = NULL;
@@ -1700,7 +1918,7 @@ static mrcp_engine_channel_t* tts_websocket_engine_channel_create(mrcp_engine_t 
  *   1. 受 engine->recording_enabled 开关控制，关闭时不创建文件
  *   2. 同时打开两个文件：
  *      - record_file:     最终输出（8kHz μ-law），MRCP 客户端收到的格式
- *      - record_file_orig: 原始返回（24kHz PCM），TTS 服务端原始返回
+ *      - record_file_orig: 原始返回（PCM，8k 或 24k），TTS 服务端原始返回
  *   3. 文件名格式: tts-{fmt}-{session_id}-{timestamp}.{ext}
  *   4. 使用 sync 模式确保数据完整写入磁盘
  */
@@ -1754,8 +1972,8 @@ static apt_bool_t tts_websocket_recording_open(tts_websocket_channel_t *synth_ch
 		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[RECORD] Failed to compose final audio file path");
 	}
 
-	/* --- 打开原始输出文件（24kHz PCM） --- */
-	file_name_orig = apr_psprintf(pool, "tts-orig-24kHz-%s-%"APR_TIME_T_FMT".pcm",
+	/* --- 打开原始输出文件（PCM，8k 或 24k） --- */
+	file_name_orig = apr_psprintf(pool, "tts-orig-raw-%s-%"APR_TIME_T_FMT".pcm",
 		session_id ? session_id : "unknown", now);
 	file_path_orig = apt_vardir_filepath_get(dir_layout, file_name_orig, pool);
 	if (file_path_orig) {
@@ -1800,7 +2018,7 @@ static void tts_websocket_recording_write_final(tts_websocket_channel_t *synth_c
 }
 
 /**
- * @brief 写入原始音频数据（24kHz PCM，TTS 服务端原始返回）
+ * @brief 写入原始音频数据（PCM，TTS 服务端原始返回，8k 或 24k）
  * @param synth_channel TTS WebSocket 合成通道对象
  * @param data 音频数据指针
  * @param size 数据大小（字节数）
@@ -1862,12 +2080,23 @@ static void tts_websocket_recording_close(tts_websocket_channel_t *synth_channel
 static void tts_websocket_channel_cleanup_audio(tts_websocket_channel_t *synth_channel)
 {
 	tts_websocket_stream_lifecycle_begin_close(&synth_channel->stream_lifecycle);
+	if(synth_channel->completion_mutex) {
+		apr_thread_mutex_lock(synth_channel->completion_mutex);
+		tts_websocket_completion_cancel(
+			&synth_channel->completion, synth_channel->speak_generation);
+		synth_channel->speak_request = NULL;
+		if(synth_channel->completion_cond) {
+			apr_thread_cond_broadcast(synth_channel->completion_cond);
+		}
+		apr_thread_mutex_unlock(synth_channel->completion_mutex);
+	} else {
+		synth_channel->speak_request = NULL;
+	}
 	if(synth_channel->audio_file) {
 		fclose(synth_channel->audio_file);
 		synth_channel->audio_file = NULL;
 	}
 	synth_channel->time_to_complete = 0;
-	synth_channel->speak_request = NULL;
 	synth_channel->stop_response = NULL;
 	synth_channel->paused = FALSE;
 
@@ -2003,175 +2232,6 @@ static apt_bool_t tts_websocket_channel_close(mrcp_engine_channel_t *channel)
 static apt_bool_t tts_websocket_channel_request_process(mrcp_engine_channel_t *channel, mrcp_message_t *request)
 {
 	return tts_websocket_msg_signal(TTS_WEBSOCKET_MSG_REQUEST_PROCESS,channel,request);
-}
-
-/* ---------- audio resample function ---------- */
-/**
- * @brief 将24kHz PCM音频降采样到8kHz（带抗混叠滤波）
- * @param input_pcm 输入PCM数据（16位单声道）
- * @param input_size 输入数据大小（字节数）
- * @param output_size 输出参数，返回输出数据大小
- * @param pool APR内存池
- * @return 返回重采样后的PCM数据，失败返回NULL
- * 说明：
- *   1. 输入为24kHz采样率（TTS服务返回）
- *   2. 使用3:1降采样，先进行移动平均滤波再抽取
- *   3. 输出为8kHz采样率，16位单声道PCM
- * @deprecated 流式场景请使用 resample_pcm_to_8k_stateful 避免帧边界爆音
- */
-static char* resample_pcm_to_8k(const char *input_pcm, apr_size_t input_size, apr_size_t *output_size, apr_pool_t *pool)
-{
-	/* 降采样比例 = 24000 / 8000 = 3 */
-	const int decimation_factor = 3;
-	apr_size_t input_samples = input_size / 2;  /* 16位采样，2字节/采样 */
-	apr_size_t output_samples = input_samples / decimation_factor;
-	apr_size_t output_bytes = output_samples * 2;
-	unsigned char *input_bytes = (unsigned char*)input_pcm;
-	short *output;
-	apr_size_t i;
-
-	if(!input_pcm || input_size == 0 || !output_size || !pool) {
-		return NULL;
-	}
-
-	/* ========== 修复：防御性检查 — 输入大小必须是6字节（3个16-bit采样）的整数倍 ==========
-	 * 非对齐输入会导致末尾采样被整数除法静默丢弃。
-	 * 虽然调用方通过 pcm_accum 机制保证了 6 字节对齐，但此检查可防止
-	 * 未来代码变更引入非对齐调用导致的数据丢失。 */
-	if(input_size % 6 != 0) {
-		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING,
-			"zyTTS: resample_pcm_to_8k: input_size %"APR_SIZE_T_FMT" is not a multiple of 6, "
-			"last %"APR_SIZE_T_FMT" bytes will be dropped",
-			input_size, input_size % 6);
-	}
-
-	output = apr_palloc(pool, output_bytes);
-	if(!output) {
-		apt_log(SYNTH_LOG_MARK,APT_PRIO_WARNING,"zyTTS: Failed to allocate memory for resampled audio");
-		return NULL;
-	}
-
-	/* 调试：打印原始前几个字节 */
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_DEBUG,"zyTTS: Resample input: first 10 bytes = %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-		input_bytes[0], input_bytes[1], input_bytes[2], input_bytes[3], input_bytes[4],
-		input_bytes[5], input_bytes[6], input_bytes[7], input_bytes[8], input_bytes[9]);
-
-	/* 降采样：使用移动平均滤波来减少混叠失真
-	 * 每3个采样点取平均值，而不是简单抽取
-	 * 注意：TTS服务返回的音频通常是little-endian格式
-	 */
-	for(i = 0; i < output_samples; i++) {
-		int sum = 0;
-		/* 对每3个采样点求平均 */
-		apr_size_t j;
-		for(j = 0; j < decimation_factor; j++) {
-			/* 从little-endian字节序读取16位采样值 */
-			apr_size_t sample_idx = (i * decimation_factor + j) * 2;
-			short sample = (short)((input_bytes[sample_idx + 1] << 8) | input_bytes[sample_idx]);
-			sum += sample;
-		}
-		output[i] = (short)(sum / decimation_factor);
-	}
-
-	/* 调试：打印输出前几个采样值 */
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_DEBUG,"zyTTS: Resample output: first 5 samples = %d, %d, %d, %d, %d",
-		output[0], output[1], output[2], output[3], output[4]);
-
-	*output_size = output_bytes;
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_DEBUG,"zyTTS: Resampled audio: %d samples (%d bytes) -> %d samples (%d bytes)",
-		(int)input_samples, (int)input_size, (int)output_samples, (int)output_bytes);
-
-	return (char*)output;
-}
-
-/* ---------- audio bit depth conversion function (16-bit linear to 8-bit mu-law) ---------- */
-/**
- * @brief μ-law编码查找表 (ITU-T G.711标准)
- * 将14位有符号数 (-8159 到 8159) 转换为8位μ-law编码
- * @return 8位μ-law编码字节
- *
- * 使用标准ITU-T G.711 μ-law编码算法
- */
-static inline unsigned char linear_to_ulaw(short sample)
-{
-	int magnitude;
-	int exponent;
-	int mantissa;
-	int exponent_mask;
-	unsigned char ulaw_byte;
-
-	/* 处理符号和幅度，处理-32768边界情况 */
-	/* 注意：C标准规定带符号负数的右移是实现定义行为，改用比较判断避免移植风险 */
-	int sign = (sample < 0) ? 0x80 : 0;
-	if (sign) {
-		magnitude = (sample == -32768) ? 32767 : -sample;
-	} else {
-		magnitude = sample;
-	}
-
-	/* 添加偏移量 BIAS = 0x84 = 132 */
-	magnitude += 0x84;
-	/* 限制幅度在15位范围内 (0-32767)，防止溢出 */
-	if (magnitude > 32767) {
-		magnitude = 32767;
-	}
-
-	/* 计算指数 (3位) */
-	exponent = 7;
-	for(exponent_mask = 0x4000; !(magnitude & exponent_mask); exponent_mask >>= 1) {
-		exponent--;
-	}
-
-	/* 提取尾数 (4位) */
-	mantissa = (magnitude >> (exponent + 3)) & 0x0F;
-
-	/* 组合: S EEEE MMMM */
-	ulaw_byte = (unsigned char)(sign | (exponent << 4) | mantissa);
-
-	/* 按位取反 (μ-law特性) */
-	return ~ulaw_byte;
-}
-
-/**
- * @brief 将16位线性PCM音频批量转换为8位μ-law音频 (PCMU/G.711)
- * @param input_pcm 输入PCM数据（16位单声道线性）
- * @param input_size 输入数据大小（字节数）
- * @param output_size 输出参数，返回输出数据大小
- * @param pool APR内存池
- * @return 返回8位μ-law数据，失败返回NULL
- * 说明：
- *   1. 输入为16位有符号线性PCM（每个采样2字节）
- *   2. 输出为8位μ-law压缩编码（每个采样1字节）
- *   3. μ-law是ITU-T G.711标准，用于电话通信，PCMU格式
- */
-static char* convert_16bit_to_ulaw(const char *input_pcm, apr_size_t input_size, apr_size_t *output_size, apr_pool_t *pool)
-{
-	apr_size_t input_samples = input_size / 2;  /* 16位采样，2字节/采样 */
-	apr_size_t output_bytes = input_samples;    /* 8位μ-law采样，1字节/采样 */
-	short *input = (short*)input_pcm;
-	unsigned char *output;
-
-	if(!input_pcm || input_size == 0 || !output_size || !pool) {
-		return NULL;
-	}
-
-	output = apr_palloc(pool, output_bytes);
-	if(!output) {
-		apt_log(SYNTH_LOG_MARK,APT_PRIO_WARNING,"zyTTS: Failed to allocate memory for μ-law audio");
-		return NULL;
-	}
-
-	/* 批量转换: 16-bit linear -> 8-bit μ-law */
-	apr_size_t i;
-	for(i = 0; i < input_samples; i++) {
-		output[i] = linear_to_ulaw(input[i]);
-	}
-
-	*output_size = output_bytes;
-	apt_log(SYNTH_LOG_MARK,APT_PRIO_DEBUG,"zyTTS: μ-law conversion: %d samples (%d bytes 16bit linear) -> %d samples (%d bytes 8bit μ-law/PCMU)",
-		(int)input_samples, (int)input_size, (int)input_samples, (int)output_bytes);
-
-	return (char*)output;
 }
 
 /* ---------- audio resample function for 8-bit μ-law ---------- */
@@ -2350,6 +2410,11 @@ static apt_bool_t tts_websocket_channel_stop(mrcp_engine_channel_t *channel, mrc
 {
 	tts_websocket_channel_t *synth_channel = channel->method_obj;
 	/* store the request, make sure there is no more activity and only then send the response */
+	apr_thread_mutex_lock(synth_channel->completion_mutex);
+	tts_websocket_completion_cancel(
+		&synth_channel->completion, synth_channel->speak_generation);
+	apr_thread_cond_broadcast(synth_channel->completion_cond);
+	apr_thread_mutex_unlock(synth_channel->completion_mutex);
 	synth_channel->stop_response = response;
 	return TRUE;
 }
@@ -2367,7 +2432,10 @@ static apt_bool_t tts_websocket_channel_stop(mrcp_engine_channel_t *channel, mrc
 static apt_bool_t tts_websocket_channel_pause(mrcp_engine_channel_t *channel, mrcp_message_t *request, mrcp_message_t *response)
 {
 	tts_websocket_channel_t *synth_channel = channel->method_obj;
+	apr_thread_mutex_lock(synth_channel->completion_mutex);
 	synth_channel->paused = TRUE;
+	apr_thread_cond_broadcast(synth_channel->completion_cond);
+	apr_thread_mutex_unlock(synth_channel->completion_mutex);
 	/* send asynchronous response */
 	mrcp_engine_channel_message_send(channel,response);
 	return TRUE;
@@ -2386,7 +2454,10 @@ static apt_bool_t tts_websocket_channel_pause(mrcp_engine_channel_t *channel, mr
 static apt_bool_t tts_websocket_channel_resume(mrcp_engine_channel_t *channel, mrcp_message_t *request, mrcp_message_t *response)
 {
 	tts_websocket_channel_t *synth_channel = channel->method_obj;
+	apr_thread_mutex_lock(synth_channel->completion_mutex);
 	synth_channel->paused = FALSE;
+	apr_thread_cond_broadcast(synth_channel->completion_cond);
+	apr_thread_mutex_unlock(synth_channel->completion_mutex);
 	/* send asynchronous response */
 	mrcp_engine_channel_message_send(channel,response);
 	return TRUE;
@@ -2639,6 +2710,7 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 		return TRUE;
 	}
 	lifecycle_entered = TRUE;
+	synth_channel->stream_last_mpf_read_time = apr_time_now();
 
 	/* MPF bridge reuses this frame. Never let a short EOF tail shrink it. */
 	if(synth_channel->stream_codec_frame_size == 0) {
@@ -2820,6 +2892,16 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 	}
 
 	if(completed) {
+		mrcp_message_t *completion_request = NULL;
+		if(apr_thread_mutex_trylock(synth_channel->completion_mutex) == APR_SUCCESS) {
+			completion_request = tts_websocket_completion_claim_request_locked(
+				synth_channel, synth_channel->speak_generation,
+				TTS_WEBSOCKET_COMPLETION_OWNER_MPF);
+			apr_thread_mutex_unlock(synth_channel->completion_mutex);
+		}
+		if(!completion_request) {
+			goto stream_read_done;
+		}
 		/* ========== 丢音诊断汇总：定位丢失环节 ==========
 		 *   ring_written == ring_read 且 dropped == 0
 		 *     → 音频已全部交给 MPF，丢失在 RTP 发送/网络/客户端侧
@@ -2842,28 +2924,15 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 			(unsigned)synth_channel->stream_partial_wait_count,
 			(unsigned)synth_channel->stream_buffer_empty_count,
 			terminal_error ? 1 : 0);
-		mrcp_message_t *message = mrcp_event_create(
-			active_request,
-			SYNTHESIZER_SPEAK_COMPLETE,
-			active_request->pool);
-		if(message) {
-			mrcp_synth_header_t *synth_header = mrcp_resource_header_prepare(message);
-			if(synth_header) {
-				synth_header->completion_cause = terminal_error
-					? SYNTHESIZER_COMPLETION_CAUSE_ERROR
-					: SYNTHESIZER_COMPLETION_CAUSE_NORMAL;
-				mrcp_resource_header_property_add(
-					message, SYNTHESIZER_HEADER_COMPLETION_CAUSE);
-			}
-			message->start_line.request_state = MRCP_REQUEST_STATE_COMPLETE;
-			synth_channel->speak_request = NULL;
-			synth_channel->stream_output_state = TTS_WEBSOCKET_OUTPUT_IDLE;
-			if(synth_channel->audio_file) {
-				fclose(synth_channel->audio_file);
-				synth_channel->audio_file = NULL;
-			}
-			mrcp_engine_channel_message_send(synth_channel->channel, message);
+		if(synth_channel->audio_file) {
+			fclose(synth_channel->audio_file);
+			synth_channel->audio_file = NULL;
 		}
+		tts_websocket_completion_event_send(
+			synth_channel, completion_request,
+			terminal_error ? SYNTHESIZER_COMPLETION_CAUSE_ERROR
+			               : SYNTHESIZER_COMPLETION_CAUSE_NORMAL,
+			TTS_WEBSOCKET_COMPLETION_OWNER_MPF);
 		/* 播放完成（含 post-roll 最后一帧），此处关闭诊断录音文件。
 		 * 录音文件的唯一 writer 是本 MPF 回调线程。 */
 		tts_websocket_recording_close(synth_channel);
