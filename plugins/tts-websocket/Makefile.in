@@ -147,7 +147,7 @@ LTLIBRARIES = $(plugin_LTLIBRARIES)
 tts_websocket_la_LIBADD =
 am__dirstamp = $(am__leading_dot)dirstamp
 am_tts_websocket_la_OBJECTS = src/tts_websocket_engine.lo \
-	src/tts_websocket_json.lo src/tts_websocket_pcm.lo \
+	src/tts_websocket_completion.lo src/tts_websocket_json.lo src/tts_websocket_pcm.lo \
 	src/tts_websocket_lifecycle.lo src/tts_websocket_thread.lo \
 	src/tts_websocket_ws.lo
 tts_websocket_la_OBJECTS = $(am_tts_websocket_la_OBJECTS)
@@ -199,7 +199,8 @@ am__v_at_1 =
 DEFAULT_INCLUDES = 
 depcomp = $(SHELL) $(top_srcdir)/build/depcomp
 am__maybe_remake_depfiles = depfiles
-am__depfiles_remade =  \
+
+am__depfiles_remade =  src/$(DEPDIR)/tts_websocket_completion.Plo \
 	src/$(DEPDIR)/test_tts_websocket_json-tts_websocket_json.Po \
 	src/$(DEPDIR)/test_tts_websocket_pcm-tts_websocket_pcm.Po \
 	src/$(DEPDIR)/tts_websocket_engine.Plo \
@@ -592,9 +593,9 @@ top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 vardir = @vardir@
-AM_CPPFLAGS = $(UNIMRCP_PLUGIN_INCLUDES)
+AM_CPPFLAGS = $(UNIMRCP_PLUGIN_INCLUDES) -I$(srcdir)/src
 plugin_LTLIBRARIES = tts_websocket.la
-tts_websocket_la_SOURCES = src/tts_websocket_engine.c src/tts_websocket_json.c src/tts_websocket_pcm.c src/tts_websocket_lifecycle.c src/tts_websocket_thread.c src/tts_websocket_ws.c
+tts_websocket_la_SOURCES = src/tts_websocket_engine.c src/tts_websocket_completion.c src/tts_websocket_completion.h src/tts_websocket_json.c src/tts_websocket_pcm.c src/tts_websocket_lifecycle.c src/tts_websocket_thread.c src/tts_websocket_ws.c
 tts_websocket_la_LDFLAGS = $(UNIMRCP_PLUGIN_OPTS)
 TESTS = $(check_PROGRAMS)
 test_tts_websocket_connection_log_SOURCES = tests/test_tts_websocket_connection_log.c
@@ -699,6 +700,7 @@ src/$(DEPDIR)/$(am__dirstamp):
 	@: >>src/$(DEPDIR)/$(am__dirstamp)
 src/tts_websocket_engine.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
+src/tts_websocket_completion.lo: src/$(am__dirstamp) \
 src/tts_websocket_json.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
 src/tts_websocket_pcm.lo: src/$(am__dirstamp) \
@@ -750,6 +752,7 @@ mostlyclean-compile:
 distclean-compile:
 	-rm -f *.tab.c
 
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_completion.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_tts_websocket_json-tts_websocket_json.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_tts_websocket_pcm-tts_websocket_pcm.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/tts_websocket_engine.Plo@am__quote@ # am--include-marker
@@ -1195,6 +1198,7 @@ clean-am: clean-checkPROGRAMS clean-generic clean-libtool \
 	clean-pluginLTLIBRARIES mostlyclean-am
 
 distclean: distclean-am
+	-rm -f src/$(DEPDIR)/tts_websocket_completion.Plo
 	-rm -f src/$(DEPDIR)/test_tts_websocket_json-tts_websocket_json.Po
 	-rm -f src/$(DEPDIR)/test_tts_websocket_pcm-tts_websocket_pcm.Po
 	-rm -f src/$(DEPDIR)/tts_websocket_engine.Plo
@@ -1251,6 +1255,7 @@ install-ps-am:
 installcheck-am:
 
 maintainer-clean: maintainer-clean-am
+	-rm -f src/$(DEPDIR)/tts_websocket_completion.Plo
 	-rm -f src/$(DEPDIR)/test_tts_websocket_json-tts_websocket_json.Po
 	-rm -f src/$(DEPDIR)/test_tts_websocket_pcm-tts_websocket_pcm.Po
 	-rm -f src/$(DEPDIR)/tts_websocket_engine.Plo

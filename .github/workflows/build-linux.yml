@@ -304,6 +304,8 @@ jobs:
                      test_tts_websocket_lifecycle \
                      test_tts_websocket_ws test_tts_websocket_thread \
                      test_tts_websocket_connection_log \
+                     test_tts_websocket_completion \
+                     test_tts_websocket_completion_race \
               -j"$(getconf _NPROCESSORS_ONLN)" \
               > "$GITHUB_WORKSPACE/cmake-build-$TARGET.log" 2>&1 || {
                 tail -n 120 "$GITHUB_WORKSPACE/cmake-build-$TARGET.log"
