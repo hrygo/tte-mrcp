@@ -73,6 +73,15 @@ static int test_malformed_nested_value_fails_without_writing_value(void)
         "sample_rate", &value) && value == 24000;
 }
 
+static int test_malformed_member_after_sample_rate_fails_without_writing_value(void)
+{
+    const char json[] = "{\"sample_rate\":8000,\"meta\":{\"x\":0 garbage}}";
+    unsigned int value = 24000;
+
+    return !tts_websocket_json_get_uint(json, sizeof(json) - 1,
+        "sample_rate", &value) && value == 24000;
+}
+
 int main(void)
 {
     if (!test_top_level_sample_rate_ignores_sentence_text()) {
@@ -99,6 +108,10 @@ int main(void)
         fprintf(stderr, "test_malformed_nested_value_fails_without_writing_value failed\n");
         return 1;
     }
-    puts("6/6 JSON parser tests passed");
+    if (!test_malformed_member_after_sample_rate_fails_without_writing_value()) {
+        fprintf(stderr, "test_malformed_member_after_sample_rate_fails_without_writing_value failed\n");
+        return 1;
+    }
+    puts("7/7 JSON parser tests passed");
     return 0;
 }

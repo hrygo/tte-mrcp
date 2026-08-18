@@ -189,6 +189,8 @@ static int key_matches(const char *json, size_t start, size_t end, const char *k
 int tts_websocket_json_get_uint(const char *json, size_t len, const char *key, unsigned int *value)
 {
     size_t pos;
+    unsigned int candidate = 0;
+    int found = 0;
 
     if (!json || !key || !*key || !value) return 0;
     pos = skip_whitespace(json, len, 0);
@@ -197,7 +199,13 @@ int tts_websocket_json_get_uint(const char *json, size_t len, const char *key, u
         size_t key_start, key_end;
         int match;
         pos = skip_whitespace(json, len, pos);
-        if (pos >= len || json[pos] == '}') return 0;
+        if (pos >= len) return 0;
+        if (json[pos] == '}') {
+            pos = skip_whitespace(json, len, pos + 1);
+            if (!found || pos != len) return 0;
+            *value = candidate;
+            return 1;
+        }
         if (json[pos] != '"') return 0;
         key_start = pos + 1;
         if (!skip_string(json, len, &pos)) return 0;
@@ -217,12 +225,15 @@ int tts_websocket_json_get_uint(const char *json, size_t len, const char *key, u
             }
             pos = skip_whitespace(json, len, pos);
             if (!has_digit || pos >= len || (json[pos] != ',' && json[pos] != '}')) return 0;
-            *value = parsed;
-            return 1;
+            candidate = parsed;
+            found = 1;
         }
-        if (!skip_value(json, len, &pos)) return 0;
+        else if (!skip_value(json, len, &pos)) return 0;
+        pos = skip_whitespace(json, len, pos);
+        if (pos >= len) return 0;
+        if (json[pos] == '}') continue;
+        if (json[pos++] != ',') return 0;
         pos = skip_whitespace(json, len, pos);
         if (pos >= len || json[pos] == '}') return 0;
-        if (json[pos++] != ',') return 0;
     }
 }
