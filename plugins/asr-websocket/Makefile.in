@@ -91,7 +91,8 @@ POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
 check_PROGRAMS = test_resample$(EXEEXT) test_json_unescape$(EXEEXT) \
-	test_funasr_ws_transport$(EXEEXT) test_funasr_control$(EXEEXT)
+	test_funasr_ws_transport$(EXEEXT) test_funasr_control$(EXEEXT) \
+	test_funasr_close_fence_retry$(EXEEXT)
 subdir = plugins/asr-websocket
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/build/acmacros/opencore_amr.m4 \
@@ -146,7 +147,8 @@ LTLIBRARIES = $(plugin_LTLIBRARIES)
 asr_websocket_la_LIBADD =
 am__dirstamp = $(am__leading_dot)dirstamp
 am_asr_websocket_la_OBJECTS = src/asr_websocket_engine.lo \
-	src/funasr_audio.lo src/funasr_clock.lo src/funasr_control.lo \
+	src/funasr_audio.lo src/funasr_clock.lo \
+	src/funasr_close_fence_retry.lo src/funasr_control.lo \
 	src/funasr_json.lo src/funasr_ws_transport.lo
 asr_websocket_la_OBJECTS = $(am_asr_websocket_la_OBJECTS)
 AM_V_lt = $(am__v_lt_@AM_V@)
@@ -157,6 +159,14 @@ asr_websocket_la_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC \
 	$(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=link $(CCLD) \
 	$(AM_CFLAGS) $(CFLAGS) $(asr_websocket_la_LDFLAGS) $(LDFLAGS) \
 	-o $@
+am_test_funasr_close_fence_retry_OBJECTS = tests/test_funasr_close_fence_retry-test_funasr_close_fence_retry.$(OBJEXT) \
+	src/test_funasr_close_fence_retry-funasr_close_fence_retry.$(OBJEXT)
+test_funasr_close_fence_retry_OBJECTS =  \
+	$(am_test_funasr_close_fence_retry_OBJECTS)
+am__DEPENDENCIES_1 =
+test_funasr_close_fence_retry_DEPENDENCIES =  \
+	$(top_builddir)/libs/apr-toolkit/libaprtoolkit.la \
+	$(am__DEPENDENCIES_1)
 am_test_funasr_control_OBJECTS =  \
 	tests/test_funasr_control-test_funasr_control.$(OBJEXT) \
 	src/test_funasr_control-funasr_control.$(OBJEXT)
@@ -169,7 +179,6 @@ am_test_funasr_ws_transport_OBJECTS = tests/test_funasr_ws_transport-test_funasr
 	src/test_funasr_ws_transport-funasr_ws_transport.$(OBJEXT)
 test_funasr_ws_transport_OBJECTS =  \
 	$(am_test_funasr_ws_transport_OBJECTS)
-am__DEPENDENCIES_1 =
 test_funasr_ws_transport_DEPENDENCIES =  \
 	$(top_builddir)/libs/apr-toolkit/libaprtoolkit.la \
 	$(am__DEPENDENCIES_1)
@@ -200,8 +209,10 @@ depcomp = $(SHELL) $(top_srcdir)/build/depcomp
 am__maybe_remake_depfiles = depfiles
 am__depfiles_remade = src/$(DEPDIR)/asr_websocket_engine.Plo \
 	src/$(DEPDIR)/funasr_audio.Plo src/$(DEPDIR)/funasr_clock.Plo \
+	src/$(DEPDIR)/funasr_close_fence_retry.Plo \
 	src/$(DEPDIR)/funasr_control.Plo src/$(DEPDIR)/funasr_json.Plo \
 	src/$(DEPDIR)/funasr_ws_transport.Plo \
+	src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Po \
 	src/$(DEPDIR)/test_funasr_control-funasr_control.Po \
 	src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Po \
 	src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Po \
@@ -209,6 +220,7 @@ am__depfiles_remade = src/$(DEPDIR)/asr_websocket_engine.Plo \
 	src/$(DEPDIR)/test_funasr_ws_transport-funasr_ws_transport.Po \
 	src/$(DEPDIR)/test_json_unescape-funasr_json.Po \
 	src/$(DEPDIR)/test_resample-funasr_audio.Po \
+	tests/$(DEPDIR)/test_funasr_close_fence_retry-test_funasr_close_fence_retry.Po \
 	tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Po \
 	tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Po \
 	tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Po \
@@ -232,10 +244,13 @@ AM_V_CCLD = $(am__v_CCLD_@AM_V@)
 am__v_CCLD_ = $(am__v_CCLD_@AM_DEFAULT_V@)
 am__v_CCLD_0 = @echo "  CCLD    " $@;
 am__v_CCLD_1 =
-SOURCES = $(asr_websocket_la_SOURCES) $(test_funasr_control_SOURCES) \
+SOURCES = $(asr_websocket_la_SOURCES) \
+	$(test_funasr_close_fence_retry_SOURCES) \
+	$(test_funasr_control_SOURCES) \
 	$(test_funasr_ws_transport_SOURCES) \
 	$(test_json_unescape_SOURCES) $(test_resample_SOURCES)
 DIST_SOURCES = $(asr_websocket_la_SOURCES) \
+	$(test_funasr_close_fence_retry_SOURCES) \
 	$(test_funasr_control_SOURCES) \
 	$(test_funasr_ws_transport_SOURCES) \
 	$(test_json_unescape_SOURCES) $(test_resample_SOURCES)
@@ -599,6 +614,7 @@ asr_websocket_la_SOURCES = \
                              src/asr_websocket_engine.c \
                              src/funasr_audio.c src/funasr_audio.h \
                              src/funasr_clock.c src/funasr_clock.h \
+                             src/funasr_close_fence_retry.c src/funasr_close_fence_retry.h \
                              src/funasr_control.c src/funasr_control.h \
                              src/funasr_json.c src/funasr_json.h \
                              src/funasr_ws_transport.c src/funasr_ws_transport.h
@@ -621,6 +637,9 @@ test_funasr_ws_transport_LDADD = \
 test_funasr_ws_transport_CPPFLAGS = $(AM_CPPFLAGS)
 test_funasr_control_SOURCES = tests/test_funasr_control.c src/funasr_control.c
 test_funasr_control_CPPFLAGS = $(AM_CPPFLAGS)
+test_funasr_close_fence_retry_SOURCES = tests/test_funasr_close_fence_retry.c src/funasr_close_fence_retry.c
+test_funasr_close_fence_retry_LDADD = $(top_builddir)/libs/apr-toolkit/libaprtoolkit.la $(UNIMRCP_APR_LIBS)
+test_funasr_close_fence_retry_CPPFLAGS = $(AM_CPPFLAGS)
 MAINTAINERCLEANFILES = Makefile.in
 
 # Includes
@@ -717,6 +736,8 @@ src/asr_websocket_engine.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
 src/funasr_audio.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
 src/funasr_clock.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+src/funasr_close_fence_retry.lo: src/$(am__dirstamp) \
+	src/$(DEPDIR)/$(am__dirstamp)
 src/funasr_control.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
 src/funasr_json.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
@@ -731,6 +752,14 @@ tests/$(am__dirstamp):
 tests/$(DEPDIR)/$(am__dirstamp):
 	@$(MKDIR_P) tests/$(DEPDIR)
 	@: >>tests/$(DEPDIR)/$(am__dirstamp)
+tests/test_funasr_close_fence_retry-test_funasr_close_fence_retry.$(OBJEXT):  \
+	tests/$(am__dirstamp) tests/$(DEPDIR)/$(am__dirstamp)
+src/test_funasr_close_fence_retry-funasr_close_fence_retry.$(OBJEXT):  \
+	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+
+test_funasr_close_fence_retry$(EXEEXT): $(test_funasr_close_fence_retry_OBJECTS) $(test_funasr_close_fence_retry_DEPENDENCIES) $(EXTRA_test_funasr_close_fence_retry_DEPENDENCIES)
+	@rm -f test_funasr_close_fence_retry$(EXEEXT)
+	$(AM_V_CCLD)$(LINK) $(test_funasr_close_fence_retry_OBJECTS) $(test_funasr_close_fence_retry_LDADD) $(LIBS)
 tests/test_funasr_control-test_funasr_control.$(OBJEXT):  \
 	tests/$(am__dirstamp) tests/$(DEPDIR)/$(am__dirstamp)
 src/test_funasr_control-funasr_control.$(OBJEXT): src/$(am__dirstamp) \
@@ -782,9 +811,11 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/asr_websocket_engine.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/funasr_audio.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/funasr_clock.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/funasr_close_fence_retry.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/funasr_control.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/funasr_json.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/funasr_ws_transport.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_control-funasr_control.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Po@am__quote@ # am--include-marker
@@ -792,6 +823,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_ws_transport-funasr_ws_transport.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_json_unescape-funasr_json.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_resample-funasr_audio.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_funasr_close_fence_retry-test_funasr_close_fence_retry.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Po@am__quote@ # am--include-marker
@@ -826,6 +858,34 @@ am--depfiles: $(am__depfiles_remade)
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LTCOMPILE) -c -o $@ $<
+
+tests/test_funasr_close_fence_retry-test_funasr_close_fence_retry.o: tests/test_funasr_close_fence_retry.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_close_fence_retry_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_funasr_close_fence_retry-test_funasr_close_fence_retry.o -MD -MP -MF tests/$(DEPDIR)/test_funasr_close_fence_retry-test_funasr_close_fence_retry.Tpo -c -o tests/test_funasr_close_fence_retry-test_funasr_close_fence_retry.o `test -f 'tests/test_funasr_close_fence_retry.c' || echo '$(srcdir)/'`tests/test_funasr_close_fence_retry.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_funasr_close_fence_retry-test_funasr_close_fence_retry.Tpo tests/$(DEPDIR)/test_funasr_close_fence_retry-test_funasr_close_fence_retry.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_funasr_close_fence_retry.c' object='tests/test_funasr_close_fence_retry-test_funasr_close_fence_retry.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_close_fence_retry_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tests/test_funasr_close_fence_retry-test_funasr_close_fence_retry.o `test -f 'tests/test_funasr_close_fence_retry.c' || echo '$(srcdir)/'`tests/test_funasr_close_fence_retry.c
+
+tests/test_funasr_close_fence_retry-test_funasr_close_fence_retry.obj: tests/test_funasr_close_fence_retry.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_close_fence_retry_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_funasr_close_fence_retry-test_funasr_close_fence_retry.obj -MD -MP -MF tests/$(DEPDIR)/test_funasr_close_fence_retry-test_funasr_close_fence_retry.Tpo -c -o tests/test_funasr_close_fence_retry-test_funasr_close_fence_retry.obj `if test -f 'tests/test_funasr_close_fence_retry.c'; then $(CYGPATH_W) 'tests/test_funasr_close_fence_retry.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_funasr_close_fence_retry.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_funasr_close_fence_retry-test_funasr_close_fence_retry.Tpo tests/$(DEPDIR)/test_funasr_close_fence_retry-test_funasr_close_fence_retry.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_funasr_close_fence_retry.c' object='tests/test_funasr_close_fence_retry-test_funasr_close_fence_retry.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_close_fence_retry_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tests/test_funasr_close_fence_retry-test_funasr_close_fence_retry.obj `if test -f 'tests/test_funasr_close_fence_retry.c'; then $(CYGPATH_W) 'tests/test_funasr_close_fence_retry.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_funasr_close_fence_retry.c'; fi`
+
+src/test_funasr_close_fence_retry-funasr_close_fence_retry.o: src/funasr_close_fence_retry.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_close_fence_retry_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_funasr_close_fence_retry-funasr_close_fence_retry.o -MD -MP -MF src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Tpo -c -o src/test_funasr_close_fence_retry-funasr_close_fence_retry.o `test -f 'src/funasr_close_fence_retry.c' || echo '$(srcdir)/'`src/funasr_close_fence_retry.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Tpo src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_close_fence_retry.c' object='src/test_funasr_close_fence_retry-funasr_close_fence_retry.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_close_fence_retry_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_funasr_close_fence_retry-funasr_close_fence_retry.o `test -f 'src/funasr_close_fence_retry.c' || echo '$(srcdir)/'`src/funasr_close_fence_retry.c
+
+src/test_funasr_close_fence_retry-funasr_close_fence_retry.obj: src/funasr_close_fence_retry.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_close_fence_retry_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_funasr_close_fence_retry-funasr_close_fence_retry.obj -MD -MP -MF src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Tpo -c -o src/test_funasr_close_fence_retry-funasr_close_fence_retry.obj `if test -f 'src/funasr_close_fence_retry.c'; then $(CYGPATH_W) 'src/funasr_close_fence_retry.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_close_fence_retry.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Tpo src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_close_fence_retry.c' object='src/test_funasr_close_fence_retry-funasr_close_fence_retry.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_close_fence_retry_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_funasr_close_fence_retry-funasr_close_fence_retry.obj `if test -f 'src/funasr_close_fence_retry.c'; then $(CYGPATH_W) 'src/funasr_close_fence_retry.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_close_fence_retry.c'; fi`
 
 tests/test_funasr_control-test_funasr_control.o: tests/test_funasr_control.c
 @am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_control_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_funasr_control-test_funasr_control.o -MD -MP -MF tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Tpo -c -o tests/test_funasr_control-test_funasr_control.o `test -f 'tests/test_funasr_control.c' || echo '$(srcdir)/'`tests/test_funasr_control.c
@@ -1234,6 +1294,13 @@ test_funasr_control.log: test_funasr_control$(EXEEXT)
 	--log-file $$b.log --trs-file $$b.trs \
 	$(am__common_driver_flags) $(AM_LOG_DRIVER_FLAGS) $(LOG_DRIVER_FLAGS) -- $(LOG_COMPILE) \
 	"$$tst" $(AM_TESTS_FD_REDIRECT)
+test_funasr_close_fence_retry.log: test_funasr_close_fence_retry$(EXEEXT)
+	@p='test_funasr_close_fence_retry$(EXEEXT)'; \
+	b='test_funasr_close_fence_retry'; \
+	$(am__check_pre) $(LOG_DRIVER) --test-name "$$f" \
+	--log-file $$b.log --trs-file $$b.trs \
+	$(am__common_driver_flags) $(AM_LOG_DRIVER_FLAGS) $(LOG_DRIVER_FLAGS) -- $(LOG_COMPILE) \
+	"$$tst" $(AM_TESTS_FD_REDIRECT)
 .test.log:
 	@p='$<'; \
 	$(am__set_b); \
@@ -1338,9 +1405,11 @@ distclean: distclean-am
 	-rm -f src/$(DEPDIR)/asr_websocket_engine.Plo
 	-rm -f src/$(DEPDIR)/funasr_audio.Plo
 	-rm -f src/$(DEPDIR)/funasr_clock.Plo
+	-rm -f src/$(DEPDIR)/funasr_close_fence_retry.Plo
 	-rm -f src/$(DEPDIR)/funasr_control.Plo
 	-rm -f src/$(DEPDIR)/funasr_json.Plo
 	-rm -f src/$(DEPDIR)/funasr_ws_transport.Plo
+	-rm -f src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Po
 	-rm -f src/$(DEPDIR)/test_funasr_control-funasr_control.Po
 	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Po
 	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Po
@@ -1348,6 +1417,7 @@ distclean: distclean-am
 	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_ws_transport.Po
 	-rm -f src/$(DEPDIR)/test_json_unescape-funasr_json.Po
 	-rm -f src/$(DEPDIR)/test_resample-funasr_audio.Po
+	-rm -f tests/$(DEPDIR)/test_funasr_close_fence_retry-test_funasr_close_fence_retry.Po
 	-rm -f tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Po
 	-rm -f tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Po
 	-rm -f tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Po
@@ -1400,9 +1470,11 @@ maintainer-clean: maintainer-clean-am
 	-rm -f src/$(DEPDIR)/asr_websocket_engine.Plo
 	-rm -f src/$(DEPDIR)/funasr_audio.Plo
 	-rm -f src/$(DEPDIR)/funasr_clock.Plo
+	-rm -f src/$(DEPDIR)/funasr_close_fence_retry.Plo
 	-rm -f src/$(DEPDIR)/funasr_control.Plo
 	-rm -f src/$(DEPDIR)/funasr_json.Plo
 	-rm -f src/$(DEPDIR)/funasr_ws_transport.Plo
+	-rm -f src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Po
 	-rm -f src/$(DEPDIR)/test_funasr_control-funasr_control.Po
 	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Po
 	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Po
@@ -1410,6 +1482,7 @@ maintainer-clean: maintainer-clean-am
 	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_ws_transport.Po
 	-rm -f src/$(DEPDIR)/test_json_unescape-funasr_json.Po
 	-rm -f src/$(DEPDIR)/test_resample-funasr_audio.Po
+	-rm -f tests/$(DEPDIR)/test_funasr_close_fence_retry-test_funasr_close_fence_retry.Po
 	-rm -f tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Po
 	-rm -f tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Po
 	-rm -f tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Po
