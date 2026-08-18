@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 
 #include "../src/tts_websocket_json.h"
 
@@ -82,6 +83,21 @@ static int test_malformed_member_after_sample_rate_fails_without_writing_value(v
         "sample_rate", &value) && value == 24000;
 }
 
+static int test_excessive_nesting_fails_without_writing_value(void)
+{
+    char json[256];
+    size_t pos = 0;
+    size_t i;
+    unsigned int value = 24000;
+
+    memcpy(json + pos, "{\"meta\":", 8); pos += 8;
+    for (i = 0; i < 65; i++) json[pos++] = '[';
+    json[pos++] = '0';
+    for (i = 0; i < 65; i++) json[pos++] = ']';
+    memcpy(json + pos, ",\"sample_rate\":8000}", 20); pos += 20;
+    return !tts_websocket_json_get_uint(json, pos, "sample_rate", &value) && value == 24000;
+}
+
 int main(void)
 {
     if (!test_top_level_sample_rate_ignores_sentence_text()) {
@@ -112,6 +128,10 @@ int main(void)
         fprintf(stderr, "test_malformed_member_after_sample_rate_fails_without_writing_value failed\n");
         return 1;
     }
-    puts("7/7 JSON parser tests passed");
+    if (!test_excessive_nesting_fails_without_writing_value()) {
+        fprintf(stderr, "test_excessive_nesting_fails_without_writing_value failed\n");
+        return 1;
+    }
+    puts("8/8 JSON parser tests passed");
     return 0;
 }

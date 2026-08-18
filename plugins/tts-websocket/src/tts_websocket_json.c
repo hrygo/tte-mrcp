@@ -3,6 +3,8 @@
 #include <limits.h>
 #include <string.h>
 
+#define TTS_WEBSOCKET_JSON_MAX_NESTING 64
+
 static size_t skip_whitespace(const char *json, size_t len, size_t pos)
 {
     while (pos < len && (json[pos] == ' ' || json[pos] == '\t' ||
@@ -53,9 +55,9 @@ static int skip_string(const char *json, size_t len, size_t *pos)
     return 0;
 }
 
-static int skip_value(const char *json, size_t len, size_t *pos);
+static int skip_value(const char *json, size_t len, size_t *pos, unsigned int depth);
 
-static int skip_object(const char *json, size_t len, size_t *pos)
+static int skip_object(const char *json, size_t len, size_t *pos, unsigned int depth)
 {
     size_t i = *pos + 1;
 
@@ -72,7 +74,7 @@ static int skip_object(const char *json, size_t len, size_t *pos)
         if (i >= len || json[i++] != ':') {
             return 0;
         }
-        if (!skip_value(json, len, &i)) {
+        if (!skip_value(json, len, &i, depth)) {
             return 0;
         }
         i = skip_whitespace(json, len, i);
@@ -93,7 +95,7 @@ static int skip_object(const char *json, size_t len, size_t *pos)
     }
 }
 
-static int skip_array(const char *json, size_t len, size_t *pos)
+static int skip_array(const char *json, size_t len, size_t *pos, unsigned int depth)
 {
     size_t i = skip_whitespace(json, len, *pos + 1);
 
@@ -102,7 +104,7 @@ static int skip_array(const char *json, size_t len, size_t *pos)
         return 1;
     }
     for (;;) {
-        if (!skip_value(json, len, &i)) {
+        if (!skip_value(json, len, &i, depth)) {
             return 0;
         }
         i = skip_whitespace(json, len, i);
@@ -159,15 +161,15 @@ static int skip_literal(const char *json, size_t len, size_t *pos, const char *l
     return 1;
 }
 
-static int skip_value(const char *json, size_t len, size_t *pos)
+static int skip_value(const char *json, size_t len, size_t *pos, unsigned int depth)
 {
     size_t i = skip_whitespace(json, len, *pos);
     int result;
 
     if (i >= len) return 0;
     if (json[i] == '"') result = skip_string(json, len, &i);
-    else if (json[i] == '{') result = skip_object(json, len, &i);
-    else if (json[i] == '[') result = skip_array(json, len, &i);
+    else if (json[i] == '{') result = depth < TTS_WEBSOCKET_JSON_MAX_NESTING && skip_object(json, len, &i, depth + 1);
+    else if (json[i] == '[') result = depth < TTS_WEBSOCKET_JSON_MAX_NESTING && skip_array(json, len, &i, depth + 1);
     else if (json[i] == 't') result = skip_literal(json, len, &i, "true");
     else if (json[i] == 'f') result = skip_literal(json, len, &i, "false");
     else if (json[i] == 'n') result = skip_literal(json, len, &i, "null");
@@ -228,7 +230,7 @@ int tts_websocket_json_get_uint(const char *json, size_t len, const char *key, u
             candidate = parsed;
             found = 1;
         }
-        else if (!skip_value(json, len, &pos)) return 0;
+        else if (!skip_value(json, len, &pos, 0)) return 0;
         pos = skip_whitespace(json, len, pos);
         if (pos >= len) return 0;
         if (json[pos] == '}') continue;
