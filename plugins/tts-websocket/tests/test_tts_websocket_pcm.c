@@ -92,6 +92,37 @@ static int test_8khz_passthrough_to_ulaw(void)
     return memcmp(output, expected, sizeof(expected)) == 0;
 }
 
+static int test_sample_rate_alignment_and_8khz_tail(void)
+{
+    const unsigned char input[] = {
+        0x00, 0x00, /* 0 -> 0xFF */
+        0xE8, 0x03  /* 1000 -> 0xCE */
+    };
+    const unsigned char expected[] = { 0xFF, 0xCE };
+    unsigned char carry[2] = { 0 };
+    unsigned char aligned[4] = { 0 };
+    unsigned char output[4] = { 0 };
+    size_t carry_len = 0;
+    size_t aligned_len;
+    size_t produced;
+
+    if (tts_websocket_pcm_alignment(8000) != 2 ||
+        tts_websocket_pcm_alignment(24000) != 6 ||
+        tts_websocket_pcm_alignment(16000) != 0) {
+        return 0;
+    }
+
+    aligned_len = tts_websocket_pcm_accumulate(carry, &carry_len, input,
+        sizeof(input), aligned, sizeof(aligned), tts_websocket_pcm_alignment(8000));
+    if (aligned_len != sizeof(input) || carry_len != 0) {
+        return 0;
+    }
+    produced = tts_websocket_pcm_to_ulaw(
+        aligned, aligned_len, 8000, output, sizeof(output));
+    return produced == sizeof(expected) &&
+        memcmp(output, expected, sizeof(expected)) == 0;
+}
+
 static int test_24khz_resample_to_ulaw(void)
 {
     /* 24kHz 输入做 3:1 移动平均降采样后再编码：
@@ -161,6 +192,10 @@ int main(void)
         fprintf(stderr, "test_8khz_passthrough_to_ulaw failed\n");
         return 1;
     }
+    if (!test_sample_rate_alignment_and_8khz_tail()) {
+        fprintf(stderr, "test_sample_rate_alignment_and_8khz_tail failed\n");
+        return 1;
+    }
     if (!test_24khz_resample_to_ulaw()) {
         fprintf(stderr, "test_24khz_resample_to_ulaw failed\n");
         return 1;
@@ -169,6 +204,6 @@ int main(void)
         fprintf(stderr, "test_reject_invalid_rate_and_alignment failed\n");
         return 1;
     }
-    puts("6/6 PCM streaming tests passed");
+    puts("7/7 PCM streaming tests passed");
     return 0;
 }

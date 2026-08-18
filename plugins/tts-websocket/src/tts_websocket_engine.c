@@ -28,6 +28,7 @@
  */
 
 #include "mrcp_synth_engine.h"
+#include "tts_websocket_json.h"
 #include "tts_websocket_pcm.h"
 #include "tts_websocket_lifecycle.h"
 #include "tts_websocket_thread.h"
@@ -268,6 +269,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_channel, const char *text, apr_size_t text_size, const char *voice_name);
 static apr_size_t tts_websocket_stream_read_audio(tts_websocket_channel_t *synth_channel, char *buffer, apr_size_t size, apt_bool_t *eof);
 static apt_bool_t tts_websocket_stream_write_audio(tts_websocket_channel_t *synth_channel, const char *data, apr_size_t size);
+static apt_bool_t tts_websocket_pcm_write_aligned(tts_websocket_channel_t *synth_channel, const char *pcm, apr_size_t pcm_size, apr_pool_t *pool);
 static void tts_websocket_stream_pool_destroy(tts_websocket_channel_t *synth_channel);
 static char* json_escape(const char *str, apr_size_t len, apr_pool_t *pool);
 static const char* json_get_type(const char *json, apr_size_t len, char *type_buf, apr_size_t type_buf_size);
@@ -448,6 +450,30 @@ static apt_bool_t tts_websocket_stream_write_audio(tts_websocket_channel_t *synt
 	/* 诊断：累计写入环形缓冲区的字节数（仅 WS writer 线程更新，无需加锁） */
 	synth_channel->stream_ring_bytes_written += total_written;
 
+	return TRUE;
+}
+
+static apt_bool_t tts_websocket_pcm_write_aligned(tts_websocket_channel_t *synth_channel, const char *pcm, apr_size_t pcm_size, apr_pool_t *pool)
+{
+	apr_size_t ulaw_size;
+	char *ulaw_data = apr_palloc(pool, pcm_size);
+
+	if(!ulaw_data) {
+		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Failed to allocate μ-law buffer, dropping frame");
+		return FALSE;
+	}
+	ulaw_size = tts_websocket_pcm_to_ulaw((const unsigned char*)pcm, pcm_size,
+		synth_channel->input_sample_rate, (unsigned char*)ulaw_data, pcm_size);
+	if(ulaw_size == 0) {
+		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+			"[WS] PCM→μ-law conversion failed (input_rate=%u, aligned_len=%"APR_SIZE_T_FMT"), dropping frame",
+			synth_channel->input_sample_rate, pcm_size);
+		return FALSE;
+	}
+	if(!tts_websocket_stream_write_audio(synth_channel, ulaw_data, ulaw_size)) {
+		LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Write interrupted by stop request, %d bytes not written", (int)ulaw_size);
+		return FALSE;
+	}
 	return TRUE;
 }
 
@@ -766,24 +792,22 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 					}
 				}
 
-				p = strstr(buffer, "sample_rate");
-				if(p) {
-					p += 11; /* strlen("sample_rate") */
-					while(*p == ' ' || *p == ':' || *p == '"' || *p == '\'') p++;
-					int sample_rate = atoi(p);
-					LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Sample rate: %d Hz", sample_rate);
+				{
+					unsigned int sample_rate;
+					if(tts_websocket_json_get_uint(buffer, (size_t)len, "sample_rate", &sample_rate)) {
+						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Sample rate: %u Hz", sample_rate);
 					/* 保存到 channel，供 PCM 处理路径决定是否需要重采样 */
 					if(sample_rate == 8000 || sample_rate == 24000) {
-						synth_channel->input_sample_rate = (unsigned int)sample_rate;
+						synth_channel->input_sample_rate = sample_rate;
 						synth_channel->input_sample_rate_warned = TRUE;
 					}
 					else {
 						LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
-							"[WS] Unsupported sample rate %d, keeping previous %u",
+							"[WS] Unsupported sample rate %u, keeping previous %u",
 							sample_rate, synth_channel->input_sample_rate);
 					}
-				}
-				else {
+					}
+					else {
 					/* 服务端未下发 sample_rate：按当前兜底值处理，首次提醒，
 					 * 避免服务端切换到 8kHz 后因字段缺失被静默 3:1 错转。 */
 					if(!synth_channel->input_sample_rate_warned) {
@@ -791,6 +815,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 							"[WS] sample_rate missing in audio.start, using %u Hz fallback",
 							synth_channel->input_sample_rate);
 						synth_channel->input_sample_rate_warned = TRUE;
+					}
 					}
 				}
 			}
@@ -830,11 +855,17 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 				}
 			}
 
-			/* 丢弃句子末尾不足3采样(6字节)的残留PCM字节（最多4字节，
-			 * = 0.083ms@24kHz），直接丢弃避免补零flush造成的波形跳变/爆音。 */
+			/* 8kHz 的完整 16-bit 尾采样可直接编码；24kHz 保持原有
+			 * 6 字节（3 采样）契约，不足一个块的字节仍丢弃。 */
 			if(synth_channel->pcm_accum_len > 0) {
-				LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Discarding %d residual accum bytes at audio.done (inaudible)",
-					synth_channel->pcm_accum_len);
+				if(synth_channel->input_sample_rate == 8000 && synth_channel->pcm_accum_len % 2 == 0) {
+					tts_websocket_pcm_write_aligned(synth_channel, synth_channel->pcm_accum,
+						synth_channel->pcm_accum_len, frame_pool);
+				}
+				else {
+					LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Discarding %d residual accum bytes at audio.done (inaudible)",
+						synth_channel->pcm_accum_len);
+				}
 			}
 			synth_channel->pcm_accum_len = 0;
 
@@ -922,17 +953,15 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 				 * 采样率由 audio.start 的 sample_rate 字段决定：
 				 * 8kHz 直通，24kHz 走 3:1 降采样（旧服务）。 */
 
-				/* 网络块可在任意字节处分割，accumulate 会把未达到对齐
-				 * 字节数的尾部保留到下一块，保证输入字节流不丢失、不重排。
-				 * 统一按 6 字节对齐（3 个 16-bit 采样）：8kHz 直通时
-				 * 6 字节块是合法偶数长度，可直接编码。 */
+				/* 网络块可在任意字节处分割：8kHz 按 2 字节采样，24kHz 按 6 字节降采样块累积。 */
 				{
+					size_t alignment = tts_websocket_pcm_alignment(synth_channel->input_sample_rate);
 					apr_size_t combined_capacity = (apr_size_t)synth_channel->pcm_accum_len + (apr_size_t)len;
 					char *combined = apr_palloc(frame_pool, combined_capacity > 0 ? combined_capacity : 1);
 					apr_size_t aligned_len;
 					size_t carry_len = (size_t)synth_channel->pcm_accum_len;
 
-					if(!combined) {
+					if(alignment == 0 || !combined) {
 						LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
 							"[WS] Failed to allocate PCM accumulation buffer, terminating stream without dropping bytes");
 						synth_channel->stream_error = 1;
@@ -943,44 +972,14 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 						(unsigned char *)synth_channel->pcm_accum,
 						&carry_len,
 						(const unsigned char *)buffer, (apr_size_t)len,
-						(unsigned char *)combined, combined_capacity, 6);
+						(unsigned char *)combined, combined_capacity, alignment);
 					synth_channel->pcm_accum_len = (int)carry_len;
 
 					/* 处理对齐部分：8kHz 输入跳过重采样，直接编码 μ-law；
 					 * 24kHz 输入先做 3:1 移动平均降采样再编码。两种路径的
 					 * 输出都是 8kHz PCMU，MRCP 客户端收到的 RTP 始终为 8kHz。 */
-					if(aligned_len >= 6) {
-						/* 输出上限为 aligned_len/2 字节（8k 直通），此容量恒足够 */
-						apr_size_t ulaw_size = 0;
-						char *ulaw_data = apr_palloc(frame_pool, aligned_len);
-						if(!ulaw_data) {
-							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Failed to allocate μ-law buffer, dropping frame");
-							continue;
-						}
-						ulaw_size = tts_websocket_pcm_to_ulaw(
-							(const unsigned char*)combined, aligned_len,
-							synth_channel->input_sample_rate,
-							(unsigned char*)ulaw_data, aligned_len);
-						if(ulaw_size == 0) {
-							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
-								"[WS] PCM→μ-law conversion failed (input_rate=%u, aligned_len=%"APR_SIZE_T_FMT"), dropping frame",
-								synth_channel->input_sample_rate, aligned_len);
-							continue;
-						}
-						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Encoded to μ-law: %"APR_SIZE_T_FMT" bytes (input_rate=%u, accum=%d)",
-							ulaw_size, synth_channel->input_sample_rate, synth_channel->pcm_accum_len);
-
-						/* 8k 录音已移至 MPF 发帧点（tts_websocket_stream_read_safe），
-						 * 录制内容与客户端实际收到的 RTP 载荷流一致，
-						 * 用于定位 ring→RTP 之间的丢音；此处不再落盘。 */
-
-						/* 3. 写入环形缓冲区 */
-						if(!tts_websocket_stream_write_audio(synth_channel, ulaw_data, ulaw_size)) {
-							LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Write interrupted by stop request, %d bytes not written",
-								(int)ulaw_size);
-						} else {
-							LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Written to ring buffer: %d bytes", (int)ulaw_size);
-						}
+					if(aligned_len >= alignment) {
+						tts_websocket_pcm_write_aligned(synth_channel, combined, aligned_len, frame_pool);
 					} else {
 						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Accumulated %d bytes (total accum=%d), waiting for more",
 							(int)len, synth_channel->pcm_accum_len);

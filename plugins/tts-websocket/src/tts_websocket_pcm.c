@@ -49,6 +49,17 @@ static short read_le16(const unsigned char *p)
     return (short)((unsigned short)((unsigned short)(p[1] << 8) | p[0]));
 }
 
+size_t tts_websocket_pcm_alignment(unsigned int input_rate)
+{
+    if (input_rate == 8000) {
+        return 2;
+    }
+    if (input_rate == 24000) {
+        return 6;
+    }
+    return 0;
+}
+
 size_t tts_websocket_pcm_accumulate(
     unsigned char *carry,
     size_t *carry_len,

@@ -3,6 +3,9 @@
 
 #include <stddef.h>
 
+/** Return the complete PCM block size required for the input sample rate. */
+size_t tts_websocket_pcm_alignment(unsigned int input_rate);
+
 /**
  * Append a network PCM chunk to a carry buffer and return only complete
  * alignment-sized blocks. Bytes in the carry buffer are never discarded.
