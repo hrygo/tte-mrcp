@@ -55,7 +55,31 @@ if {$stop_after_start == "stop"} {
         }
     }
     set timeout $saved_timeout
+    # Consume the prompt emitted after `run` before sending STOP.  Otherwise
+    # the STOP command and the first `show sessions` poll can be buffered
+    # together under concurrent CI load.
+    set saved_timeout $timeout
+    set timeout 5
+    expect {
+        -re {>}$ {}
+        timeout {
+            puts "RESULT:START_PROMPT_TIMEOUT"
+            exit 1
+        }
+    }
     send "stop 1\r"
+    # The next prompt proves the console has processed and queued STOP before
+    # the session-table polling commands are allowed to enter the console.
+    # STOP_DISPATCH_PROMPT: match only a complete console prompt, never a
+    # greater-than character embedded in MRCP or NLSML output.
+    expect {
+        -re {>}$ {}
+        timeout {
+            puts "RESULT:STOP_DISPATCH_TIMEOUT"
+            exit 1
+        }
+    }
+    set timeout $saved_timeout
 }
 
 set nlsml_text ""
