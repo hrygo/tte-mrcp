@@ -26,8 +26,62 @@ static int skip_string(const char *json, size_t len, size_t *pos)
             if (i >= len) {
                 return 0;
             }
+            if (json[i] == 'u') {
+                size_t hex_count;
+                for (hex_count = 0; hex_count < 4; hex_count++) {
+                    i++;
+                    if (i >= len || !((json[i] >= '0' && json[i] <= '9') ||
+                        (json[i] >= 'a' && json[i] <= 'f') ||
+                        (json[i] >= 'A' && json[i] <= 'F'))) {
+                        return 0;
+                    }
+                }
+            }
+            else if (json[i] != '"' && json[i] != '\\' && json[i] != '/' &&
+                json[i] != 'b' && json[i] != 'f' && json[i] != 'n' &&
+                json[i] != 'r' && json[i] != 't') {
+                return 0;
+            }
         }
         else if (json[i] == '"') {
+            *pos = i + 1;
+            return 1;
+        }
+        else if ((unsigned char)json[i] < 0x20) {
+            return 0;
+        }
+        i++;
+    }
+    return 0;
+}
+
+static int skip_container(const char *json, size_t len, size_t *pos)
+{
+    size_t i = *pos;
+    char closing;
+
+    if (i >= len || (json[i] != '{' && json[i] != '[')) {
+        return 0;
+    }
+    closing = (json[i] == '{') ? '}' : ']';
+    i++;
+    while (i < len) {
+        if (json[i] == '"') {
+            if (!skip_string(json, len, &i)) {
+                return 0;
+            }
+            continue;
+        }
+        if (json[i] == '{' || json[i] == '[') {
+            if (!skip_container(json, len, &i)) {
+                return 0;
+            }
+            continue;
+        }
+        if (json[i] == '}' || json[i] == ']') {
+            if (json[i] != closing) {
+                return 0;
+            }
             *pos = i + 1;
             return 1;
         }
@@ -55,7 +109,6 @@ static int key_matches(const char *json, size_t start, size_t end, const char *k
 static int skip_value(const char *json, size_t len, size_t *pos)
 {
     size_t i = *pos;
-    unsigned int nested = 0;
 
     if (i >= len) {
         return 0;
@@ -68,28 +121,7 @@ static int skip_value(const char *json, size_t len, size_t *pos)
         return 1;
     }
     if (json[i] == '{' || json[i] == '[') {
-        nested = 1;
-        i++;
-        while (i < len && nested > 0) {
-            if (json[i] == '"') {
-                if (!skip_string(json, len, &i)) {
-                    return 0;
-                }
-                continue;
-            }
-            if (json[i] == '{' || json[i] == '[') {
-                nested++;
-            }
-            else if (json[i] == '}' || json[i] == ']') {
-                nested--;
-            }
-            i++;
-        }
-        if (nested != 0) {
-            return 0;
-        }
-        *pos = i;
-        return 1;
+        return skip_container(json, len, pos);
     }
     while (i < len && json[i] != ',' && json[i] != '}') {
         i++;
