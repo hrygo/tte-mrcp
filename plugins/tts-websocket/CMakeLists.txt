@@ -4,6 +4,7 @@ project (tts_websocket)
 # Set source files
 set (TTS_WEBSOCKET_SOURCES
 	src/tts_websocket_engine.c
+	src/tts_websocket_completion.c
 	src/tts_websocket_pcm.c
 	src/tts_websocket_lifecycle.c
 	src/tts_websocket_thread.c

@@ -28,6 +28,7 @@
  */
 
 #include "mrcp_synth_engine.h"
+#include "tts_websocket_completion.h"
 #include "tts_websocket_pcm.h"
 #include "tts_websocket_lifecycle.h"
 #include "tts_websocket_thread.h"
@@ -136,6 +137,12 @@ struct tts_websocket_channel_t {
 	mrcp_message_t        *speak_request;
 	/** Pending stop response */
 	mrcp_message_t        *stop_response;
+	/** Exactly-once completion arbitration. */
+	tts_websocket_completion_t completion;
+	uint64_t               speak_generation;
+	apr_thread_mutex_t     *completion_mutex;
+	apr_thread_cond_t      *completion_cond;
+	volatile apr_time_t    stream_last_mpf_read_time;
 	/** Estimated time to complete */
 	apr_size_t             time_to_complete;
 	/** Is paused */
@@ -304,6 +311,8 @@ MRCP_PLUGIN_LOG_SOURCE_IMPLEMENT(SYNTH_PLUGIN,"SYNTH-PLUGIN")
 #define TTS_WEBSOCKET_DEFAULT_POSTROLL_MS 600
 #define TTS_WEBSOCKET_DEFAULT_RTP_PTIME_MS 20
 #define TTS_WEBSOCKET_MAX_POSTROLL_MS 5000
+#define TTS_WEBSOCKET_COMPLETION_GRACE_MS 1500
+#define TTS_WEBSOCKET_COMPLETION_MINIMUM_MS 500
 
 /* Log macros with session_id */
 #define LOG_WITH_SID(synth_channel, prio, fmt, ...) \
@@ -316,6 +325,79 @@ MRCP_PLUGIN_LOG_SOURCE_IMPLEMENT(SYNTH_PLUGIN,"SYNTH-PLUGIN")
         } \
         apt_log(SYNTH_LOG_MARK, prio, "zyTTS: [session_id=%s] " fmt, _sid, ##__VA_ARGS__); \
     } while(0)
+
+static const char *tts_websocket_completion_owner_name(
+	tts_websocket_completion_owner_e owner)
+{
+	switch(owner) {
+		case TTS_WEBSOCKET_COMPLETION_OWNER_MPF:
+			return "mpf";
+		case TTS_WEBSOCKET_COMPLETION_OWNER_WATCHDOG:
+			return "watchdog";
+		case TTS_WEBSOCKET_COMPLETION_OWNER_CANCELLED:
+			return "cancelled";
+		default:
+			return "none";
+	}
+}
+
+/* completion_mutex must be held.  Claim the active request without calling
+ * the MRCP API under the mutex. */
+static mrcp_message_t *tts_websocket_completion_claim_request_locked(
+	tts_websocket_channel_t *synth_channel,
+	uint64_t generation,
+	tts_websocket_completion_owner_e owner)
+{
+	mrcp_message_t *request;
+
+	if(!tts_websocket_completion_claim(
+		&synth_channel->completion, generation, owner)) {
+		return NULL;
+	}
+	request = synth_channel->speak_request;
+	synth_channel->speak_request = NULL;
+	synth_channel->stream_output_state = TTS_WEBSOCKET_OUTPUT_IDLE;
+	if(synth_channel->completion_cond) {
+		apr_thread_cond_broadcast(synth_channel->completion_cond);
+	}
+	return request;
+}
+
+static apt_bool_t tts_websocket_completion_event_send(
+	tts_websocket_channel_t *synth_channel,
+	mrcp_message_t *request,
+	mrcp_synth_completion_cause_e cause,
+	tts_websocket_completion_owner_e owner)
+{
+	mrcp_message_t *message;
+	mrcp_synth_header_t *synth_header;
+	apt_bool_t sent;
+
+	if(!synth_channel || !request) {
+		return FALSE;
+	}
+	message = mrcp_event_create(
+		request, SYNTHESIZER_SPEAK_COMPLETE, request->pool);
+	if(!message) {
+		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING,
+			"zyTTS: Failed to create SPEAK-COMPLETE owner=%s " APT_SIDRES_FMT,
+			tts_websocket_completion_owner_name(owner), MRCP_MESSAGE_SIDRES(request));
+		return FALSE;
+	}
+	synth_header = mrcp_resource_header_prepare(message);
+	if(synth_header) {
+		synth_header->completion_cause = cause;
+		mrcp_resource_header_property_add(
+			message, SYNTHESIZER_HEADER_COMPLETION_CAUSE);
+	}
+	message->start_line.request_state = MRCP_REQUEST_STATE_COMPLETE;
+	sent = mrcp_engine_channel_message_send(synth_channel->channel, message);
+	apt_log(SYNTH_LOG_MARK, sent ? APT_PRIO_INFO : APT_PRIO_WARNING,
+		"zyTTS: SPEAK-COMPLETE owner=%s cause=%d sent=%d " APT_SIDRES_FMT,
+		tts_websocket_completion_owner_name(owner), (int)cause, sent,
+		MRCP_MESSAGE_SIDRES(request));
+	return sent;
+}
 
 
 
@@ -551,6 +633,77 @@ static apr_size_t tts_websocket_stream_read_audio(tts_websocket_channel_t *synth
 	}
 
 	return to_read;
+}
+
+static void tts_websocket_completion_watchdog_wait(
+	tts_websocket_channel_t *synth_channel)
+{
+	apr_size_t remaining_bytes = 0;
+	uint64_t generation;
+	uint64_t timeout_ms;
+	apr_time_t deadline;
+	mrcp_message_t *request = NULL;
+
+	if(!synth_channel->completion_mutex || !synth_channel->completion_cond) {
+		return;
+	}
+	if(synth_channel->stream_buffer_mutex && synth_channel->stream_buffer_size > 1) {
+		apr_thread_mutex_lock(synth_channel->stream_buffer_mutex);
+		remaining_bytes =
+			(synth_channel->stream_write_pos + synth_channel->stream_buffer_size
+			 - synth_channel->stream_read_pos) % synth_channel->stream_buffer_size;
+		apr_thread_mutex_unlock(synth_channel->stream_buffer_mutex);
+	}
+	timeout_ms = tts_websocket_completion_timeout_ms(
+		(uint64_t)remaining_bytes,
+		(uint64_t)synth_channel->tts_engine->completion_postroll_ms,
+		TTS_WEBSOCKET_COMPLETION_GRACE_MS,
+		TTS_WEBSOCKET_COMPLETION_MINIMUM_MS);
+	deadline = apr_time_now() + (apr_interval_time_t)(timeout_ms * 1000);
+
+	apr_thread_mutex_lock(synth_channel->completion_mutex);
+	generation = synth_channel->speak_generation;
+	LOG_WITH_SID(synth_channel, APT_PRIO_INFO,
+		"[WATCHDOG] Armed: generation=%"APR_UINT64_T_FMT", remaining=%"APR_SIZE_T_FMT
+		"B, timeout=%"APR_UINT64_T_FMT"ms, output_state=%d",
+		(apr_uint64_t)generation, remaining_bytes, (apr_uint64_t)timeout_ms,
+		(int)synth_channel->stream_output_state);
+	while(synth_channel->completion.active &&
+	      synth_channel->completion.generation == generation &&
+	      !synth_channel->stream_stop_requested) {
+		apr_time_t now = apr_time_now();
+		if(now >= deadline) {
+			break;
+		}
+		apr_thread_cond_timedwait(
+			synth_channel->completion_cond,
+			synth_channel->completion_mutex,
+			deadline - now);
+	}
+	if(synth_channel->completion.active &&
+	   synth_channel->completion.generation == generation &&
+	   !synth_channel->stream_stop_requested && apr_time_now() >= deadline) {
+		request = tts_websocket_completion_claim_request_locked(
+			synth_channel, generation,
+			TTS_WEBSOCKET_COMPLETION_OWNER_WATCHDOG);
+	}
+	apr_thread_mutex_unlock(synth_channel->completion_mutex);
+
+	if(request) {
+		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING,
+			"zyTTS: [WATCHDOG] Completion deadline exceeded: generation=%"APR_UINT64_T_FMT
+			", ring_written=%"APR_SIZE_T_FMT"B, ring_read=%"APR_SIZE_T_FMT
+			"B, last_mpf_age=%"APR_TIME_T_FMT"us, output_state=%d " APT_SIDRES_FMT,
+			(apr_uint64_t)generation,
+			synth_channel->stream_ring_bytes_written,
+			synth_channel->stream_ring_bytes_read,
+			apr_time_now() - synth_channel->stream_last_mpf_read_time,
+			(int)synth_channel->stream_output_state,
+			MRCP_MESSAGE_SIDRES(request));
+		tts_websocket_completion_event_send(
+			synth_channel, request, SYNTHESIZER_COMPLETION_CAUSE_ERROR,
+			TTS_WEBSOCKET_COMPLETION_OWNER_WATCHDOG);
+	}
 }
 
 /**
@@ -1068,6 +1221,9 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 		synth_channel->record_file_orig = NULL;
 		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[RECORD] Original audio file closed");
 	}
+	if(session_done_received && !synth_channel->stream_stop_requested) {
+		tts_websocket_completion_watchdog_wait(synth_channel);
+	}
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Stream thread exiting, stream_complete=%d", synth_channel->stream_complete);
 	/* 销毁线程私有临时pool，释放所有本轮session累积的临时分配 */
 	if(frame_pool) {
@@ -1252,6 +1408,12 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Step 2: Before ring buffer log");
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Step 3: Ring buffer initialized");
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Step 4: After all logs");
+
+	apr_thread_mutex_lock(synth_channel->completion_mutex);
+	synth_channel->speak_generation =
+		tts_websocket_completion_begin(&synth_channel->completion);
+	synth_channel->stream_last_mpf_read_time = apr_time_now();
+	apr_thread_mutex_unlock(synth_channel->completion_mutex);
 
 	/* MPF read 回调的入口屏障：仅在 ring buffer 与 mutex/cond 全部就绪后才
 	 * 放行回调，避免 setup 窗口内回调看到 NULL buffer/mutex（trylock(NULL)）
@@ -1625,10 +1787,18 @@ static mrcp_engine_channel_t* tts_websocket_engine_channel_create(mrcp_engine_t 
 	mpf_termination_t *termination; 
 
 	/* create TTS WebSocket channel */
-	tts_websocket_channel_t *synth_channel = apr_palloc(pool,sizeof(tts_websocket_channel_t));
+	tts_websocket_channel_t *synth_channel = apr_pcalloc(pool,sizeof(tts_websocket_channel_t));
 	synth_channel->tts_engine = engine->obj;
 	synth_channel->speak_request = NULL;
 	synth_channel->stop_response = NULL;
+	tts_websocket_completion_init(&synth_channel->completion);
+	if(apr_thread_mutex_create(
+		&synth_channel->completion_mutex, APR_THREAD_MUTEX_DEFAULT, pool) != APR_SUCCESS ||
+	   apr_thread_cond_create(&synth_channel->completion_cond, pool) != APR_SUCCESS) {
+		apt_log(SYNTH_LOG_MARK, APT_PRIO_WARNING,
+			"ZyTTS: Failed to create completion synchronization objects");
+		return NULL;
+	}
 	synth_channel->time_to_complete = 0;
 	synth_channel->paused = FALSE;
 	synth_channel->audio_file = NULL;
@@ -1862,12 +2032,23 @@ static void tts_websocket_recording_close(tts_websocket_channel_t *synth_channel
 static void tts_websocket_channel_cleanup_audio(tts_websocket_channel_t *synth_channel)
 {
 	tts_websocket_stream_lifecycle_begin_close(&synth_channel->stream_lifecycle);
+	if(synth_channel->completion_mutex) {
+		apr_thread_mutex_lock(synth_channel->completion_mutex);
+		tts_websocket_completion_cancel(
+			&synth_channel->completion, synth_channel->speak_generation);
+		synth_channel->speak_request = NULL;
+		if(synth_channel->completion_cond) {
+			apr_thread_cond_broadcast(synth_channel->completion_cond);
+		}
+		apr_thread_mutex_unlock(synth_channel->completion_mutex);
+	} else {
+		synth_channel->speak_request = NULL;
+	}
 	if(synth_channel->audio_file) {
 		fclose(synth_channel->audio_file);
 		synth_channel->audio_file = NULL;
 	}
 	synth_channel->time_to_complete = 0;
-	synth_channel->speak_request = NULL;
 	synth_channel->stop_response = NULL;
 	synth_channel->paused = FALSE;
 
@@ -2350,6 +2531,11 @@ static apt_bool_t tts_websocket_channel_stop(mrcp_engine_channel_t *channel, mrc
 {
 	tts_websocket_channel_t *synth_channel = channel->method_obj;
 	/* store the request, make sure there is no more activity and only then send the response */
+	apr_thread_mutex_lock(synth_channel->completion_mutex);
+	tts_websocket_completion_cancel(
+		&synth_channel->completion, synth_channel->speak_generation);
+	apr_thread_cond_broadcast(synth_channel->completion_cond);
+	apr_thread_mutex_unlock(synth_channel->completion_mutex);
 	synth_channel->stop_response = response;
 	return TRUE;
 }
@@ -2639,6 +2825,7 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 		return TRUE;
 	}
 	lifecycle_entered = TRUE;
+	synth_channel->stream_last_mpf_read_time = apr_time_now();
 
 	/* MPF bridge reuses this frame. Never let a short EOF tail shrink it. */
 	if(synth_channel->stream_codec_frame_size == 0) {
@@ -2820,6 +3007,16 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 	}
 
 	if(completed) {
+		mrcp_message_t *completion_request = NULL;
+		if(apr_thread_mutex_trylock(synth_channel->completion_mutex) == APR_SUCCESS) {
+			completion_request = tts_websocket_completion_claim_request_locked(
+				synth_channel, synth_channel->speak_generation,
+				TTS_WEBSOCKET_COMPLETION_OWNER_MPF);
+			apr_thread_mutex_unlock(synth_channel->completion_mutex);
+		}
+		if(!completion_request) {
+			goto stream_read_done;
+		}
 		/* ========== 丢音诊断汇总：定位丢失环节 ==========
 		 *   ring_written == ring_read 且 dropped == 0
 		 *     → 音频已全部交给 MPF，丢失在 RTP 发送/网络/客户端侧
@@ -2842,28 +3039,15 @@ static apt_bool_t tts_websocket_stream_read_safe(mpf_audio_stream_t *stream, mpf
 			(unsigned)synth_channel->stream_partial_wait_count,
 			(unsigned)synth_channel->stream_buffer_empty_count,
 			terminal_error ? 1 : 0);
-		mrcp_message_t *message = mrcp_event_create(
-			active_request,
-			SYNTHESIZER_SPEAK_COMPLETE,
-			active_request->pool);
-		if(message) {
-			mrcp_synth_header_t *synth_header = mrcp_resource_header_prepare(message);
-			if(synth_header) {
-				synth_header->completion_cause = terminal_error
-					? SYNTHESIZER_COMPLETION_CAUSE_ERROR
-					: SYNTHESIZER_COMPLETION_CAUSE_NORMAL;
-				mrcp_resource_header_property_add(
-					message, SYNTHESIZER_HEADER_COMPLETION_CAUSE);
-			}
-			message->start_line.request_state = MRCP_REQUEST_STATE_COMPLETE;
-			synth_channel->speak_request = NULL;
-			synth_channel->stream_output_state = TTS_WEBSOCKET_OUTPUT_IDLE;
-			if(synth_channel->audio_file) {
-				fclose(synth_channel->audio_file);
-				synth_channel->audio_file = NULL;
-			}
-			mrcp_engine_channel_message_send(synth_channel->channel, message);
+		if(synth_channel->audio_file) {
+			fclose(synth_channel->audio_file);
+			synth_channel->audio_file = NULL;
 		}
+		tts_websocket_completion_event_send(
+			synth_channel, completion_request,
+			terminal_error ? SYNTHESIZER_COMPLETION_CAUSE_ERROR
+			               : SYNTHESIZER_COMPLETION_CAUSE_NORMAL,
+			TTS_WEBSOCKET_COMPLETION_OWNER_MPF);
 		/* 播放完成（含 post-roll 最后一帧），此处关闭诊断录音文件。
 		 * 录音文件的唯一 writer 是本 MPF 回调线程。 */
 		tts_websocket_recording_close(synth_channel);
