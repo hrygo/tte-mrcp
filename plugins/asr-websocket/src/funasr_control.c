@@ -105,8 +105,15 @@ apt_bool_t funasr_control_handle_event(
         }
         control->worker_closed = TRUE;
         control->close_pending = FALSE;
-        control->stop_pending = FALSE;
         control->active = FALSE;
+        if (control->stop_pending) {
+            control->stop_pending = FALSE;
+            control->terminal = TRUE;
+            control->accepting_media = FALSE;
+            if (!vtable->send_stop_response(obj, control->generation)) {
+                return FALSE;
+            }
+        }
         return vtable->send_close_response(obj);
     }
 
