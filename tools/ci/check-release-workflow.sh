@@ -79,36 +79,60 @@ if [ -f "$WORKFLOW" ] && ! has_v_tag_trigger; then
   failures=$((failures + 1))
 fi
 require_match "$WORKFLOW" 'release/\*\*' 'release/** branch trigger'
-require_match "$WORKFLOW" 'actions/upload-artifact@v4' 'upload-artifact@v4'
 require_match "$WORKFLOW" 'sha256sum' 'sha256sum checksum handling'
-require_match "$WORKFLOW" '^  verify-linux:' 'verify-linux job'
+require_match "$WORKFLOW" 'tools/ci/verify-linux-package\.sh' 'in-job runtime verification'
 
 if [ -f "$WORKFLOW" ]; then
-  verify_job=$(job_block verify-linux)
-  case "$verify_job" in
-    *'needs:'*'build-linux'*) ;;
+  prune_job=$(job_block prune-artifacts)
+  case "$prune_job" in
+    *'actions: write'*'status=in_progress'*) ;;
     *)
-      printf '%s\n' 'missing: verify-linux needs build-linux' >&2
+      printf '%s\n' 'missing: active-run-safe artifact pruning permissions or filter' >&2
       failures=$((failures + 1))
       ;;
   esac
 
-  release_job=$(job_block release)
-  case "$release_job" in
-    *'github.event_name == '\''push'\'''*'github.ref_type == '\''tag'\'''*'startsWith(github.ref_name, '\''v'\'')'*) ;;
+  case "$prune_job" in
+    *'map(select(.name | startswith('*)
+      printf '%s\n' 'artifact pruning must not be restricted to a name prefix' >&2
+      failures=$((failures + 1))
+      ;;
+  esac
+
+  case "$prune_job" in
+    *'actions/artifacts/$artifact_id" \\'*'|| true'*)
+      printf '%s\n' 'artifact deletion failures must not be ignored' >&2
+      failures=$((failures + 1))
+      ;;
+  esac
+
+  case "$prune_job" in
+    *'continue-on-error: true'*)
+      printf '%s\n' 'artifact pruning failures must fail the job' >&2
+      failures=$((failures + 1))
+      ;;
+  esac
+
+  build_job=$(job_block build-linux)
+  case "$build_job" in
+    *'tools/ci/verify-linux-package.sh'*'softprops/action-gh-release@v2'*) ;;
+    *)
+      printf '%s\n' 'missing: in-job Release asset upload' >&2
+      failures=$((failures + 1))
+      ;;
+  esac
+  case "$build_job" in
+    *'github.ref_type == '*) ;;
     *)
       printf '%s\n' 'missing: tag-only Release condition' >&2
       failures=$((failures + 1))
       ;;
   esac
 
-  case "$release_job" in
-    *'softprops/action-gh-release@v2'*'files:'*) ;;
-    *)
-      printf '%s\n' 'missing: Release asset upload' >&2
-      failures=$((failures + 1))
-      ;;
-  esac
+  if rg -q 'actions/(upload|download)-artifact@' "$WORKFLOW"; then
+    printf '%s\n' 'workflow must not use Actions artifacts for package transfer' >&2
+    failures=$((failures + 1))
+  fi
 fi
 
 require_match "$README" 'docs/deployment/release-artifacts\.md' 'README deployment documentation entry'
