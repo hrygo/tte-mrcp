@@ -98,6 +98,16 @@ static int test_excessive_nesting_fails_without_writing_value(void)
     return !tts_websocket_json_get_uint(json, pos, "sample_rate", &value) && value == 24000;
 }
 
+static int test_escaped_sample_rate_key(void)
+{
+    const char escaped[] = "{\"sample_\\u0072ate\":8000}";
+    const char non_ascii[] = "{\"sample_\\u00e9ate\":8000}";
+    unsigned int value = 24000;
+    if (!tts_websocket_json_get_uint(escaped, sizeof(escaped) - 1, "sample_rate", &value) || value != 8000) return 0;
+    value = 24000;
+    return !tts_websocket_json_get_uint(non_ascii, sizeof(non_ascii) - 1, "sample_rate", &value) && value == 24000;
+}
+
 int main(void)
 {
     if (!test_top_level_sample_rate_ignores_sentence_text()) {
@@ -132,6 +142,10 @@ int main(void)
         fprintf(stderr, "test_excessive_nesting_fails_without_writing_value failed\n");
         return 1;
     }
-    puts("8/8 JSON parser tests passed");
+    if (!test_escaped_sample_rate_key()) {
+        fprintf(stderr, "test_escaped_sample_rate_key failed\n");
+        return 1;
+    }
+    puts("9/9 JSON parser tests passed");
     return 0;
 }

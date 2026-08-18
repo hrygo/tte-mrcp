@@ -182,10 +182,44 @@ static int skip_value(const char *json, size_t len, size_t *pos, unsigned int de
 static int key_matches(const char *json, size_t start, size_t end, const char *key)
 {
     size_t key_len = strlen(key);
-    size_t i;
-    if (end - start != key_len) return 0;
-    for (i = start; i < end; i++) if (json[i] == '\\') return 0;
-    return memcmp(json + start, key, key_len) == 0;
+    size_t i = start;
+    size_t key_pos = 0;
+
+    while (i < end && key_pos < key_len) {
+        unsigned int decoded;
+        if (json[i] != '\\') {
+            decoded = (unsigned char)json[i++];
+        }
+        else {
+            char escape;
+            if (++i >= end) return 0;
+            escape = json[i++];
+            if (escape == 'u') {
+                size_t hex_count;
+                decoded = 0;
+                for (hex_count = 0; hex_count < 4; hex_count++) {
+                    char hex;
+                    if (i >= end) return 0;
+                    hex = json[i++];
+                    decoded <<= 4;
+                    if (hex >= '0' && hex <= '9') decoded |= (unsigned int)(hex - '0');
+                    else if (hex >= 'a' && hex <= 'f') decoded |= (unsigned int)(hex - 'a' + 10);
+                    else if (hex >= 'A' && hex <= 'F') decoded |= (unsigned int)(hex - 'A' + 10);
+                    else return 0;
+                }
+                if (decoded > 0x7f) return 0;
+            }
+            else if (escape == '"' || escape == '\\' || escape == '/') decoded = (unsigned char)escape;
+            else if (escape == 'b') decoded = '\b';
+            else if (escape == 'f') decoded = '\f';
+            else if (escape == 'n') decoded = '\n';
+            else if (escape == 'r') decoded = '\r';
+            else if (escape == 't') decoded = '\t';
+            else return 0;
+        }
+        if (decoded != (unsigned char)key[key_pos++]) return 0;
+    }
+    return i == end && key_pos == key_len;
 }
 
 int tts_websocket_json_get_uint(const char *json, size_t len, const char *key, unsigned int *value)
