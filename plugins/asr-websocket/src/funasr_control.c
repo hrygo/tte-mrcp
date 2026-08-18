@@ -103,6 +103,14 @@ apt_bool_t funasr_control_handle_event(
         if (vtable->join_closed(obj) != APR_SUCCESS) {
             return FALSE;
         }
+        if (control->stop_pending) {
+            if (!vtable->send_stop_response(obj, control->generation)) {
+                return FALSE;
+            }
+        }
+        if (!vtable->send_close_response(obj)) {
+            return FALSE;
+        }
         control->worker_closed = TRUE;
         control->close_pending = FALSE;
         control->active = FALSE;
@@ -110,11 +118,8 @@ apt_bool_t funasr_control_handle_event(
             control->stop_pending = FALSE;
             control->terminal = TRUE;
             control->accepting_media = FALSE;
-            if (!vtable->send_stop_response(obj, control->generation)) {
-                return FALSE;
-            }
         }
-        return vtable->send_close_response(obj);
+        return TRUE;
     }
 
     if (event->generation != control->generation) {

@@ -536,12 +536,15 @@ static apt_bool_t funasr_control_send_stop(
     funasr_channel_t *channel = obj;
     mrcp_message_t *response = channel->stop_response;
     (void)generation;
-    channel->stop_response = NULL;
-    channel->recog_request = NULL;
     if (!response) {
         return FALSE;
     }
-    return mrcp_engine_channel_message_send(channel->channel, response);
+    if (!mrcp_engine_channel_message_send(channel->channel, response)) {
+        return FALSE;
+    }
+    channel->stop_response = NULL;
+    channel->recog_request = NULL;
+    return TRUE;
 }
 
 static apt_bool_t funasr_control_send_close(void *obj)
@@ -960,11 +963,18 @@ static void funasr_transport_event_on_task(
             (unsigned long)event->metrics.ws_rx_messages,
             (int)event->metrics.completion_failure);
     }
-    funasr_control_handle_event(
-        &entry->channel->control,
-        event,
-        &control_vtable,
-        entry->channel);
+    if (!funasr_control_handle_event(
+            &entry->channel->control,
+            event,
+            &control_vtable,
+            entry->channel)) {
+        LOG_WITH_SID(
+            entry->channel,
+            APT_PRIO_WARNING,
+            "transport event handling failed generation=%lu type=%d",
+            (unsigned long)event->generation,
+            (int)event->type);
+    }
     funasr_transport_event_destroy(event);
 }
 

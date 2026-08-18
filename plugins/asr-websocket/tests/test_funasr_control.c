@@ -16,11 +16,22 @@ typedef struct fake_sink_t {
     int close_requests;
     int joins;
     apt_bool_t reject_cancel;
+    apt_bool_t reject_stop;
     mrcp_recog_completion_cause_e last_cause;
     char last_text[64];
+    char call_order[16];
+    size_t call_order_length;
 } fake_sink_t;
 
 static int failures;
+
+static void fake_sink_record_call(fake_sink_t *sink, char call)
+{
+    if (sink->call_order_length + 1 < sizeof(sink->call_order)) {
+        sink->call_order[sink->call_order_length++] = call;
+        sink->call_order[sink->call_order_length] = '\0';
+    }
+}
 
 #define CHECK_TRUE(label, expression) \
     do { \
@@ -59,13 +70,15 @@ static apt_bool_t fake_stop(void *obj, funasr_generation_t generation)
     fake_sink_t *sink = obj;
     (void)generation;
     sink->stop_responses++;
-    return TRUE;
+    fake_sink_record_call(sink, 'S');
+    return sink->reject_stop ? FALSE : TRUE;
 }
 
 static apt_bool_t fake_close_response(void *obj)
 {
     fake_sink_t *sink = obj;
     sink->close_responses++;
+    fake_sink_record_call(sink, 'C');
     return TRUE;
 }
 
@@ -88,6 +101,7 @@ static apr_status_t fake_join(void *obj)
 {
     fake_sink_t *sink = obj;
     sink->joins++;
+    fake_sink_record_call(sink, 'J');
     return APR_SUCCESS;
 }
 
@@ -283,6 +297,42 @@ static void test_worker_close_settles_pending_stop(void)
     CHECK_TRUE("worker close joins once", sink.joins == 1);
     CHECK_TRUE("worker close sends STOP response", sink.stop_responses == 1);
     CHECK_TRUE("worker close sends close response", sink.close_responses == 1);
+    CHECK_TRUE("worker close responses are ordered after join",
+               strcmp(sink.call_order, "JSC") == 0);
+    CHECK_TRUE("worker close commits closed state", control.worker_closed);
+    CHECK_TRUE("worker close settles STOP state", !control.stop_pending);
+    CHECK_TRUE("worker close commits terminal state", control.terminal);
+}
+
+static void test_worker_close_retries_stop_after_send_failure(void)
+{
+    funasr_control_t control;
+    fake_sink_t sink;
+    funasr_transport_event_t event;
+
+    memset(&sink, 0, sizeof(sink));
+    sink.reject_stop = TRUE;
+    funasr_control_init(&control);
+    funasr_control_begin_generation(&control, 10);
+    CHECK_TRUE("STOP requests transport cancel",
+               funasr_control_request_stop(&control, &fake_vtable, &sink));
+    event = event_make(10, FUNASR_EVENT_WORKER_CLOSED);
+    CHECK_TRUE("worker close reports rejected STOP response",
+               !funasr_control_handle_event(&control, &event, &fake_vtable, &sink));
+    CHECK_TRUE("rejected STOP joins once", sink.joins == 1);
+    CHECK_TRUE("rejected STOP sends no close response", sink.close_responses == 0);
+    CHECK_TRUE("rejected STOP leaves fence uncommitted", !control.worker_closed);
+    CHECK_TRUE("rejected STOP stays pending", control.stop_pending);
+    CHECK_TRUE("rejected STOP leaves terminal uncommitted", !control.terminal);
+
+    sink.reject_stop = FALSE;
+    CHECK_TRUE("worker close retries STOP response",
+               funasr_control_handle_event(&control, &event, &fake_vtable, &sink));
+    CHECK_TRUE("retried close joins again", sink.joins == 2);
+    CHECK_TRUE("retried STOP is followed by close response", sink.close_responses == 1);
+    CHECK_TRUE("retried close commits closed state", control.worker_closed);
+    CHECK_TRUE("retried close settles STOP state", !control.stop_pending);
+    CHECK_TRUE("retried close commits terminal state", control.terminal);
 }
 
 static void test_unexpected_close_fence_releases_transport(void)
@@ -318,6 +368,7 @@ int main(void)
     test_stop_during_terminal_commit_responds();
     test_close_fence_is_only_close_release();
     test_worker_close_settles_pending_stop();
+    test_worker_close_retries_stop_after_send_failure();
     test_unexpected_close_fence_releases_transport();
     if (failures != 0) {
         fprintf(stderr, "%d control assertion(s) failed\n", failures);
