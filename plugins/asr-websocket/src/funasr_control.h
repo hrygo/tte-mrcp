@@ -19,6 +19,8 @@ typedef struct funasr_control_t {
     apt_bool_t close_pending;
     apt_bool_t accepting_media;
     apt_bool_t worker_closed;
+    apt_bool_t worker_joined;
+    apt_bool_t stop_responded;
 } funasr_control_t;
 
 typedef struct funasr_control_vtable_t {

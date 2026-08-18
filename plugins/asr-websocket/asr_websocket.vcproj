@@ -282,6 +282,7 @@
 		>
 			<File RelativePath=".\src\funasr_audio.h"></File>
 			<File RelativePath=".\src\funasr_clock.h"></File>
+			<File RelativePath=".\src\funasr_close_fence_retry.h"></File>
 			<File RelativePath=".\src\funasr_control.h"></File>
 			<File RelativePath=".\src\funasr_json.h"></File>
 			<File RelativePath=".\src\funasr_ws_transport.h"></File>
@@ -296,6 +297,7 @@
 			</File>
 			<File RelativePath=".\src\funasr_audio.c"></File>
 			<File RelativePath=".\src\funasr_clock.c"></File>
+			<File RelativePath=".\src\funasr_close_fence_retry.c"></File>
 			<File RelativePath=".\src\funasr_control.c"></File>
 			<File RelativePath=".\src\funasr_json.c"></File>
 			<File RelativePath=".\src\funasr_ws_transport.c"></File>

@@ -3,6 +3,7 @@
 #include "apt_log.h"
 #include "funasr_audio.h"
 #include "funasr_clock.h"
+#include "funasr_close_fence_retry.h"
 #include "funasr_control.h"
 #include "funasr_ws_transport.h"
 
@@ -107,6 +108,13 @@ static apt_bool_t funasr_stream_write(
     mpf_audio_stream_t *stream,
     const mpf_frame_t *frame);
 static apt_bool_t funasr_msg_process(apt_task_t *task, apt_task_msg_t *msg);
+static void funasr_engine_maybe_close_respond(funasr_engine_t *engine);
+static funasr_registry_entry_t *funasr_registry_find(
+    funasr_engine_t *engine,
+    funasr_transport_id_t id);
+static void funasr_registry_remove(
+    funasr_engine_t *engine,
+    funasr_registry_entry_t *target);
 
 static const mrcp_engine_method_vtable_t engine_vtable = {
     funasr_engine_destroy,
@@ -160,6 +168,90 @@ static apt_bool_t funasr_task_signal(
     payload->event = event;
     return apt_task_msg_signal(task, msg);
 }
+
+static void funasr_close_fence_abort(
+    funasr_engine_t *engine,
+    funasr_registry_entry_t *entry,
+    funasr_transport_event_t *event)
+{
+    funasr_channel_t *channel = entry->channel;
+
+    if (!channel || !channel->control.worker_joined) {
+        apt_log(
+            APT_LOG_MARK,
+            APT_PRIO_ERROR,
+            "asr_websocket: refusing unsafe STOP close fence fallback before worker join");
+        return;
+    }
+    LOG_WITH_SID(
+        channel,
+        APT_PRIO_ERROR,
+        "STOP close fence retries exhausted generation=%lu retries=%u; "
+        "releasing joined transport without a STOP response",
+        (unsigned long)event->generation,
+        (unsigned int)event->close_fence_retry_count);
+    funasr_registry_remove(engine, entry);
+    channel->transport = NULL;
+    channel->stop_response = NULL;
+    channel->recog_request = NULL;
+    channel->control.active = FALSE;
+    channel->control.terminal = TRUE;
+    channel->control.stop_pending = FALSE;
+    channel->control.close_pending = FALSE;
+    channel->control.accepting_media = FALSE;
+    channel->control.worker_closed = TRUE;
+    if (channel->close_response_pending) {
+        channel->close_response_pending = FALSE;
+        if (!mrcp_engine_channel_close_respond(channel->channel)) {
+            LOG_WITH_SID(
+                channel,
+                APT_PRIO_ERROR,
+                "forced channel close response failed after STOP fence exhaustion");
+        }
+    }
+    funasr_engine_maybe_close_respond(engine);
+}
+
+static apt_bool_t funasr_close_fence_requeue(void *obj, funasr_transport_event_t *event)
+{
+    return funasr_task_signal(obj, FUNASR_MSG_TRANSPORT_EVENT, NULL, NULL, event);
+}
+static void funasr_close_fence_release(void *obj, funasr_transport_event_t *event)
+{
+    (void)obj;
+    funasr_transport_event_destroy(event);
+}
+static apt_bool_t funasr_close_fence_joined(void *obj, funasr_transport_event_t *event)
+{
+    funasr_engine_t *engine = obj;
+    funasr_registry_entry_t *entry;
+    entry = funasr_registry_find(engine, event->transport_id);
+    return entry && entry->channel && entry->channel->control.worker_joined;
+}
+static void funasr_close_fence_fallback(void *obj, funasr_transport_event_t *event)
+{
+    funasr_engine_t *engine = obj;
+    funasr_registry_entry_t *entry = funasr_registry_find(engine, event->transport_id);
+    if (entry) funasr_close_fence_abort(engine, entry, event);
+}
+static void funasr_close_fence_retain(void *obj, funasr_transport_event_t *event)
+{
+    (void)obj;
+    apt_log(APT_LOG_MARK, APT_PRIO_ERROR, "asr_websocket: retaining registry after unjoined close fence transport=%lu", (unsigned long)event->transport_id);
+}
+static void *funasr_close_fence_retry_allocate(
+    void *obj,
+    apr_pool_t *pool,
+    apr_size_t size)
+{
+    (void)obj;
+    return apr_pcalloc(pool, size);
+}
+static const funasr_close_fence_retry_vtable_t funasr_close_fence_retry_vtable = {
+    funasr_close_fence_requeue, funasr_close_fence_release, funasr_close_fence_joined,
+    funasr_close_fence_fallback, funasr_close_fence_retain,
+    funasr_close_fence_retry_allocate
+};
 
 static apt_bool_t funasr_transport_event_sink(
     void *obj,
@@ -536,30 +628,34 @@ static apt_bool_t funasr_control_send_stop(
     funasr_channel_t *channel = obj;
     mrcp_message_t *response = channel->stop_response;
     (void)generation;
-    channel->stop_response = NULL;
-    channel->recog_request = NULL;
     if (!response) {
         return FALSE;
     }
-    return mrcp_engine_channel_message_send(channel->channel, response);
+    if (!mrcp_engine_channel_message_send(channel->channel, response)) {
+        return FALSE;
+    }
+    channel->stop_response = NULL;
+    channel->recog_request = NULL;
+    return TRUE;
 }
 
 static apt_bool_t funasr_control_send_close(void *obj)
 {
     funasr_channel_t *channel = obj;
     funasr_engine_t *engine = channel->engine;
-    apt_bool_t result = TRUE;
 
+    if (channel->close_response_pending) {
+        if (!mrcp_engine_channel_close_respond(channel->channel)) {
+            return FALSE;
+        }
+        channel->close_response_pending = FALSE;
+    }
     if (channel->registry_entry) {
         funasr_registry_remove(engine, channel->registry_entry);
     }
     channel->transport = NULL;
-    if (channel->close_response_pending) {
-        channel->close_response_pending = FALSE;
-        result = mrcp_engine_channel_close_respond(channel->channel);
-    }
     funasr_engine_maybe_close_respond(engine);
-    return result;
+    return TRUE;
 }
 
 static apt_bool_t funasr_control_cancel(
@@ -923,6 +1019,7 @@ static void funasr_transport_event_on_task(
 {
     funasr_registry_entry_t *entry;
     char gap_histogram[4096];
+    apt_bool_t handled;
 
     entry = funasr_registry_find(engine, event->transport_id);
     if (!entry || !entry->channel) {
@@ -960,11 +1057,25 @@ static void funasr_transport_event_on_task(
             (unsigned long)event->metrics.ws_rx_messages,
             (int)event->metrics.completion_failure);
     }
-    funasr_control_handle_event(
+    handled = FALSE;
+    handled = funasr_control_handle_event(
         &entry->channel->control,
         event,
         &control_vtable,
         entry->channel);
+    if (!handled && event->type == FUNASR_EVENT_WORKER_CLOSED) {
+        if (funasr_close_fence_retry_attempt(
+                engine->task, engine->pool, event,
+                &funasr_close_fence_retry_vtable, engine)) return;
+        return;
+    } else if (!handled) {
+        LOG_WITH_SID(
+            entry->channel,
+            APT_PRIO_WARNING,
+            "transport event handling failed generation=%lu type=%d",
+            (unsigned long)event->generation,
+            (int)event->type);
+    }
     funasr_transport_event_destroy(event);
 }
 

@@ -16,11 +16,24 @@ typedef struct fake_sink_t {
     int close_requests;
     int joins;
     apt_bool_t reject_cancel;
+    apt_bool_t reject_join;
+    apt_bool_t reject_stop;
+    apt_bool_t reject_close;
     mrcp_recog_completion_cause_e last_cause;
     char last_text[64];
+    char call_order[16];
+    size_t call_order_length;
 } fake_sink_t;
 
 static int failures;
+
+static void fake_sink_record_call(fake_sink_t *sink, char call)
+{
+    if (sink->call_order_length + 1 < sizeof(sink->call_order)) {
+        sink->call_order[sink->call_order_length++] = call;
+        sink->call_order[sink->call_order_length] = '\0';
+    }
+}
 
 #define CHECK_TRUE(label, expression) \
     do { \
@@ -59,14 +72,16 @@ static apt_bool_t fake_stop(void *obj, funasr_generation_t generation)
     fake_sink_t *sink = obj;
     (void)generation;
     sink->stop_responses++;
-    return TRUE;
+    fake_sink_record_call(sink, 'S');
+    return sink->reject_stop ? FALSE : TRUE;
 }
 
 static apt_bool_t fake_close_response(void *obj)
 {
     fake_sink_t *sink = obj;
     sink->close_responses++;
-    return TRUE;
+    fake_sink_record_call(sink, 'C');
+    return sink->reject_close ? FALSE : TRUE;
 }
 
 static apt_bool_t fake_cancel(void *obj, funasr_generation_t generation)
@@ -88,7 +103,8 @@ static apr_status_t fake_join(void *obj)
 {
     fake_sink_t *sink = obj;
     sink->joins++;
-    return APR_SUCCESS;
+    fake_sink_record_call(sink, 'J');
+    return sink->reject_join ? APR_EGENERAL : APR_SUCCESS;
 }
 
 static const funasr_control_vtable_t fake_vtable = {
@@ -266,6 +282,122 @@ static void test_close_fence_is_only_close_release(void)
     CHECK_TRUE("duplicate fence suppressed", sink.joins == 1);
 }
 
+static void test_worker_close_settles_pending_stop(void)
+{
+    funasr_control_t control;
+    fake_sink_t sink;
+    funasr_transport_event_t event;
+
+    memset(&sink, 0, sizeof(sink));
+    funasr_control_init(&control);
+    funasr_control_begin_generation(&control, 9);
+    CHECK_TRUE("STOP requests transport cancel",
+               funasr_control_request_stop(&control, &fake_vtable, &sink));
+    event = event_make(9, FUNASR_EVENT_WORKER_CLOSED);
+    CHECK_TRUE("worker close settles pending STOP",
+               funasr_control_handle_event(&control, &event, &fake_vtable, &sink));
+    CHECK_TRUE("worker close joins once", sink.joins == 1);
+    CHECK_TRUE("worker close sends STOP response", sink.stop_responses == 1);
+    CHECK_TRUE("worker close sends close response", sink.close_responses == 1);
+    CHECK_TRUE("worker close responses are ordered after join",
+               strcmp(sink.call_order, "JSC") == 0);
+    CHECK_TRUE("worker close commits closed state", control.worker_closed);
+    CHECK_TRUE("worker close records joined worker", control.worker_joined);
+    CHECK_TRUE("worker close settles STOP state", !control.stop_pending);
+    CHECK_TRUE("worker close commits terminal state", control.terminal);
+}
+
+static void test_worker_close_retries_stop_after_send_failure(void)
+{
+    funasr_control_t control;
+    fake_sink_t sink;
+    funasr_transport_event_t event;
+
+    memset(&sink, 0, sizeof(sink));
+    sink.reject_stop = TRUE;
+    funasr_control_init(&control);
+    funasr_control_begin_generation(&control, 10);
+    CHECK_TRUE("STOP requests transport cancel",
+               funasr_control_request_stop(&control, &fake_vtable, &sink));
+    event = event_make(10, FUNASR_EVENT_WORKER_CLOSED);
+    CHECK_TRUE("worker close reports rejected STOP response",
+               !funasr_control_handle_event(&control, &event, &fake_vtable, &sink));
+    CHECK_TRUE("rejected STOP joins once", sink.joins == 1);
+    CHECK_TRUE("rejected STOP sends no close response", sink.close_responses == 0);
+    CHECK_TRUE("rejected STOP leaves fence uncommitted", !control.worker_closed);
+    CHECK_TRUE("rejected STOP stays pending", control.stop_pending);
+    CHECK_TRUE("rejected STOP leaves terminal uncommitted", !control.terminal);
+
+    sink.reject_stop = FALSE;
+    CHECK_TRUE("worker close retries STOP response",
+               funasr_control_handle_event(&control, &event, &fake_vtable, &sink));
+    CHECK_TRUE("retried close joins again", sink.joins == 2);
+    CHECK_TRUE("retried close attempts STOP twice", sink.stop_responses == 2);
+    CHECK_TRUE("retried STOP is followed by close response", sink.close_responses == 1);
+    CHECK_TRUE("retried close preserves response order",
+               strcmp(sink.call_order, "JSJSC") == 0);
+    CHECK_TRUE("retried close commits closed state", control.worker_closed);
+    CHECK_TRUE("retried close settles STOP state", !control.stop_pending);
+    CHECK_TRUE("retried close commits terminal state", control.terminal);
+}
+
+static void test_worker_close_join_failure_preserves_fence(void)
+{
+    funasr_control_t control;
+    fake_sink_t sink;
+    funasr_transport_event_t event;
+
+    memset(&sink, 0, sizeof(sink));
+    sink.reject_join = TRUE;
+    funasr_control_init(&control);
+    funasr_control_begin_generation(&control, 11);
+    CHECK_TRUE("STOP requests transport cancel",
+               funasr_control_request_stop(&control, &fake_vtable, &sink));
+    event = event_make(11, FUNASR_EVENT_WORKER_CLOSED);
+    CHECK_TRUE("worker close reports join failure",
+               !funasr_control_handle_event(&control, &event, &fake_vtable, &sink));
+    CHECK_TRUE("rejected join attempted once", sink.joins == 1);
+    CHECK_TRUE("rejected join sends no STOP response", sink.stop_responses == 0);
+    CHECK_TRUE("rejected join sends no close response", sink.close_responses == 0);
+    CHECK_TRUE("rejected join leaves worker unjoined", !control.worker_joined);
+    CHECK_TRUE("rejected join leaves fence uncommitted", !control.worker_closed);
+    CHECK_TRUE("rejected join keeps STOP pending", control.stop_pending);
+}
+
+static void test_worker_close_retries_close_without_resending_stop(void)
+{
+    funasr_control_t control;
+    fake_sink_t sink;
+    funasr_transport_event_t event;
+
+    memset(&sink, 0, sizeof(sink));
+    sink.reject_close = TRUE;
+    funasr_control_init(&control);
+    funasr_control_begin_generation(&control, 12);
+    CHECK_TRUE("STOP requests transport cancel",
+               funasr_control_request_stop(&control, &fake_vtable, &sink));
+    event = event_make(12, FUNASR_EVENT_WORKER_CLOSED);
+    CHECK_TRUE("rejected close reports failed fence",
+               !funasr_control_handle_event(&control, &event, &fake_vtable, &sink));
+    CHECK_TRUE("first fence joins once", sink.joins == 1);
+    CHECK_TRUE("first fence sends STOP once", sink.stop_responses == 1);
+    CHECK_TRUE("first fence attempts close once", sink.close_responses == 1);
+    CHECK_TRUE("first fence preserves STOP settlement", control.stop_responded);
+    CHECK_TRUE("first fence keeps close uncommitted", !control.worker_closed);
+    CHECK_TRUE("first fence keeps STOP pending", control.stop_pending);
+
+    sink.reject_close = FALSE;
+    CHECK_TRUE("same fence retries close",
+               funasr_control_handle_event(&control, &event, &fake_vtable, &sink));
+    CHECK_TRUE("retry joins only as needed", sink.joins == 2);
+    CHECK_TRUE("retry does not resend STOP", sink.stop_responses == 1);
+    CHECK_TRUE("retry sends close response", sink.close_responses == 2);
+    CHECK_TRUE("retry order skips STOP", strcmp(sink.call_order, "JSCJC") == 0);
+    CHECK_TRUE("retry commits worker close", control.worker_closed);
+    CHECK_TRUE("retry settles STOP", !control.stop_pending && control.stop_responded);
+    CHECK_TRUE("retry commits terminal", control.terminal);
+}
+
 static void test_unexpected_close_fence_releases_transport(void)
 {
     funasr_control_t control;
@@ -298,6 +430,10 @@ int main(void)
     test_stop_wins_failure_race();
     test_stop_during_terminal_commit_responds();
     test_close_fence_is_only_close_release();
+    test_worker_close_settles_pending_stop();
+    test_worker_close_retries_stop_after_send_failure();
+    test_worker_close_join_failure_preserves_fence();
+    test_worker_close_retries_close_without_resending_stop();
     test_unexpected_close_fence_releases_transport();
     if (failures != 0) {
         fprintf(stderr, "%d control assertion(s) failed\n", failures);
