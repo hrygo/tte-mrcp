@@ -207,4 +207,3 @@ git push -u origin fix/issue-57-speak-complete-watchdog
 ```
 
 PR 目标为 `main`，标题使用 `fix(tts): guarantee bounded SPEAK completion`，正文包含根因、正常/超时语义、验证结果、Windows/Linux 未验证项，并使用 `Closes #57`。
-

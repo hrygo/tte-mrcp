@@ -130,4 +130,3 @@ completion。
 - 所有竞态测试证明 completion exactly once。
 - TTS 插件相关单测、构建检查和 `git diff --check` 通过。
 - 重新索引 codebase-memory，并确认 canonical 完成链节点。
-
