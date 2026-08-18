@@ -109,4 +109,11 @@ if(BUILD_TTS_WEBSOCKET_TESTS)
 	add_test(NAME tts_websocket_connection_log
 		COMMAND test_tts_websocket_connection_log
 		${CMAKE_CURRENT_SOURCE_DIR}/src/tts_websocket_engine.c)
+	add_executable(test_tts_websocket_completion
+		tests/test_tts_websocket_completion.c
+		src/tts_websocket_completion.c)
+	target_include_directories(test_tts_websocket_completion PRIVATE
+		${PROJECT_SOURCE_DIR}/src)
+	set_target_properties(test_tts_websocket_completion PROPERTIES FOLDER "tests")
+	add_test(NAME tts_websocket_completion COMMAND test_tts_websocket_completion)
 endif()
