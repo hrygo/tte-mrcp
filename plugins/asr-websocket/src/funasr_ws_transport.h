@@ -212,6 +212,7 @@ typedef struct funasr_transport_event_t {
     funasr_transport_id_t transport_id;
     funasr_generation_t generation;
     funasr_transport_event_type_e type;
+    apr_byte_t close_fence_retry_count;
     funasr_transport_failure_e failure;
     funasr_transport_metrics_t metrics;
     char *text;

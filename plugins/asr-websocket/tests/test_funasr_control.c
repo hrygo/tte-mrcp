@@ -329,7 +329,10 @@ static void test_worker_close_retries_stop_after_send_failure(void)
     CHECK_TRUE("worker close retries STOP response",
                funasr_control_handle_event(&control, &event, &fake_vtable, &sink));
     CHECK_TRUE("retried close joins again", sink.joins == 2);
+    CHECK_TRUE("retried close attempts STOP twice", sink.stop_responses == 2);
     CHECK_TRUE("retried STOP is followed by close response", sink.close_responses == 1);
+    CHECK_TRUE("retried close preserves response order",
+               strcmp(sink.call_order, "JSJSC") == 0);
     CHECK_TRUE("retried close commits closed state", control.worker_closed);
     CHECK_TRUE("retried close settles STOP state", !control.stop_pending);
     CHECK_TRUE("retried close commits terminal state", control.terminal);
