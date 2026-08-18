@@ -434,6 +434,16 @@ stdbuf -oL -eL env LD_LIBRARY_PATH="$PACKAGE_LIB" \
   < /dev/null > "$GITHUB_WORKSPACE/rapid_server.log" 2>&1 &
 rapid_server_pid=$!
 
+dump_rapid_logs() {
+  for rapid_log in \
+    "$GITHUB_WORKSPACE/rapid_server.log" \
+    "$GITHUB_WORKSPACE/rapid_tts_fixture.log" \
+    "$GITHUB_WORKSPACE/rapid_asr_fixture.log"; do
+    echo "===== ${rapid_log##*/} =====" >&2
+    tail -n 120 "$rapid_log" >&2 || true
+  done
+}
+
 rapid_ready=0
 for i in $(seq 1 60); do
   if grep -q "Create MRCPv2 Profile" "$GITHUB_WORKSPACE/rapid_server.log" 2>/dev/null; then
@@ -444,21 +454,26 @@ for i in $(seq 1 60); do
 done
 if [ "$rapid_ready" != 1 ]; then
   echo "rapid_server did not become ready" >&2
-  tail -n 120 "$GITHUB_WORKSPACE/rapid_server.log" >&2 || true
+  dump_rapid_logs
   exit 1
 fi
 sleep 2
 
 cd "$GITHUB_WORKSPACE"
-UMC_BIN="$GITHUB_WORKSPACE/platforms/umc/umc" \
-SERVER_LOG="$GITHUB_WORKSPACE/rapid_server.log" \
-  bash tools/stress/rapid_stop_test.sh \
-    -t tts -c 5 -r "$GITHUB_WORKSPACE" --cycles=5
-UMC_BIN="$GITHUB_WORKSPACE/platforms/umc/umc" \
-SERVER_LOG="$GITHUB_WORKSPACE/rapid_server.log" \
-  bash tools/stress/rapid_stop_test.sh \
-    -t asr -c 5 -r "$GITHUB_WORKSPACE" --cycles=5 \
-    -a "$GITHUB_WORKSPACE/data"
+run_rapid_stop_gate() {
+  local rapid_type="$1"
+  shift
+  if ! UMC_BIN="$GITHUB_WORKSPACE/platforms/umc/umc" \
+    SERVER_LOG="$GITHUB_WORKSPACE/rapid_server.log" \
+    bash tools/stress/rapid_stop_test.sh \
+      -t "$rapid_type" -c 5 -r "$GITHUB_WORKSPACE" --cycles=5 "$@"; then
+    echo "Rapid stop gate failed; diagnostic log tails follow" >&2
+    dump_rapid_logs
+    exit 1
+  fi
+}
+run_rapid_stop_gate tts
+run_rapid_stop_gate asr -a "$GITHUB_WORKSPACE/data"
 
 kill "$rapid_server_pid" "$rapid_tts_pid" "$rapid_asr_pid" 2>/dev/null || true
 for wait_i in 1 2 3 4 5; do

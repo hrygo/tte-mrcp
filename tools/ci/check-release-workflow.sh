@@ -10,6 +10,7 @@ ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 WORKFLOW="$ROOT_DIR/.github/workflows/build-linux.yml"
 PACKAGE_VERIFY_SCRIPT="$ROOT_DIR/tools/ci/verify-linux-package.sh"
 STRESS_SCRIPT="$ROOT_DIR/tools/stress/stress_test_improved.sh"
+UMC_EXPECT="$ROOT_DIR/tests/integration/umc_test.exp"
 DEPLOYMENT_DOC="$ROOT_DIR/docs/deployment/release-artifacts.md"
 README="$ROOT_DIR/README.md"
 
@@ -72,9 +73,19 @@ has_v_tag_trigger() {
   ' "$WORKFLOW"
 }
 
+has_completion_before_timeout() {
+  completion_line=$(rg -n 'RECOGNITION-COMPLETE\\|SPEAK-COMPLETE' "$STRESS_SCRIPT" \
+    | head -1 | cut -d: -f1)
+  timeout_line=$(rg -n 'RESULT:TIMEOUT' "$STRESS_SCRIPT" \
+    | head -1 | cut -d: -f1)
+  [ -n "$completion_line" ] && [ -n "$timeout_line" ] \
+    && [ "$completion_line" -lt "$timeout_line" ]
+}
+
 require_file "$WORKFLOW"
 require_file "$PACKAGE_VERIFY_SCRIPT"
 require_file "$STRESS_SCRIPT"
+require_file "$UMC_EXPECT"
 require_file "$DEPLOYMENT_DOC"
 require_file "$README"
 
@@ -90,6 +101,16 @@ require_match "$PACKAGE_VERIFY_SCRIPT" 'mixed_server\.log' 'mixed server diagnos
 require_match "$PACKAGE_VERIFY_SCRIPT" 'mixed_tts_fixture\.log' 'mixed TTS fixture diagnostic log'
 require_match "$PACKAGE_VERIFY_SCRIPT" 'mixed_asr_fixture\.log' 'mixed ASR fixture diagnostic log'
 require_match "$STRESS_SCRIPT" 'Mixed failure diagnostics' 'mixed worker failure diagnostics'
+require_match "$UMC_EXPECT" 'STOP_DISPATCH_TIMEOUT' 'rapid STOP dispatch acknowledgement'
+require_match "$UMC_EXPECT" 'STOP_DISPATCH_PROMPT' 'anchored rapid STOP dispatch prompt'
+require_match "$PACKAGE_VERIFY_SCRIPT" 'Rapid stop gate failed; diagnostic log tails follow' 'rapid-stop failure diagnostics'
+require_match "$PACKAGE_VERIFY_SCRIPT" 'dump_rapid_logs' 'shared rapid-stop diagnostics helper'
+require_match "$STRESS_SCRIPT" 'Completion-Cause:\\\[\[:space:\]\]\*0\*\[1-9\]\[0-9\]\*' 'all nonzero Completion-Cause classifications'
+
+if [ -f "$STRESS_SCRIPT" ] && ! has_completion_before_timeout; then
+  printf '%s\n' 'mixed stress must classify a normal completion before a harness timeout' >&2
+  failures=$((failures + 1))
+fi
 
 if [ -f "$WORKFLOW" ]; then
   prune_job=$(job_block prune-artifacts)
