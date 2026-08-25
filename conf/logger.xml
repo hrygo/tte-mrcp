@@ -28,7 +28,7 @@
     INFO          informational message
     DEBUG         debug-level message
   -->
-  <priority>INFO</priority>
+  <priority>DEBUG</priority>
 
   <!--  Set the masking mode of the default log source to one of
     NONE          log everything as is

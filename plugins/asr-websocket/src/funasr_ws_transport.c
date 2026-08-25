@@ -1028,7 +1028,7 @@ static apr_status_t funasr_default_io_write(
     status = apr_socket_send(io->socket, (const char *)data, size);
     if (status == APR_SUCCESS && *size != 0) {
         apt_log(APT_LOG_MARK, APT_PRIO_DEBUG,
-            "asr_websocket: [session_id=%s] 发送 ASR WebSocket 网络数据包，大小=%" APR_SIZE_T_FMT " 字节",
+            "asr_websocket: [session_id=%s] sent ASR WebSocket packet, size=%" APR_SIZE_T_FMT " bytes",
             io->session_id ? io->session_id : "N/A",
             *size);
     }
