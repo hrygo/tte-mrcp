@@ -239,7 +239,7 @@ struct tts_websocket_channel_t {
 	char     pcm_accum[6];  /* 6字节防御性预留：PCM帧恒为偶数，process_len%6∈{0,2,4} */
 	/** 累积缓冲区中的字节数 (0-5) */
 	int      pcm_accum_len;
-	/** TTS 服务返回音频采样率（8000 或 24000），默认 24000 保持旧行为 */
+	/** TTS 服务返回音频采样率（8000 或 24000），默认 8000 */
 	unsigned int input_sample_rate;
 	/** 本流是否已对缺失 sample_rate 字段做过兜底告警（避免逐句刷屏） */
 	apt_bool_t input_sample_rate_warned;
@@ -962,21 +962,22 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 				}
 
 				{
-					unsigned int sample_rate;
-					if(tts_websocket_json_get_uint(buffer, (size_t)len, "sample_rate", &sample_rate)) {
+					unsigned int sample_rate = 0;
+					int sample_rate_status = tts_websocket_json_get_uint_status(
+						buffer, (size_t)len, "sample_rate", &sample_rate);
+					unsigned int previous_sample_rate = synth_channel->input_sample_rate;
+
+					synth_channel->input_sample_rate = tts_websocket_sample_rate_resolve(
+						previous_sample_rate, sample_rate_status, sample_rate);
+					if(sample_rate_status == TTS_WEBSOCKET_JSON_UINT_FOUND) {
 						LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Sample rate: %u Hz", sample_rate);
-					/* 保存到 channel，供 PCM 处理路径决定是否需要重采样 */
-					if(sample_rate == 8000 || sample_rate == 24000) {
-						synth_channel->input_sample_rate = sample_rate;
-						synth_channel->input_sample_rate_warned = TRUE;
-					}
-					else {
+						if(sample_rate != 8000 && sample_rate != 24000) {
 						LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
 							"[WS] Unsupported sample rate %u, keeping previous %u",
-							sample_rate, synth_channel->input_sample_rate);
+							sample_rate, previous_sample_rate);
+						}
 					}
-					}
-					else {
+					else if(sample_rate_status == TTS_WEBSOCKET_JSON_UINT_MISSING) {
 					/* 服务端未下发 sample_rate：按当前兜底值处理，首次提醒，
 					 * 避免服务端切换到 8kHz 后因字段缺失被静默 3:1 错转。 */
 					if(!synth_channel->input_sample_rate_warned) {
@@ -985,6 +986,11 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 							synth_channel->input_sample_rate);
 						synth_channel->input_sample_rate_warned = TRUE;
 					}
+					}
+					else {
+						LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+							"[WS] Invalid sample_rate in audio.start, keeping previous %u",
+							previous_sample_rate);
 					}
 				}
 			}
@@ -1411,8 +1417,8 @@ static apt_bool_t tts_websocket_start_streaming(tts_websocket_channel_t *synth_c
 	synth_channel->stream_completion_cause = SYNTHESIZER_COMPLETION_CAUSE_NORMAL;
 	/* 重置PCM累积缓冲区 */
 	synth_channel->pcm_accum_len = 0;
-	/* 采样率默认 24kHz（旧服务）；audio.start 中的 sample_rate 会覆盖 */
-	synth_channel->input_sample_rate = 24000;
+	/* 服务端未提供 sample_rate 时按当前服务的 8kHz PCM 处理。 */
+	synth_channel->input_sample_rate = 8000;
 	synth_channel->input_sample_rate_warned = FALSE;
 
 	/* 分配环形缓冲区（512KB，高并发下TTS服务响应可能变慢，需要更大缓冲防止句子间underrun） */

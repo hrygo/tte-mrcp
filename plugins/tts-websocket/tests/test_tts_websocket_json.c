@@ -37,6 +37,51 @@ static int test_missing_or_non_numeric_sample_rate_fails(void)
             string_value, sizeof(string_value) - 1, "sample_rate", &value);
 }
 
+static int test_missing_sample_rate_uses_8khz_default(void)
+{
+    const char json[] = "{\"type\":\"audio.start\"}";
+    unsigned int value = 24000;
+
+    return tts_websocket_json_get_uint_status(
+        json, sizeof(json) - 1, "sample_rate", &value) == 0 && value == 24000;
+}
+
+static int test_invalid_sample_rate_is_not_missing(void)
+{
+    const char string_value[] = "{\"sample_rate\":\"8000\"}";
+    const char overflow[] = "{\"sample_rate\":4294967296}";
+    unsigned int value = 24000;
+
+    if (tts_websocket_json_get_uint_status(string_value,
+            sizeof(string_value) - 1, "sample_rate", &value) != -1 || value != 24000) {
+        return 0;
+    }
+    return tts_websocket_json_get_uint_status(overflow,
+        sizeof(overflow) - 1, "sample_rate", &value) == -1 && value == 24000;
+}
+
+static int test_explicit_sample_rate_is_valid(void)
+{
+    const char rate_8khz[] = "{\"sample_rate\":8000}";
+    const char rate_24khz[] = "{\"sample_rate\":24000}";
+    unsigned int value = 0;
+
+    if (tts_websocket_json_get_uint_status(
+            rate_8khz, sizeof(rate_8khz) - 1, "sample_rate", &value) != 1 || value != 8000) {
+        return 0;
+    }
+    return tts_websocket_json_get_uint_status(
+        rate_24khz, sizeof(rate_24khz) - 1, "sample_rate", &value) == 1 && value == 24000;
+}
+
+static int test_sample_rate_resolution_per_audio_start(void)
+{
+    return tts_websocket_sample_rate_resolve(24000, 0, 0) == 8000 &&
+        tts_websocket_sample_rate_resolve(8000, 1, 24000) == 24000 &&
+        tts_websocket_sample_rate_resolve(24000, -1, 0) == 24000 &&
+        tts_websocket_sample_rate_resolve(8000, 1, 16000) == 8000;
+}
+
 static int test_overflowing_sample_rate_fails_without_writing_value(void)
 {
     const char json[] = "{\"sample_rate\":4294967296}";
@@ -122,6 +167,22 @@ int main(void)
         fprintf(stderr, "test_missing_or_non_numeric_sample_rate_fails failed\n");
         return 1;
     }
+    if (!test_missing_sample_rate_uses_8khz_default()) {
+        fprintf(stderr, "test_missing_sample_rate_uses_8khz_default failed\n");
+        return 1;
+    }
+    if (!test_invalid_sample_rate_is_not_missing()) {
+        fprintf(stderr, "test_invalid_sample_rate_is_not_missing failed\n");
+        return 1;
+    }
+    if (!test_explicit_sample_rate_is_valid()) {
+        fprintf(stderr, "test_explicit_sample_rate_is_valid failed\n");
+        return 1;
+    }
+    if (!test_sample_rate_resolution_per_audio_start()) {
+        fprintf(stderr, "test_sample_rate_resolution_per_audio_start failed\n");
+        return 1;
+    }
     if (!test_overflowing_sample_rate_fails_without_writing_value()) {
         fprintf(stderr, "test_overflowing_sample_rate_fails_without_writing_value failed\n");
         return 1;
@@ -146,6 +207,6 @@ int main(void)
         fprintf(stderr, "test_escaped_sample_rate_key failed\n");
         return 1;
     }
-    puts("9/9 JSON parser tests passed");
+    puts("13/13 JSON parser tests passed");
     return 0;
 }
