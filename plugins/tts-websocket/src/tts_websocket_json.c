@@ -222,54 +222,74 @@ static int key_matches(const char *json, size_t start, size_t end, const char *k
     return i == end && key_pos == key_len;
 }
 
-int tts_websocket_json_get_uint(const char *json, size_t len, const char *key, unsigned int *value)
+int tts_websocket_json_get_uint_status(const char *json, size_t len, const char *key, unsigned int *value)
 {
     size_t pos;
     unsigned int candidate = 0;
     int found = 0;
 
-    if (!json || !key || !*key || !value) return 0;
+    if (!json || !key || !*key || !value) return TTS_WEBSOCKET_JSON_UINT_INVALID;
     pos = skip_whitespace(json, len, 0);
-    if (pos >= len || json[pos++] != '{') return 0;
+    if (pos >= len || json[pos++] != '{') return TTS_WEBSOCKET_JSON_UINT_INVALID;
     for (;;) {
         size_t key_start, key_end;
         int match;
         pos = skip_whitespace(json, len, pos);
-        if (pos >= len) return 0;
+        if (pos >= len) return TTS_WEBSOCKET_JSON_UINT_INVALID;
         if (json[pos] == '}') {
             pos = skip_whitespace(json, len, pos + 1);
-            if (!found || pos != len) return 0;
+            if (pos != len) return TTS_WEBSOCKET_JSON_UINT_INVALID;
+            if (!found) return TTS_WEBSOCKET_JSON_UINT_MISSING;
             *value = candidate;
-            return 1;
+            return TTS_WEBSOCKET_JSON_UINT_FOUND;
         }
-        if (json[pos] != '"') return 0;
+        if (json[pos] != '"') return TTS_WEBSOCKET_JSON_UINT_INVALID;
         key_start = pos + 1;
-        if (!skip_string(json, len, &pos)) return 0;
+        if (!skip_string(json, len, &pos)) return TTS_WEBSOCKET_JSON_UINT_INVALID;
         key_end = pos - 1;
         match = key_matches(json, key_start, key_end, key);
         pos = skip_whitespace(json, len, pos);
-        if (pos >= len || json[pos++] != ':') return 0;
+        if (pos >= len || json[pos++] != ':') return TTS_WEBSOCKET_JSON_UINT_INVALID;
         pos = skip_whitespace(json, len, pos);
         if (match) {
             unsigned int parsed = 0;
             int has_digit = 0;
             while (pos < len && json[pos] >= '0' && json[pos] <= '9') {
                 unsigned int digit = (unsigned int)(json[pos++] - '0');
-                if (parsed > (UINT_MAX - digit) / 10U) return 0;
+                if (parsed > (UINT_MAX - digit) / 10U) return TTS_WEBSOCKET_JSON_UINT_INVALID;
                 parsed = parsed * 10U + digit;
                 has_digit = 1;
             }
             pos = skip_whitespace(json, len, pos);
-            if (!has_digit || pos >= len || (json[pos] != ',' && json[pos] != '}')) return 0;
+            if (!has_digit || pos >= len || (json[pos] != ',' && json[pos] != '}')) return TTS_WEBSOCKET_JSON_UINT_INVALID;
             candidate = parsed;
             found = 1;
         }
-        else if (!skip_value(json, len, &pos, 0)) return 0;
+        else if (!skip_value(json, len, &pos, 0)) return TTS_WEBSOCKET_JSON_UINT_INVALID;
         pos = skip_whitespace(json, len, pos);
-        if (pos >= len) return 0;
+        if (pos >= len) return TTS_WEBSOCKET_JSON_UINT_INVALID;
         if (json[pos] == '}') continue;
-        if (json[pos++] != ',') return 0;
+        if (json[pos++] != ',') return TTS_WEBSOCKET_JSON_UINT_INVALID;
         pos = skip_whitespace(json, len, pos);
-        if (pos >= len || json[pos] == '}') return 0;
+        if (pos >= len || json[pos] == '}') return TTS_WEBSOCKET_JSON_UINT_INVALID;
     }
+}
+
+int tts_websocket_json_get_uint(const char *json, size_t len, const char *key, unsigned int *value)
+{
+    return tts_websocket_json_get_uint_status(json, len, key, value) ==
+        TTS_WEBSOCKET_JSON_UINT_FOUND;
+}
+
+unsigned int tts_websocket_sample_rate_resolve(
+    unsigned int previous_rate, int parse_status, unsigned int parsed_rate)
+{
+    if (parse_status == TTS_WEBSOCKET_JSON_UINT_MISSING) {
+        return 8000;
+    }
+    if (parse_status == TTS_WEBSOCKET_JSON_UINT_FOUND &&
+        (parsed_rate == 8000 || parsed_rate == 24000)) {
+        return parsed_rate;
+    }
+    return previous_rate;
 }
