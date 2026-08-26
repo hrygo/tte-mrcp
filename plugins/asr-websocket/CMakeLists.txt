@@ -9,6 +9,7 @@ set (ASR_WEBSOCKET_SOURCES
 	src/funasr_close_fence_retry.c
 	src/funasr_control.c
 	src/funasr_json.c
+	src/funasr_nlsml.c
 	src/funasr_ws_transport.c
 )
 source_group ("src" FILES ${ASR_WEBSOCKET_SOURCES})
@@ -86,6 +87,14 @@ if(BUILD_ASR_WEBSOCKET_TESTS)
 	target_include_directories(test_json_unescape PRIVATE ${ASR_WEBSOCKET_TEST_INCLUDE_DIRS})
 	set_target_properties(test_json_unescape PROPERTIES FOLDER "tests")
 	add_test(NAME asr_websocket_json_unescape COMMAND test_json_unescape)
+
+	add_executable(test_funasr_nlsml
+		tests/test_funasr_nlsml.c
+		src/funasr_nlsml.c)
+	target_include_directories(test_funasr_nlsml PRIVATE ${ASR_WEBSOCKET_TEST_INCLUDE_DIRS})
+	target_link_libraries(test_funasr_nlsml ${APR_LIBRARIES})
+	set_target_properties(test_funasr_nlsml PROPERTIES FOLDER "tests")
+	add_test(NAME asr_websocket_nlsml COMMAND test_funasr_nlsml)
 
 	add_executable(test_funasr_ws_transport
 		tests/test_funasr_ws_transport.c
