@@ -274,7 +274,7 @@ jobs:
           audit_elf
 
           # ---- Plugin unit-test gates (target ABI container) ----
-          # Autotools gate: asr_websocket check_PROGRAMS (4 tests).
+          # Autotools gate: asr_websocket check_PROGRAMS (5 tests).
           make -C "$GITHUB_WORKSPACE/build/ci/plugins/asr-websocket" check \
             > "$GITHUB_WORKSPACE/check-autotools-$TARGET.log" 2>&1 || {
               tail -n 120 "$GITHUB_WORKSPACE/check-autotools-$TARGET.log"
@@ -298,6 +298,7 @@ jobs:
               }
             cmake --build "$GITHUB_WORKSPACE/build/ci-cmake" \
               --target test_resample test_json_unescape \
+                     test_funasr_nlsml \
                      test_funasr_ws_transport test_funasr_control \
                      test_funasr_close_fence_retry \
                      test_tts_websocket_http_parse \
