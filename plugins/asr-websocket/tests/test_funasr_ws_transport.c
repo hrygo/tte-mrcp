@@ -2165,10 +2165,27 @@ static void test_worker_first_audio_timeout_ignores_continued_audio_and_reconnec
     CHECK_TRUE("timeout recovery opens a new WebSocket",
                io.open_count == 2 && io.opened);
     apr_thread_mutex_unlock(io.mutex);
-    CHECK_TRUE("reconnected generation can stop",
-               funasr_transport_cancel_generation(transport, 92));
-    CHECK_TRUE("reconnected generation drains",
-               wait_for_collector(&collector, 1, 1));
+    CHECK_TRUE("next-round audio is accepted",
+               funasr_transport_enqueue_pcm(
+                   transport,
+                   92,
+                   audio,
+                   sizeof(audio),
+                   now_us) == FUNASR_ENQUEUE_ACCEPTED);
+    CHECK_TRUE("next-round audio reaches socket",
+               fake_io_wait_outbound(&io, 3U * sizeof(audio)));
+    now_us += 19000;
+    funasr_transport_wake(transport);
+    apr_sleep(20000);
+    CHECK_TRUE("next-round first deadline starts from its own audio",
+               collector.failures == 1);
+    now_us += 1000;
+    funasr_transport_wake(transport);
+    CHECK_TRUE("next-round first-audio timeout arrives",
+               wait_for_collector(&collector, 3, 2));
+    CHECK_TRUE("next-round timeout reason preserved",
+               collector.last_failure ==
+                   FUNASR_FAILURE_FIRST_AUDIO_RESULT_TIMEOUT);
     funasr_transport_request_close(transport);
     CHECK_TRUE("timeout worker closes",
                wait_for_collector(&collector, 2, 1));
