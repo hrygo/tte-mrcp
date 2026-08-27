@@ -9,6 +9,7 @@ set (ASR_WEBSOCKET_SOURCES
 	src/funasr_close_fence_retry.c
 	src/funasr_control.c
 	src/funasr_json.c
+	src/funasr_timeout_config.c
 	src/funasr_ws_transport.c
 )
 source_group ("src" FILES ${ASR_WEBSOCKET_SOURCES})
@@ -86,6 +87,13 @@ if(BUILD_ASR_WEBSOCKET_TESTS)
 	target_include_directories(test_json_unescape PRIVATE ${ASR_WEBSOCKET_TEST_INCLUDE_DIRS})
 	set_target_properties(test_json_unescape PROPERTIES FOLDER "tests")
 	add_test(NAME asr_websocket_json_unescape COMMAND test_json_unescape)
+
+	add_executable(test_funasr_timeout_config
+		tests/test_funasr_timeout_config.c
+		src/funasr_timeout_config.c)
+	target_include_directories(test_funasr_timeout_config PRIVATE ${ASR_WEBSOCKET_TEST_INCLUDE_DIRS})
+	set_target_properties(test_funasr_timeout_config PROPERTIES FOLDER "tests")
+	add_test(NAME asr_websocket_funasr_timeout_config COMMAND test_funasr_timeout_config)
 
 	add_executable(test_funasr_ws_transport
 		tests/test_funasr_ws_transport.c

@@ -88,7 +88,8 @@ apt_bool_t funasr_control_request_close(
 static mrcp_recog_completion_cause_e funasr_control_failure_cause(
     funasr_transport_failure_e failure)
 {
-    if (failure == FUNASR_FAILURE_NO_RESULT_TIMEOUT) {
+    if (failure == FUNASR_FAILURE_FIRST_AUDIO_RESULT_TIMEOUT ||
+        failure == FUNASR_FAILURE_NO_RESULT_TIMEOUT) {
         return RECOGNIZER_COMPLETION_CAUSE_NO_INPUT_TIMEOUT;
     }
     return RECOGNIZER_COMPLETION_CAUSE_ERROR;

@@ -132,6 +132,8 @@
         <param name="funasr-host" value="40.19.92.194"/>
         <param name="funasr-port" value="9080"/>
         <param name="funasr-path" value="/asr-service/ws/audio"/>
+        <param name="first-audio-result-timeout-ms" value="20000"/>
+        <param name="last-speech-result-timeout-ms" value="10000"/>
       </engine>
       <engine id="Demo-Verifier-1" name="demoverifier" enable="true"/>
       <engine id="Recorder-1" name="mrcprecorder" enable="true"/>
