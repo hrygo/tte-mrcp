@@ -298,6 +298,7 @@ jobs:
               }
             cmake --build "$GITHUB_WORKSPACE/build/ci-cmake" \
               --target test_resample test_json_unescape \
+                     test_funasr_nlsml \
                      test_funasr_ws_transport test_funasr_control \
                      test_funasr_close_fence_retry \
                      test_funasr_timeout_config \

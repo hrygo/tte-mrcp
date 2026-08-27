@@ -7,10 +7,12 @@
 #include "funasr_control.h"
 #include "funasr_timeout_config.h"
 #include "funasr_ws_transport.h"
+#include "funasr_nlsml.h"
 
 #include <apr_strings.h>
 #include <apr_uuid.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 #define RECOG_ENGINE_TASK_NAME "ASR WebSocket Engine"
@@ -75,6 +77,7 @@ struct funasr_channel_t {
     funasr_resample_state_t resample;
     funasr_clock_t clock;
     char *session_id;
+    uint64_t successful_recognition_count;
     apt_bool_t close_response_pending;
 };
 
@@ -594,38 +597,28 @@ static apt_bool_t funasr_recognition_complete(
             RECOGNIZER_HEADER_COMPLETION_CAUSE);
     }
     message->start_line.request_state = MRCP_REQUEST_STATE_COMPLETE;
-    if (result && cause == RECOGNIZER_COMPLETION_CAUSE_SUCCESS) {
+    if (result && result[0] != '\0' &&
+        cause == RECOGNIZER_COMPLETION_CAUSE_SUCCESS) {
         mrcp_generic_header_t *generic_header;
-        char *result_with_suffix;
         char *nlsml;
 
-        result_with_suffix = apr_psprintf(
+        nlsml = funasr_nlsml_result_create(
             message->pool,
-            "%s@%s.wav",
-            result,
-            channel->session_id);
-        nlsml = apr_psprintf(
-            message->pool,
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
-            "<result>\n"
-            "  <interpretation grammar=\"session:%s\" confidence=\"1\">\n"
-            "    <instance><result>%s</result></instance>\n"
-            "    <input mode=\"speech\">%s</input>\n"
-            "  </interpretation>\n"
-            "</result>",
             channel->session_id,
-            result_with_suffix,
-            result);
-        apt_string_assign(&message->body, nlsml, message->pool);
-        generic_header = mrcp_generic_header_prepare(message);
-        if (generic_header) {
-            apt_string_assign(
-                &generic_header->content_type,
-                "application/x-nlsml",
-                message->pool);
-            mrcp_generic_header_property_add(
-                message,
-                GENERIC_HEADER_CONTENT_TYPE);
+            result,
+            &channel->successful_recognition_count);
+        if (nlsml) {
+            apt_string_assign(&message->body, nlsml, message->pool);
+            generic_header = mrcp_generic_header_prepare(message);
+            if (generic_header) {
+                apt_string_assign(
+                    &generic_header->content_type,
+                    "application/x-nlsml",
+                    message->pool);
+                mrcp_generic_header_property_add(
+                    message,
+                    GENERIC_HEADER_CONTENT_TYPE);
+            }
         }
     }
     channel->recog_request = NULL;
