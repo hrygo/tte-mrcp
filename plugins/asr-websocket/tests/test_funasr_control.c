@@ -19,6 +19,7 @@ typedef struct fake_sink_t {
     apt_bool_t reject_join;
     apt_bool_t reject_stop;
     apt_bool_t reject_close;
+    apt_bool_t last_text_was_null;
     mrcp_recog_completion_cause_e last_cause;
     char last_text[64];
     char call_order[16];
@@ -61,6 +62,7 @@ static apt_bool_t fake_complete(
     (void)generation;
     sink->completions++;
     sink->last_cause = cause;
+    sink->last_text_was_null = text ? FALSE : TRUE;
     if (text) {
         snprintf(sink->last_text, sizeof(sink->last_text), "%s", text);
     }
@@ -205,9 +207,23 @@ static void test_failure_mapping_and_stale_generation(void)
     CHECK_TRUE("timeout completes once", sink.completions == 1);
     CHECK_TRUE("timeout cause mapped",
                sink.last_cause == RECOGNIZER_COMPLETION_CAUSE_NO_INPUT_TIMEOUT);
+    CHECK_TRUE("last-speech timeout returns empty text",
+               sink.last_text_was_null);
+
+    CHECK_TRUE("new generation starts after last-speech timeout",
+               funasr_control_begin_generation(&control, 4));
+    event = event_make(4, FUNASR_EVENT_TRANSPORT_FAILED);
+    event.failure = FUNASR_FAILURE_FIRST_AUDIO_RESULT_TIMEOUT;
+    funasr_control_handle_event(&control, &event, &fake_vtable, &sink);
+    CHECK_TRUE("first-audio timeout completes once",
+               sink.completions == 2);
+    CHECK_TRUE("first-audio timeout cause mapped",
+               sink.last_cause == RECOGNIZER_COMPLETION_CAUSE_NO_INPUT_TIMEOUT);
+    CHECK_TRUE("first-audio timeout returns empty text",
+               sink.last_text_was_null);
     event.failure = FUNASR_FAILURE_QUEUE_OVERRUN;
     funasr_control_handle_event(&control, &event, &fake_vtable, &sink);
-    CHECK_TRUE("second terminal suppressed", sink.completions == 1);
+    CHECK_TRUE("second terminal suppressed", sink.completions == 2);
     CHECK_TRUE("duplicate terminal counted",
                control.duplicate_terminal_events == 1);
 }

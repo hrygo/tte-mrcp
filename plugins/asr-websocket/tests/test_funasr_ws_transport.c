@@ -2076,7 +2076,7 @@ static void test_worker_write_stall_uses_fake_clock(
                funasr_transport_join_closed(transport) == APR_SUCCESS);
 }
 
-static void test_worker_no_result_timeout_closes_and_reconnects(
+static void test_worker_first_audio_timeout_ignores_continued_audio_and_reconnects(
     apr_pool_t *pool)
 {
     static const funasr_transport_io_vtable_t fake_vtable = {
@@ -2106,7 +2106,8 @@ static void test_worker_no_result_timeout_closes_and_reconnects(
     config.host = "127.0.0.1";
     config.port = 8888;
     config.path = "/ws/audio";
-    config.no_result_timeout_us = 20000;
+    config.first_audio_result_timeout_us = 20000;
+    config.last_speech_result_timeout_us = 90000;
     config.clock.now_us = fake_now_us;
     config.clock.obj = &now_us;
     config.event_sink = collect_transport_event;
@@ -2124,23 +2125,34 @@ static void test_worker_no_result_timeout_closes_and_reconnects(
     CHECK_TRUE("timeout generation begins",
                funasr_transport_begin_generation(transport, 91, &format));
     memset(audio, 0x71, sizeof(audio));
-    CHECK_TRUE("timeout audio accepted",
+    CHECK_TRUE("first-timeout audio accepted",
                funasr_transport_enqueue_pcm(
                    transport,
                    91,
                    audio,
                    sizeof(audio),
                    now_us) == FUNASR_ENQUEUE_ACCEPTED);
-    CHECK_TRUE("timeout audio reaches socket",
+    CHECK_TRUE("first-timeout audio reaches socket",
                fake_io_wait_outbound(&io, sizeof(audio)));
-    now_us += config.no_result_timeout_us;
+    now_us += 10000;
+    CHECK_TRUE("continued audio is accepted before first deadline",
+               funasr_transport_enqueue_pcm(
+                   transport,
+                   91,
+                   audio,
+                   sizeof(audio),
+                   now_us) == FUNASR_ENQUEUE_ACCEPTED);
+    CHECK_TRUE("continued audio reaches socket",
+               fake_io_wait_outbound(&io, 2U * sizeof(audio)));
+    now_us += 10000;
     funasr_transport_wake(transport);
-    CHECK_TRUE("no-result timeout failure arrives",
+    CHECK_TRUE("first-audio timeout failure arrives",
                wait_for_collector(&collector, 3, 1));
-    CHECK_TRUE("no-result timeout reason preserved",
-               collector.last_failure == FUNASR_FAILURE_NO_RESULT_TIMEOUT);
+    CHECK_TRUE("first-audio timeout reason preserved",
+               collector.last_failure ==
+                   FUNASR_FAILURE_FIRST_AUDIO_RESULT_TIMEOUT);
     apr_thread_mutex_lock(io.mutex);
-    CHECK_TRUE("no-result timeout closes WebSocket",
+    CHECK_TRUE("first-audio timeout closes WebSocket",
                io.open_count == 1 && io.close_count == 1 && !io.opened);
     apr_thread_mutex_unlock(io.mutex);
 
@@ -2153,14 +2165,115 @@ static void test_worker_no_result_timeout_closes_and_reconnects(
     CHECK_TRUE("timeout recovery opens a new WebSocket",
                io.open_count == 2 && io.opened);
     apr_thread_mutex_unlock(io.mutex);
-    CHECK_TRUE("reconnected generation can stop",
-               funasr_transport_cancel_generation(transport, 92));
-    CHECK_TRUE("reconnected generation drains",
-               wait_for_collector(&collector, 1, 1));
+    CHECK_TRUE("next-round audio is accepted",
+               funasr_transport_enqueue_pcm(
+                   transport,
+                   92,
+                   audio,
+                   sizeof(audio),
+                   now_us) == FUNASR_ENQUEUE_ACCEPTED);
+    CHECK_TRUE("next-round audio reaches socket",
+               fake_io_wait_outbound(&io, 3U * sizeof(audio)));
+    now_us += 19000;
+    funasr_transport_wake(transport);
+    apr_sleep(20000);
+    CHECK_TRUE("next-round first deadline starts from its own audio",
+               collector.failures == 1);
+    now_us += 1000;
+    funasr_transport_wake(transport);
+    CHECK_TRUE("next-round first-audio timeout arrives",
+               wait_for_collector(&collector, 3, 2));
+    CHECK_TRUE("next-round timeout reason preserved",
+               collector.last_failure ==
+                   FUNASR_FAILURE_FIRST_AUDIO_RESULT_TIMEOUT);
     funasr_transport_request_close(transport);
     CHECK_TRUE("timeout worker closes",
                wait_for_collector(&collector, 2, 1));
     CHECK_TRUE("timeout worker joins",
+               funasr_transport_join_closed(transport) == APR_SUCCESS);
+}
+
+static void test_worker_last_speech_timeout_ignores_silence(
+    apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    funasr_transport_config_t config;
+    funasr_audio_format_t format;
+    funasr_transport_t *transport;
+    fake_io_t io;
+    event_collector_t collector;
+    apr_int64_t now_us = 5000000;
+    unsigned char speech[6400];
+    unsigned char silence[6400];
+
+    memset(&io, 0, sizeof(io));
+    memset(&collector, 0, sizeof(collector));
+    apr_thread_mutex_create(&io.mutex, APR_THREAD_MUTEX_DEFAULT, pool);
+    apr_thread_mutex_create(
+        &collector.mutex,
+        APR_THREAD_MUTEX_DEFAULT,
+        pool);
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.first_audio_result_timeout_us = 90000;
+    config.last_speech_result_timeout_us = 10000;
+    config.clock.now_us = fake_now_us;
+    config.clock.obj = &now_us;
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+    config.io_vtable = &fake_vtable;
+    config.io_obj = &io;
+    transport = funasr_transport_create(pool, 53, &config);
+
+    memset(&format, 0, sizeof(format));
+    format.input_sample_rate = 16000;
+    format.output_sample_rate = 16000;
+    format.channel_count = 1;
+    format.sample_width = 2;
+    format.call_id = "last-speech-timeout-test";
+    CHECK_TRUE("last-speech generation begins",
+               funasr_transport_begin_generation(transport, 93, &format));
+    memset(speech, 0x71, sizeof(speech));
+    memset(silence, 0, sizeof(silence));
+    CHECK_TRUE("speech before silence is accepted",
+               funasr_transport_enqueue_pcm(
+                   transport,
+                   93,
+                   speech,
+                   sizeof(speech),
+                   now_us) == FUNASR_ENQUEUE_ACCEPTED);
+    CHECK_TRUE("speech reaches socket",
+               fake_io_wait_outbound(&io, sizeof(speech)));
+    now_us += 5000;
+    CHECK_TRUE("silence after speech is accepted",
+               funasr_transport_enqueue_pcm(
+                   transport,
+                   93,
+                   silence,
+                   sizeof(silence),
+                   now_us) == FUNASR_ENQUEUE_ACCEPTED);
+    CHECK_TRUE("silence reaches socket",
+               fake_io_wait_outbound(&io, 2U * sizeof(speech)));
+    now_us += 5000;
+    funasr_transport_wake(transport);
+    CHECK_TRUE("last-speech timeout failure arrives",
+               wait_for_collector(&collector, 3, 1));
+    CHECK_TRUE("silence does not reset last-speech deadline",
+               collector.last_failure == FUNASR_FAILURE_NO_RESULT_TIMEOUT);
+
+    funasr_transport_request_close(transport);
+    CHECK_TRUE("last-speech timeout worker closes",
+               wait_for_collector(&collector, 2, 1));
+    CHECK_TRUE("last-speech timeout worker joins",
                funasr_transport_join_closed(transport) == APR_SUCCESS);
 }
 
@@ -2376,7 +2489,8 @@ int main(void)
     test_worker_reconnects_after_final_with_trailing_close(pool);
     test_worker_reports_one_queue_overrun(pool);
     test_worker_write_stall_uses_fake_clock(pool);
-    test_worker_no_result_timeout_closes_and_reconnects(pool);
+    test_worker_first_audio_timeout_ignores_continued_audio_and_reconnects(pool);
+    test_worker_last_speech_timeout_ignores_silence(pool);
     test_stop_interrupts_stalled_handshake(pool);
     test_worker_rejected_close_fence_is_reported(pool);
     test_worker_close_without_generation_has_fence(pool);

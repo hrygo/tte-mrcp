@@ -93,7 +93,8 @@ host_triplet = @host@
 check_PROGRAMS = test_resample$(EXEEXT) test_json_unescape$(EXEEXT) \
 	test_funasr_nlsml$(EXEEXT) test_funasr_ws_transport$(EXEEXT) \
 	test_funasr_control$(EXEEXT) \
-	test_funasr_close_fence_retry$(EXEEXT)
+	test_funasr_close_fence_retry$(EXEEXT) \
+	test_funasr_timeout_config$(EXEEXT)
 subdir = plugins/asr-websocket
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/build/acmacros/opencore_amr.m4 \
@@ -151,6 +152,7 @@ am_asr_websocket_la_OBJECTS = src/asr_websocket_engine.lo \
 	src/funasr_audio.lo src/funasr_clock.lo \
 	src/funasr_close_fence_retry.lo src/funasr_control.lo \
 	src/funasr_json.lo src/funasr_nlsml.lo \
+	src/funasr_timeout_config.lo \
 	src/funasr_ws_transport.lo
 asr_websocket_la_OBJECTS = $(am_asr_websocket_la_OBJECTS)
 AM_V_lt = $(am__v_lt_@AM_V@)
@@ -179,6 +181,11 @@ am_test_funasr_nlsml_OBJECTS =  \
 	src/test_funasr_nlsml-funasr_nlsml.$(OBJEXT)
 test_funasr_nlsml_OBJECTS = $(am_test_funasr_nlsml_OBJECTS)
 test_funasr_nlsml_DEPENDENCIES = $(am__DEPENDENCIES_1)
+am_test_funasr_timeout_config_OBJECTS = tests/test_funasr_timeout_config-test_funasr_timeout_config.$(OBJEXT) \
+	src/test_funasr_timeout_config-funasr_timeout_config.$(OBJEXT)
+test_funasr_timeout_config_OBJECTS =  \
+	$(am_test_funasr_timeout_config_OBJECTS)
+test_funasr_timeout_config_LDADD = $(LDADD)
 am_test_funasr_ws_transport_OBJECTS = tests/test_funasr_ws_transport-test_funasr_ws_transport.$(OBJEXT) \
 	src/test_funasr_ws_transport-funasr_audio.$(OBJEXT) \
 	src/test_funasr_ws_transport-funasr_clock.$(OBJEXT) \
@@ -219,10 +226,12 @@ am__depfiles_remade = src/$(DEPDIR)/asr_websocket_engine.Plo \
 	src/$(DEPDIR)/funasr_close_fence_retry.Plo \
 	src/$(DEPDIR)/funasr_control.Plo src/$(DEPDIR)/funasr_json.Plo \
 	src/$(DEPDIR)/funasr_nlsml.Plo \
+	src/$(DEPDIR)/test_funasr_nlsml-funasr_nlsml.Po \
+	src/$(DEPDIR)/funasr_timeout_config.Plo \
 	src/$(DEPDIR)/funasr_ws_transport.Plo \
 	src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Po \
 	src/$(DEPDIR)/test_funasr_control-funasr_control.Po \
-	src/$(DEPDIR)/test_funasr_nlsml-funasr_nlsml.Po \
+	src/$(DEPDIR)/test_funasr_timeout_config-funasr_timeout_config.Po \
 	src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Po \
 	src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Po \
 	src/$(DEPDIR)/test_funasr_ws_transport-funasr_json.Po \
@@ -232,6 +241,7 @@ am__depfiles_remade = src/$(DEPDIR)/asr_websocket_engine.Plo \
 	tests/$(DEPDIR)/test_funasr_close_fence_retry-test_funasr_close_fence_retry.Po \
 	tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Po \
 	tests/$(DEPDIR)/test_funasr_nlsml-test_funasr_nlsml.Po \
+	tests/$(DEPDIR)/test_funasr_timeout_config-test_funasr_timeout_config.Po \
 	tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Po \
 	tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Po \
 	tests/$(DEPDIR)/test_resample-test_resample.Po
@@ -257,11 +267,13 @@ am__v_CCLD_1 =
 SOURCES = $(asr_websocket_la_SOURCES) \
 	$(test_funasr_close_fence_retry_SOURCES) \
 	$(test_funasr_control_SOURCES) $(test_funasr_nlsml_SOURCES) \
+	$(test_funasr_timeout_config_SOURCES) \
 	$(test_funasr_ws_transport_SOURCES) \
 	$(test_json_unescape_SOURCES) $(test_resample_SOURCES)
 DIST_SOURCES = $(asr_websocket_la_SOURCES) \
 	$(test_funasr_close_fence_retry_SOURCES) \
 	$(test_funasr_control_SOURCES) $(test_funasr_nlsml_SOURCES) \
+	$(test_funasr_timeout_config_SOURCES) \
 	$(test_funasr_ws_transport_SOURCES) \
 	$(test_json_unescape_SOURCES) $(test_resample_SOURCES)
 am__can_run_installinfo = \
@@ -628,6 +640,7 @@ asr_websocket_la_SOURCES = \
                              src/funasr_control.c src/funasr_control.h \
                              src/funasr_json.c src/funasr_json.h \
                              src/funasr_nlsml.c src/funasr_nlsml.h \
+                             src/funasr_timeout_config.c src/funasr_timeout_config.h \
                              src/funasr_ws_transport.c src/funasr_ws_transport.h
 
 asr_websocket_la_LDFLAGS = $(UNIMRCP_PLUGIN_OPTS)
@@ -651,6 +664,11 @@ test_funasr_ws_transport_LDADD = \
 test_funasr_ws_transport_CPPFLAGS = $(AM_CPPFLAGS)
 test_funasr_control_SOURCES = tests/test_funasr_control.c src/funasr_control.c
 test_funasr_control_CPPFLAGS = $(AM_CPPFLAGS)
+test_funasr_timeout_config_SOURCES = \
+                             tests/test_funasr_timeout_config.c \
+                             src/funasr_timeout_config.c
+
+test_funasr_timeout_config_CPPFLAGS = $(AM_CPPFLAGS)
 test_funasr_close_fence_retry_SOURCES = tests/test_funasr_close_fence_retry.c src/funasr_close_fence_retry.c
 test_funasr_close_fence_retry_LDADD = $(top_builddir)/libs/apr-toolkit/libaprtoolkit.la $(UNIMRCP_APR_LIBS)
 test_funasr_close_fence_retry_CPPFLAGS = $(AM_CPPFLAGS)
@@ -756,6 +774,8 @@ src/funasr_control.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
 src/funasr_json.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
 src/funasr_nlsml.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+src/funasr_timeout_config.lo: src/$(am__dirstamp) \
+	src/$(DEPDIR)/$(am__dirstamp)
 src/funasr_ws_transport.lo: src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
 
@@ -791,6 +811,14 @@ src/test_funasr_nlsml-funasr_nlsml.$(OBJEXT): src/$(am__dirstamp) \
 test_funasr_nlsml$(EXEEXT): $(test_funasr_nlsml_OBJECTS) $(test_funasr_nlsml_DEPENDENCIES) $(EXTRA_test_funasr_nlsml_DEPENDENCIES)
 	@rm -f test_funasr_nlsml$(EXEEXT)
 	$(AM_V_CCLD)$(LINK) $(test_funasr_nlsml_OBJECTS) $(test_funasr_nlsml_LDADD) $(LIBS)
+tests/test_funasr_timeout_config-test_funasr_timeout_config.$(OBJEXT):  \
+	tests/$(am__dirstamp) tests/$(DEPDIR)/$(am__dirstamp)
+src/test_funasr_timeout_config-funasr_timeout_config.$(OBJEXT):  \
+	src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
+
+test_funasr_timeout_config$(EXEEXT): $(test_funasr_timeout_config_OBJECTS) $(test_funasr_timeout_config_DEPENDENCIES) $(EXTRA_test_funasr_timeout_config_DEPENDENCIES)
+	@rm -f test_funasr_timeout_config$(EXEEXT)
+	$(AM_V_CCLD)$(LINK) $(test_funasr_timeout_config_OBJECTS) $(test_funasr_timeout_config_LDADD) $(LIBS)
 tests/test_funasr_ws_transport-test_funasr_ws_transport.$(OBJEXT):  \
 	tests/$(am__dirstamp) tests/$(DEPDIR)/$(am__dirstamp)
 src/test_funasr_ws_transport-funasr_audio.$(OBJEXT):  \
@@ -842,6 +870,11 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_control-funasr_control.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_nlsml-funasr_nlsml.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/funasr_timeout_config.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/funasr_ws_transport.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_control-funasr_control.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_timeout_config-funasr_timeout_config.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/test_funasr_ws_transport-funasr_json.Po@am__quote@ # am--include-marker
@@ -851,6 +884,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_funasr_close_fence_retry-test_funasr_close_fence_retry.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_funasr_nlsml-test_funasr_nlsml.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_funasr_timeout_config-test_funasr_timeout_config.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Po@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test_resample-test_resample.Po@am__quote@ # am--include-marker
@@ -968,6 +1002,33 @@ src/test_funasr_nlsml-funasr_nlsml.obj: src/funasr_nlsml.c
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_nlsml.c' object='src/test_funasr_nlsml-funasr_nlsml.obj' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_nlsml_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_funasr_nlsml-funasr_nlsml.obj `if test -f 'src/funasr_nlsml.c'; then $(CYGPATH_W) 'src/funasr_nlsml.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_nlsml.c'; fi`
+tests/test_funasr_timeout_config-test_funasr_timeout_config.o: tests/test_funasr_timeout_config.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_timeout_config_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_funasr_timeout_config-test_funasr_timeout_config.o -MD -MP -MF tests/$(DEPDIR)/test_funasr_timeout_config-test_funasr_timeout_config.Tpo -c -o tests/test_funasr_timeout_config-test_funasr_timeout_config.o `test -f 'tests/test_funasr_timeout_config.c' || echo '$(srcdir)/'`tests/test_funasr_timeout_config.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_funasr_timeout_config-test_funasr_timeout_config.Tpo tests/$(DEPDIR)/test_funasr_timeout_config-test_funasr_timeout_config.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_funasr_timeout_config.c' object='tests/test_funasr_timeout_config-test_funasr_timeout_config.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_timeout_config_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tests/test_funasr_timeout_config-test_funasr_timeout_config.o `test -f 'tests/test_funasr_timeout_config.c' || echo '$(srcdir)/'`tests/test_funasr_timeout_config.c
+
+tests/test_funasr_timeout_config-test_funasr_timeout_config.obj: tests/test_funasr_timeout_config.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_timeout_config_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_funasr_timeout_config-test_funasr_timeout_config.obj -MD -MP -MF tests/$(DEPDIR)/test_funasr_timeout_config-test_funasr_timeout_config.Tpo -c -o tests/test_funasr_timeout_config-test_funasr_timeout_config.obj `if test -f 'tests/test_funasr_timeout_config.c'; then $(CYGPATH_W) 'tests/test_funasr_timeout_config.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_funasr_timeout_config.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tests/$(DEPDIR)/test_funasr_timeout_config-test_funasr_timeout_config.Tpo tests/$(DEPDIR)/test_funasr_timeout_config-test_funasr_timeout_config.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tests/test_funasr_timeout_config.c' object='tests/test_funasr_timeout_config-test_funasr_timeout_config.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_timeout_config_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tests/test_funasr_timeout_config-test_funasr_timeout_config.obj `if test -f 'tests/test_funasr_timeout_config.c'; then $(CYGPATH_W) 'tests/test_funasr_timeout_config.c'; else $(CYGPATH_W) '$(srcdir)/tests/test_funasr_timeout_config.c'; fi`
+
+src/test_funasr_timeout_config-funasr_timeout_config.o: src/funasr_timeout_config.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_timeout_config_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_funasr_timeout_config-funasr_timeout_config.o -MD -MP -MF src/$(DEPDIR)/test_funasr_timeout_config-funasr_timeout_config.Tpo -c -o src/test_funasr_timeout_config-funasr_timeout_config.o `test -f 'src/funasr_timeout_config.c' || echo '$(srcdir)/'`src/funasr_timeout_config.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_funasr_timeout_config-funasr_timeout_config.Tpo src/$(DEPDIR)/test_funasr_timeout_config-funasr_timeout_config.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_timeout_config.c' object='src/test_funasr_timeout_config-funasr_timeout_config.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_timeout_config_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_funasr_timeout_config-funasr_timeout_config.o `test -f 'src/funasr_timeout_config.c' || echo '$(srcdir)/'`src/funasr_timeout_config.c
+
+src/test_funasr_timeout_config-funasr_timeout_config.obj: src/funasr_timeout_config.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_timeout_config_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT src/test_funasr_timeout_config-funasr_timeout_config.obj -MD -MP -MF src/$(DEPDIR)/test_funasr_timeout_config-funasr_timeout_config.Tpo -c -o src/test_funasr_timeout_config-funasr_timeout_config.obj `if test -f 'src/funasr_timeout_config.c'; then $(CYGPATH_W) 'src/funasr_timeout_config.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_timeout_config.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) src/$(DEPDIR)/test_funasr_timeout_config-funasr_timeout_config.Tpo src/$(DEPDIR)/test_funasr_timeout_config-funasr_timeout_config.Po
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='src/funasr_timeout_config.c' object='src/test_funasr_timeout_config-funasr_timeout_config.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_timeout_config_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o src/test_funasr_timeout_config-funasr_timeout_config.obj `if test -f 'src/funasr_timeout_config.c'; then $(CYGPATH_W) 'src/funasr_timeout_config.c'; else $(CYGPATH_W) '$(srcdir)/src/funasr_timeout_config.c'; fi`
 
 tests/test_funasr_ws_transport-test_funasr_ws_transport.o: tests/test_funasr_ws_transport.c
 @am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(test_funasr_ws_transport_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tests/test_funasr_ws_transport-test_funasr_ws_transport.o -MD -MP -MF tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Tpo -c -o tests/test_funasr_ws_transport-test_funasr_ws_transport.o `test -f 'tests/test_funasr_ws_transport.c' || echo '$(srcdir)/'`tests/test_funasr_ws_transport.c
@@ -1362,6 +1423,13 @@ test_funasr_close_fence_retry.log: test_funasr_close_fence_retry$(EXEEXT)
 	--log-file $$b.log --trs-file $$b.trs \
 	$(am__common_driver_flags) $(AM_LOG_DRIVER_FLAGS) $(LOG_DRIVER_FLAGS) -- $(LOG_COMPILE) \
 	"$$tst" $(AM_TESTS_FD_REDIRECT)
+test_funasr_timeout_config.log: test_funasr_timeout_config$(EXEEXT)
+	@p='test_funasr_timeout_config$(EXEEXT)'; \
+	b='test_funasr_timeout_config'; \
+	$(am__check_pre) $(LOG_DRIVER) --test-name "$$f" \
+	--log-file $$b.log --trs-file $$b.trs \
+	$(am__common_driver_flags) $(AM_LOG_DRIVER_FLAGS) $(LOG_DRIVER_FLAGS) -- $(LOG_COMPILE) \
+	"$$tst" $(AM_TESTS_FD_REDIRECT)
 .test.log:
 	@p='$<'; \
 	$(am__set_b); \
@@ -1474,6 +1542,11 @@ distclean: distclean-am
 	-rm -f src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Po
 	-rm -f src/$(DEPDIR)/test_funasr_control-funasr_control.Po
 	-rm -f src/$(DEPDIR)/test_funasr_nlsml-funasr_nlsml.Po
+	-rm -f src/$(DEPDIR)/funasr_timeout_config.Plo
+	-rm -f src/$(DEPDIR)/funasr_ws_transport.Plo
+	-rm -f src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Po
+	-rm -f src/$(DEPDIR)/test_funasr_control-funasr_control.Po
+	-rm -f src/$(DEPDIR)/test_funasr_timeout_config-funasr_timeout_config.Po
 	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Po
 	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Po
 	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_json.Po
@@ -1483,6 +1556,7 @@ distclean: distclean-am
 	-rm -f tests/$(DEPDIR)/test_funasr_close_fence_retry-test_funasr_close_fence_retry.Po
 	-rm -f tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Po
 	-rm -f tests/$(DEPDIR)/test_funasr_nlsml-test_funasr_nlsml.Po
+	-rm -f tests/$(DEPDIR)/test_funasr_timeout_config-test_funasr_timeout_config.Po
 	-rm -f tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Po
 	-rm -f tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Po
 	-rm -f tests/$(DEPDIR)/test_resample-test_resample.Po
@@ -1542,6 +1616,11 @@ maintainer-clean: maintainer-clean-am
 	-rm -f src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Po
 	-rm -f src/$(DEPDIR)/test_funasr_control-funasr_control.Po
 	-rm -f src/$(DEPDIR)/test_funasr_nlsml-funasr_nlsml.Po
+	-rm -f src/$(DEPDIR)/funasr_timeout_config.Plo
+	-rm -f src/$(DEPDIR)/funasr_ws_transport.Plo
+	-rm -f src/$(DEPDIR)/test_funasr_close_fence_retry-funasr_close_fence_retry.Po
+	-rm -f src/$(DEPDIR)/test_funasr_control-funasr_control.Po
+	-rm -f src/$(DEPDIR)/test_funasr_timeout_config-funasr_timeout_config.Po
 	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_audio.Po
 	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_clock.Po
 	-rm -f src/$(DEPDIR)/test_funasr_ws_transport-funasr_json.Po
@@ -1551,6 +1630,7 @@ maintainer-clean: maintainer-clean-am
 	-rm -f tests/$(DEPDIR)/test_funasr_close_fence_retry-test_funasr_close_fence_retry.Po
 	-rm -f tests/$(DEPDIR)/test_funasr_control-test_funasr_control.Po
 	-rm -f tests/$(DEPDIR)/test_funasr_nlsml-test_funasr_nlsml.Po
+	-rm -f tests/$(DEPDIR)/test_funasr_timeout_config-test_funasr_timeout_config.Po
 	-rm -f tests/$(DEPDIR)/test_funasr_ws_transport-test_funasr_ws_transport.Po
 	-rm -f tests/$(DEPDIR)/test_json_unescape-test_json_unescape.Po
 	-rm -f tests/$(DEPDIR)/test_resample-test_resample.Po

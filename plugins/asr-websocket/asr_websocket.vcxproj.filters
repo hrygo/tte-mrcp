@@ -19,6 +19,7 @@
     <ClCompile Include="src\funasr_close_fence_retry.c"><Filter>src</Filter></ClCompile>
     <ClCompile Include="src\funasr_control.c"><Filter>src</Filter></ClCompile>
     <ClCompile Include="src\funasr_json.c"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\funasr_timeout_config.c"><Filter>src</Filter></ClCompile>
     <ClCompile Include="src\funasr_ws_transport.c"><Filter>src</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -27,6 +28,7 @@
     <ClInclude Include="src\funasr_close_fence_retry.h"><Filter>include</Filter></ClInclude>
     <ClInclude Include="src\funasr_control.h"><Filter>include</Filter></ClInclude>
     <ClInclude Include="src\funasr_json.h"><Filter>include</Filter></ClInclude>
+    <ClInclude Include="src\funasr_timeout_config.h"><Filter>include</Filter></ClInclude>
     <ClInclude Include="src\funasr_ws_transport.h"><Filter>include</Filter></ClInclude>
   </ItemGroup>
 </Project>
