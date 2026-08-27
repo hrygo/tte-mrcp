@@ -20,6 +20,7 @@
 #define FUNASR_WORKER_READ_BUFFER_SIZE 4096U
 #define FUNASR_WS_FRAME_OVERHEAD 14U
 #define FUNASR_METRICS_LOG_INTERVAL_US APR_USEC_PER_SEC
+#define FUNASR_PCM_SPEECH_PEAK_THRESHOLD 256U
 
 typedef struct funasr_default_io_t {
     apr_pool_t *pool;
@@ -838,7 +839,10 @@ void funasr_transport_config_init(funasr_transport_config_t *config)
     config->handshake_timeout_us = FUNASR_HANDSHAKE_TIMEOUT_US;
     config->write_stall_timeout_us = FUNASR_WRITE_STALL_TIMEOUT_US;
     config->stop_drain_timeout_us = FUNASR_STOP_DRAIN_TIMEOUT_US;
-    config->no_result_timeout_us = FUNASR_NO_RESULT_TIMEOUT_US;
+    config->first_audio_result_timeout_us =
+        FUNASR_FIRST_AUDIO_RESULT_TIMEOUT_US;
+    config->last_speech_result_timeout_us =
+        FUNASR_LAST_SPEECH_RESULT_TIMEOUT_US;
     config->input_idle_timeout_us = FUNASR_INPUT_IDLE_TIMEOUT_US;
     config->poll_timeout_us = FUNASR_POLL_TIMEOUT_MS * 1000;
     funasr_clock_default(&config->clock);
@@ -1711,6 +1715,28 @@ static apt_bool_t funasr_worker_read_available(
     return TRUE;
 }
 
+static apt_bool_t funasr_pcm_contains_speech(
+    const unsigned char *data,
+    apr_size_t size)
+{
+    apr_size_t offset;
+
+    if (!data) {
+        return FALSE;
+    }
+    for (offset = 0; offset + 1U < size; offset += 2U) {
+        apr_uint16_t sample = (apr_uint16_t)data[offset] |
+            ((apr_uint16_t)data[offset + 1U] << 8);
+        apr_uint16_t magnitude = (sample & 0x8000U) != 0 ?
+            (apr_uint16_t)(~sample + 1U) : sample;
+
+        if (magnitude > FUNASR_PCM_SPEECH_PEAK_THRESHOLD) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 static void *APR_THREAD_FUNC funasr_transport_worker(
     apr_thread_t *thread,
     void *obj)
@@ -1776,7 +1802,8 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
             apr_size_t tx_offset;
             apr_int64_t last_write_progress_us;
             apr_int64_t write_wait_started_us;
-            apr_int64_t last_audio_send_us;
+            apr_int64_t first_audio_send_us;
+            apr_int64_t last_speech_send_us;
             apr_int64_t stop_started_us;
             unsigned char pong_payload[125];
             apr_size_t pong_size;
@@ -1790,6 +1817,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
             apt_bool_t generation_failed;
             apt_bool_t generation_drained;
             apt_bool_t tx_audio;
+            apt_bool_t tx_audio_has_speech;
             apr_size_t tx_audio_bytes;
             apt_bool_t sticky_ready;
             apt_bool_t opened_this_generation;
@@ -1801,7 +1829,8 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
             last_write_progress_us =
                 funasr_clock_now_us(&transport->config.clock);
             write_wait_started_us = 0;
-            last_audio_send_us = 0;
+            first_audio_send_us = 0;
+            last_speech_send_us = 0;
             stop_started_us = 0;
             pong_size = 0;
             pong_pending = FALSE;
@@ -1814,6 +1843,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
             generation_failed = FALSE;
             generation_drained = FALSE;
             tx_audio = FALSE;
+            tx_audio_has_speech = FALSE;
             tx_audio_bytes = 0;
             terminal_failure = FUNASR_FAILURE_NONE;
             opened_this_generation = FALSE;
@@ -1980,6 +2010,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                     pong_size = 0;
                     pong_pending = FALSE;
                     tx_audio = FALSE;
+                    tx_audio_has_speech = FALSE;
                     tx_audio_bytes = 0;
                     write_wait_started_us = now_us;
                 } else if (tx_size == tx_offset &&
@@ -2003,6 +2034,9 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                             max_chunk + FUNASR_WS_FRAME_OVERHEAD);
                         tx_offset = 0;
                         tx_audio = TRUE;
+                        tx_audio_has_speech = funasr_pcm_contains_speech(
+                            frame_payload,
+                            amount);
                         tx_audio_bytes = amount;
                         write_wait_started_us = now_us;
                     }
@@ -2019,6 +2053,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                         max_chunk + FUNASR_WS_FRAME_OVERHEAD);
                     tx_offset = 0;
                     tx_audio = FALSE;
+                    tx_audio_has_speech = FALSE;
                     tx_audio_bytes = 0;
                     write_wait_started_us = now_us;
                     end_frame_queued = TRUE;
@@ -2059,6 +2094,9 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                             max_chunk + FUNASR_WS_FRAME_OVERHEAD);
                         tx_offset = 0;
                         tx_audio = TRUE;
+                        tx_audio_has_speech = funasr_pcm_contains_speech(
+                            frame_payload,
+                            amount);
                         tx_audio_bytes = amount;
                         write_wait_started_us = now_us;
                     }
@@ -2076,6 +2114,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                         max_chunk + FUNASR_WS_FRAME_OVERHEAD);
                     tx_offset = 0;
                     tx_audio = FALSE;
+                    tx_audio_has_speech = FALSE;
                     tx_audio_bytes = 0;
                     write_wait_started_us = now_us;
                     end_frame_queued = TRUE;
@@ -2125,7 +2164,6 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                                 write_wait_ms;
                         }
                         if (tx_audio) {
-                            last_audio_send_us = last_write_progress_us;
                             if (transport->metrics.ws_first_send_ms < 0) {
                                 transport->metrics.ws_first_send_ms =
                                     (last_write_progress_us -
@@ -2137,6 +2175,15 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                                     0 : last_write_progress_us -
                                         transport->metrics.ws_audio_last_send_us;
 
+                                if (first_audio_send_us == 0) {
+                                    first_audio_send_us =
+                                        last_write_progress_us;
+                                    last_speech_send_us =
+                                        last_write_progress_us;
+                                } else if (tx_audio_has_speech) {
+                                    last_speech_send_us =
+                                        last_write_progress_us;
+                                }
                                 transport->metrics.ws_audio_frames++;
                                 transport->metrics.ws_audio_bytes +=
                                     tx_audio_bytes;
@@ -2199,6 +2246,7 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                     }
                     if (!had_pending && tx_size != tx_offset) {
                         tx_audio = FALSE;
+                        tx_audio_has_speech = FALSE;
                         tx_audio_bytes = 0;
                         write_wait_started_us = now_us;
                     }
@@ -2219,9 +2267,17 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                     generation_drained = TRUE;
                     break;
                 }
-                if (!cancel && last_audio_send_us != 0 &&
-                    now_us - last_audio_send_us >=
-                        transport->config.no_result_timeout_us) {
+                if (!cancel && first_audio_send_us != 0 &&
+                    now_us - first_audio_send_us >=
+                        transport->config.first_audio_result_timeout_us) {
+                    terminal_failure =
+                        FUNASR_FAILURE_FIRST_AUDIO_RESULT_TIMEOUT;
+                    generation_failed = TRUE;
+                    break;
+                }
+                if (!cancel && last_speech_send_us != 0 &&
+                    now_us - last_speech_send_us >=
+                        transport->config.last_speech_result_timeout_us) {
                     terminal_failure = FUNASR_FAILURE_NO_RESULT_TIMEOUT;
                     generation_failed = TRUE;
                     break;
@@ -2357,9 +2413,13 @@ funasr_transport_t *funasr_transport_create(
         transport->config.stop_drain_timeout_us =
             FUNASR_STOP_DRAIN_TIMEOUT_US;
     }
-    if (transport->config.no_result_timeout_us <= 0) {
-        transport->config.no_result_timeout_us =
-            FUNASR_NO_RESULT_TIMEOUT_US;
+    if (transport->config.first_audio_result_timeout_us <= 0) {
+        transport->config.first_audio_result_timeout_us =
+            FUNASR_FIRST_AUDIO_RESULT_TIMEOUT_US;
+    }
+    if (transport->config.last_speech_result_timeout_us <= 0) {
+        transport->config.last_speech_result_timeout_us =
+            FUNASR_LAST_SPEECH_RESULT_TIMEOUT_US;
     }
     if (transport->config.input_idle_timeout_us <= 0) {
         transport->config.input_idle_timeout_us =

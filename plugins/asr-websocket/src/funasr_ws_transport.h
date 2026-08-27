@@ -3,6 +3,7 @@
 
 #include "apt.h"
 #include "funasr_clock.h"
+#include "funasr_timeout_config.h"
 
 #include <apr.h>
 #include <apr_network_io.h>
@@ -29,7 +30,6 @@ typedef apr_uint64_t funasr_transport_id_t;
 #define FUNASR_HANDSHAKE_TIMEOUT_US      5000000LL
 #define FUNASR_WRITE_STALL_TIMEOUT_US    5000000LL
 #define FUNASR_STOP_DRAIN_TIMEOUT_US     5000000LL
-#define FUNASR_NO_RESULT_TIMEOUT_US     10000000LL
 #define FUNASR_INPUT_IDLE_TIMEOUT_US     1000000LL
 #define FUNASR_MEDIA_GAP_HISTOGRAM_BUCKETS 256U
 
@@ -179,6 +179,7 @@ typedef enum funasr_transport_failure_e {
     FUNASR_FAILURE_PROTOCOL,
     FUNASR_FAILURE_QUEUE_OVERRUN,
     FUNASR_FAILURE_WRITE_STALL,
+    FUNASR_FAILURE_FIRST_AUDIO_RESULT_TIMEOUT,
     FUNASR_FAILURE_NO_RESULT_TIMEOUT,
     FUNASR_FAILURE_EOF,
     FUNASR_FAILURE_INTERNAL
@@ -248,7 +249,8 @@ typedef struct funasr_transport_config_t {
     apr_interval_time_t handshake_timeout_us;
     apr_interval_time_t write_stall_timeout_us;
     apr_interval_time_t stop_drain_timeout_us;
-    apr_interval_time_t no_result_timeout_us;
+    apr_interval_time_t first_audio_result_timeout_us;
+    apr_interval_time_t last_speech_result_timeout_us;
     apr_interval_time_t input_idle_timeout_us;
     apr_interval_time_t poll_timeout_us;
     funasr_clock_t clock;
