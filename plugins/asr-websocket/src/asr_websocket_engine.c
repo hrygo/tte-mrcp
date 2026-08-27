@@ -5,6 +5,7 @@
 #include "funasr_clock.h"
 #include "funasr_close_fence_retry.h"
 #include "funasr_control.h"
+#include "funasr_timeout_config.h"
 #include "funasr_ws_transport.h"
 
 #include <apr_strings.h>
@@ -51,6 +52,8 @@ struct funasr_engine_t {
     char *server_host;
     apr_port_t server_port;
     char *server_path;
+    apr_interval_time_t first_audio_result_timeout_us;
+    apr_interval_time_t last_speech_result_timeout_us;
     funasr_transport_id_t next_transport_id;
     funasr_registry_entry_t *registry;
     apt_bool_t quiescing;
@@ -378,6 +381,28 @@ static apt_bool_t funasr_engine_destroy(mrcp_engine_t *engine)
     return TRUE;
 }
 
+static apr_interval_time_t funasr_engine_timeout_param_get(
+    mrcp_engine_t *engine,
+    const char *name,
+    apr_interval_time_t fallback)
+{
+    const char *value;
+    funasr_timeout_value_e status;
+    apr_interval_time_t timeout;
+
+    value = mrcp_engine_param_get(engine, name);
+    timeout = funasr_timeout_ms_parse(value, fallback, &status);
+    if (status == FUNASR_TIMEOUT_VALUE_INVALID) {
+        apt_log(
+            APT_LOG_MARK,
+            APT_PRIO_WARNING,
+            "asr_websocket: invalid %s; using default timeout_ms=%ld",
+            name,
+            (long)(fallback / 1000));
+    }
+    return timeout;
+}
+
 static apt_bool_t funasr_engine_open(mrcp_engine_t *engine)
 {
     funasr_engine_t *funasr_engine;
@@ -397,14 +422,26 @@ static apt_bool_t funasr_engine_open(mrcp_engine_t *engine)
     funasr_engine->server_path = apr_pstrdup(
         funasr_engine->pool,
         path ? path : FUNASR_SERVER_PATH);
+    funasr_engine->first_audio_result_timeout_us =
+        funasr_engine_timeout_param_get(
+            engine,
+            "first-audio-result-timeout-ms",
+            FUNASR_FIRST_AUDIO_RESULT_TIMEOUT_US);
+    funasr_engine->last_speech_result_timeout_us =
+        funasr_engine_timeout_param_get(
+            engine,
+            "last-speech-result-timeout-ms",
+            FUNASR_LAST_SPEECH_RESULT_TIMEOUT_US);
     apt_task_start(apt_consumer_task_base_get(funasr_engine->task));
     apt_log(
         APT_LOG_MARK,
         APT_PRIO_INFO,
-        "asr_websocket: transport worker endpoint configured host=%s port=%u path=%s",
+        "asr_websocket: transport worker endpoint configured host=%s port=%u path=%s first_audio_result_timeout_ms=%ld last_speech_result_timeout_ms=%ld",
         funasr_engine->server_host,
         (unsigned int)funasr_engine->server_port,
-        funasr_engine->server_path);
+        funasr_engine->server_path,
+        (long)(funasr_engine->first_audio_result_timeout_us / 1000),
+        (long)(funasr_engine->last_speech_result_timeout_us / 1000));
     return mrcp_engine_open_respond(engine, TRUE);
 }
 
@@ -921,6 +958,10 @@ static apt_bool_t funasr_open_channel_on_task(funasr_channel_t *channel)
     config.host = channel->engine->server_host;
     config.port = channel->engine->server_port;
     config.path = channel->engine->server_path;
+    config.first_audio_result_timeout_us =
+        channel->engine->first_audio_result_timeout_us;
+    config.last_speech_result_timeout_us =
+        channel->engine->last_speech_result_timeout_us;
     config.clock = channel->clock;
     config.event_sink = funasr_transport_event_sink;
     config.event_sink_obj = bridge;
@@ -1056,6 +1097,27 @@ static void funasr_transport_event_on_task(
             (unsigned long)event->metrics.ws_rx_partial_reads,
             (unsigned long)event->metrics.ws_rx_messages,
             (int)event->metrics.completion_failure);
+    }
+    if (event->type == FUNASR_EVENT_TRANSPORT_FAILED &&
+        entry->channel->control.active &&
+        entry->channel->control.generation == event->generation) {
+        if (event->failure == FUNASR_FAILURE_FIRST_AUDIO_RESULT_TIMEOUT) {
+            LOG_WITH_SID(
+                entry->channel,
+                APT_PRIO_WARNING,
+                "asr first audio result timeout generation=%lu timeout_ms=%ld",
+                (unsigned long)event->generation,
+                (long)(entry->channel->engine->
+                    first_audio_result_timeout_us / 1000));
+        } else if (event->failure == FUNASR_FAILURE_NO_RESULT_TIMEOUT) {
+            LOG_WITH_SID(
+                entry->channel,
+                APT_PRIO_WARNING,
+                "asr not response resut generation=%lu timeout_ms=%ld",
+                (unsigned long)event->generation,
+                (long)(entry->channel->engine->
+                    last_speech_result_timeout_us / 1000));
+        }
     }
     handled = FALSE;
     handled = funasr_control_handle_event(
