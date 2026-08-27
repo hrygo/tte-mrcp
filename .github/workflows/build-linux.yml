@@ -274,7 +274,7 @@ jobs:
           audit_elf
 
           # ---- Plugin unit-test gates (target ABI container) ----
-          # Autotools gate: asr_websocket check_PROGRAMS (4 tests).
+          # Autotools gate: asr_websocket check_PROGRAMS (5 tests).
           make -C "$GITHUB_WORKSPACE/build/ci/plugins/asr-websocket" check \
             > "$GITHUB_WORKSPACE/check-autotools-$TARGET.log" 2>&1 || {
               tail -n 120 "$GITHUB_WORKSPACE/check-autotools-$TARGET.log"
@@ -286,7 +286,7 @@ jobs:
           # CMake gate (kylinv10 row only): plugin tests via CTest.
           # PR checks run on the merge ref, where the tts-websocket plugin
           # registers http_parse/pcm/lifecycle/ws test executables in addition
-          # to the four asr_websocket tests; build every registered plugin target.
+          # to the five asr_websocket tests; build every registered plugin target.
           if [ "$RUN_CMAKE_GATE" = true ]; then
             cmake -S "$GITHUB_WORKSPACE" -B "$GITHUB_WORKSPACE/build/ci-cmake" \
               -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -300,6 +300,7 @@ jobs:
               --target test_resample test_json_unescape \
                      test_funasr_ws_transport test_funasr_control \
                      test_funasr_close_fence_retry \
+                     test_funasr_timeout_config \
                      test_tts_websocket_http_parse \
                      test_tts_websocket_pcm test_tts_websocket_json \
                      test_tts_websocket_lifecycle \
