@@ -115,6 +115,7 @@
     <ClCompile Include="src\funasr_close_fence_retry.c" />
     <ClCompile Include="src\funasr_control.c" />
     <ClCompile Include="src\funasr_json.c" />
+    <ClCompile Include="src\funasr_timeout_config.c" />
     <ClCompile Include="src\funasr_ws_transport.c" />
   </ItemGroup>
   <ItemGroup>
@@ -123,6 +124,7 @@
     <ClInclude Include="src\funasr_close_fence_retry.h" />
     <ClInclude Include="src\funasr_control.h" />
     <ClInclude Include="src\funasr_json.h" />
+    <ClInclude Include="src\funasr_timeout_config.h" />
     <ClInclude Include="src\funasr_ws_transport.h" />
   </ItemGroup>
   <ItemGroup>

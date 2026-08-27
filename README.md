@@ -127,7 +127,10 @@ macOS Homebrew 路径只允许出现在本机开发脚本和本地生成目录�
 - 插件动态库：`asr_websocket.so`（Windows 为对应 DLL）
 - 配置引擎：`ASR-WebSocket-1`，注册名 `asr_websocket`
 - endpoint 参数：`funasr-host`、`funasr-port`、`funasr-path`
+- 识别结果超时参数：`first-audio-result-timeout-ms`（默认 20000）与 `last-speech-result-timeout-ms`（默认 10000）；均为正整数毫秒，缺失时使用默认值，无效值会告警并回退默认值。
 - 诊断入口：`tools/diagnostics/diagnose.sh`
+
+首个完整音频 WebSocket 帧发出后，`first-audio-result-timeout-ms` 作为本轮 `RECOGNIZE` 的绝对结果上限，不会因后续音频而刷新。`last-speech-result-timeout-ms` 从首帧开始计时，只在峰值大于 256 的 16-bit little-endian PCM 帧完整发送后刷新；静音 PCM 仍会转发给 ASR，但不会延后该 deadline。任一超时都会以空内容向 MRCP 上游返回 `RECOGNITION-COMPLETE` 和 `NO-INPUT-TIMEOUT`，下一轮 `RECOGNIZE` 重新开始计时。
 
 历史配置 `Demo-Recog-1` / `demorecog` 迁移为 `ASR-WebSocket-1` / `asr_websocket`；FunASR endpoint 参数不变。当前发布不提供旧动态库或 engine 的运行时别名：部署升级必须原子替换 XML 与插件库，不能用旧 XML 加载新安装。兼容窗口仅覆盖 loopback fixture 的旧输入迁移；旧名称从本发布版本起退出正式构建，不延长到后续 release。真实生产灰度和外部服务运行验收需由部署方人工确认，macOS 本地通过不代表 Windows/Linux 运行时已验证。
 
