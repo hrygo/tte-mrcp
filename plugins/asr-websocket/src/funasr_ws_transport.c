@@ -21,6 +21,12 @@
 #define FUNASR_WS_FRAME_OVERHEAD 14U
 #define FUNASR_METRICS_LOG_INTERVAL_US APR_USEC_PER_SEC
 #define FUNASR_PCM_SPEECH_PEAK_THRESHOLD 256U
+#define FUNASR_LOG_JSON_MAX_BYTES FUNASR_LOG_LINE_MAX_BYTES
+#define FUNASR_LOG_SESSION_MAX_BYTES 128U
+#define FUNASR_LOG_HOST_MAX_BYTES 128U
+#define FUNASR_LOG_PATH_MAX_BYTES 256U
+#define FUNASR_LOG_ENDPOINT_MAX_BYTES 448U
+#define FUNASR_LOG_RESULT_TRAILER_BYTES 32U
 
 typedef struct funasr_default_io_t {
     apr_pool_t *pool;
@@ -1349,8 +1355,637 @@ static apt_bool_t funasr_transport_commit_terminal(
     return cancel;
 }
 
+static apt_bool_t funasr_log_append_byte(
+    char *output,
+    apr_size_t output_capacity,
+    apr_size_t *output_size,
+    unsigned char value)
+{
+    if (*output_size + 1U >= output_capacity) {
+        return FALSE;
+    }
+    output[*output_size] =
+        (value < 0x20U || value == 0x7fU) ? ' ' : (char)value;
+    (*output_size)++;
+    output[*output_size] = '\0';
+    return TRUE;
+}
+
+static void funasr_log_append_bytes(
+    char *output,
+    apr_size_t output_capacity,
+    apr_size_t *output_size,
+    const unsigned char *value,
+    apr_size_t value_size,
+    apt_bool_t *complete)
+{
+    apr_size_t index;
+
+    for (index = 0; index < value_size; ++index) {
+        if (!funasr_log_append_byte(
+                output,
+                output_capacity,
+                output_size,
+                value[index])) {
+            *complete = FALSE;
+            return;
+        }
+    }
+}
+
+static void funasr_log_append_string(
+    char *output,
+    apr_size_t output_capacity,
+    apr_size_t *output_size,
+    const char *value,
+    apr_size_t value_limit,
+    apt_bool_t *complete)
+{
+    apr_size_t value_size;
+
+    if (!value) {
+        value = "N/A";
+    }
+    value_size = 0;
+    while (value_size < value_limit && value[value_size] != '\0') {
+        value_size++;
+    }
+    funasr_log_append_bytes(
+        output,
+        output_capacity,
+        output_size,
+        (const unsigned char *)value,
+        value_size,
+        complete);
+}
+
+static void funasr_log_append_unsigned(
+    char *output,
+    apr_size_t output_capacity,
+    apr_size_t *output_size,
+    apr_uint64_t value,
+    apt_bool_t *complete)
+{
+    char number[32];
+
+    apr_snprintf(number, sizeof(number), "%" APR_UINT64_T_FMT, value);
+    funasr_log_append_string(
+        output,
+        output_capacity,
+        output_size,
+        number,
+        sizeof(number),
+        complete);
+}
+
+static void funasr_log_format_endpoint(
+    const char *host,
+    apr_port_t port,
+    const char *path,
+    char *output,
+    apr_size_t output_capacity)
+{
+    const char *host_start;
+    const char *userinfo_separator;
+    apr_size_t output_size;
+    apr_size_t host_size;
+    apr_size_t path_size;
+    apt_bool_t query_redacted;
+    apt_bool_t complete;
+
+    output_size = 0;
+    complete = TRUE;
+    output[0] = '\0';
+    query_redacted = FALSE;
+    host_start = host ? host : "N/A";
+    userinfo_separator = strrchr(host_start, '@');
+    if (userinfo_separator) {
+        host_start = userinfo_separator + 1;
+    }
+    host_size = 0;
+    while (host_start[host_size] != '\0' && host_start[host_size] != '?' &&
+           host_start[host_size] != '#' &&
+           host_size < FUNASR_LOG_HOST_MAX_BYTES) {
+        host_size++;
+    }
+    if (host_start[host_size] == '?' || host_start[host_size] == '#') {
+        query_redacted = TRUE;
+    }
+    funasr_log_append_bytes(
+        output,
+        output_capacity,
+        &output_size,
+        (const unsigned char *)host_start,
+        host_size,
+        &complete);
+    funasr_log_append_string(
+        output,
+        output_capacity,
+        &output_size,
+        ":",
+        1U,
+        &complete);
+    funasr_log_append_unsigned(
+        output,
+        output_capacity,
+        &output_size,
+        (apr_uint64_t)port,
+        &complete);
+
+    if (!path || !complete) {
+        return;
+    }
+    path_size = 0;
+    while (path[path_size] != '\0' && path[path_size] != '?' &&
+           path[path_size] != '#' &&
+           path_size < FUNASR_LOG_PATH_MAX_BYTES) {
+        path_size++;
+    }
+    funasr_log_append_bytes(
+        output,
+        output_capacity,
+        &output_size,
+        (const unsigned char *)path,
+        path_size,
+        &complete);
+    if (path[path_size] == '?' || path[path_size] == '#') {
+        query_redacted = TRUE;
+    }
+    if (query_redacted) {
+        funasr_log_append_string(
+            output,
+            output_capacity,
+            &output_size,
+            "?redacted=1",
+            sizeof("?redacted=1") - 1U,
+            &complete);
+    }
+}
+
+static int funasr_log_json_hex_digit(unsigned char value)
+{
+    if (value >= '0' && value <= '9') {
+        return value - '0';
+    }
+    if (value >= 'a' && value <= 'f') {
+        return value - 'a' + 10;
+    }
+    if (value >= 'A' && value <= 'F') {
+        return value - 'A' + 10;
+    }
+    return -1;
+}
+
+static apt_bool_t funasr_log_json_key_is_sensitive(
+    const unsigned char *key,
+    apr_size_t key_size)
+{
+    static const char *sensitive_keys[] = {
+        "authorization",
+        "token",
+        "access_token",
+        "refresh_token",
+        "password",
+        "secret",
+        "api_key",
+        "apikey",
+        "api-key"
+    };
+    unsigned char decoded_key[64];
+    apr_size_t index;
+    apr_size_t decoded_size;
+
+    decoded_size = 0;
+    index = 0;
+    while (index < key_size && decoded_size < sizeof(decoded_key)) {
+        unsigned char value;
+
+        value = key[index++];
+        if (value == '\\') {
+            if (index >= key_size) {
+                return FALSE;
+            }
+            value = key[index++];
+            if (value == 'u') {
+                apr_uint32_t codepoint;
+                apr_size_t hex_index;
+
+                if (index + 4U > key_size) {
+                    return FALSE;
+                }
+                codepoint = 0;
+                for (hex_index = 0; hex_index < 4U; ++hex_index) {
+                    int digit = funasr_log_json_hex_digit(key[index + hex_index]);
+
+                    if (digit < 0) {
+                        return FALSE;
+                    }
+                    codepoint = (codepoint << 4) | (apr_uint32_t)digit;
+                }
+                if (codepoint > 0x7fU) {
+                    return FALSE;
+                }
+                value = (unsigned char)codepoint;
+                index += 4U;
+            } else if (value == '"' || value == '\\' || value == '/') {
+                /* The escaped byte is already the value to compare. */
+            } else if (value == 'b') {
+                value = '\b';
+            } else if (value == 'f') {
+                value = '\f';
+            } else if (value == 'n') {
+                value = '\n';
+            } else if (value == 'r') {
+                value = '\r';
+            } else if (value == 't') {
+                value = '\t';
+            } else {
+                return FALSE;
+            }
+        }
+        decoded_key[decoded_size++] = value;
+    }
+    if (index != key_size) {
+        return FALSE;
+    }
+    for (index = 0; index < sizeof(sensitive_keys) / sizeof(sensitive_keys[0]);
+         ++index) {
+        if (funasr_span_equal_ci(
+                decoded_key,
+                decoded_size,
+                sensitive_keys[index])) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static apr_size_t funasr_log_json_string_end(
+    const unsigned char *json,
+    apr_size_t json_size,
+    apr_size_t quote_offset)
+{
+    apr_size_t index;
+
+    index = quote_offset + 1U;
+    while (index < json_size) {
+        if (json[index] == '\\') {
+            if (index + 1U >= json_size) {
+                return json_size;
+            }
+            index += 2U;
+            continue;
+        }
+        if (json[index] == '"') {
+            return index;
+        }
+        index++;
+    }
+    return json_size;
+}
+
+static apt_bool_t funasr_log_json_is_whitespace(unsigned char value)
+{
+    return value == ' ' || value == '\t' || value == '\r' || value == '\n';
+}
+
+static void funasr_log_sanitize_json(
+    const unsigned char *json,
+    apr_size_t json_size,
+    char *output,
+    apr_size_t output_capacity,
+    apr_size_t *output_size,
+    apt_bool_t *truncated,
+    apt_bool_t *redacted)
+{
+    apr_size_t index;
+    apt_bool_t complete;
+
+    index = 0;
+    complete = TRUE;
+    while (index < json_size && complete) {
+        if (json[index] == '"') {
+            apr_size_t key_end;
+            apr_size_t colon_offset;
+
+            key_end = funasr_log_json_string_end(json, json_size, index);
+            colon_offset = key_end;
+            if (key_end < json_size) {
+                colon_offset++;
+                while (colon_offset < json_size &&
+                       funasr_log_json_is_whitespace(json[colon_offset])) {
+                    colon_offset++;
+                }
+            }
+            if (key_end < json_size && colon_offset < json_size &&
+                json[colon_offset] == ':' &&
+                funasr_log_json_key_is_sensitive(
+                    json + index + 1U,
+                    key_end - index - 1U)) {
+                apr_size_t value_offset;
+
+                funasr_log_append_bytes(
+                    output,
+                    output_capacity,
+                    output_size,
+                    json + index,
+                    colon_offset - index + 1U,
+                    &complete);
+                index = colon_offset + 1U;
+                while (index < json_size &&
+                       funasr_log_json_is_whitespace(json[index]) && complete) {
+                    complete = funasr_log_append_byte(
+                        output,
+                        output_capacity,
+                        output_size,
+                        json[index]);
+                    index++;
+                }
+                value_offset = index;
+                funasr_log_append_string(
+                    output,
+                    output_capacity,
+                    output_size,
+                    "\"***\"",
+                    sizeof("\"***\"") - 1U,
+                    &complete);
+                if (value_offset < json_size && json[value_offset] == '"') {
+                    apr_size_t value_end = funasr_log_json_string_end(
+                        json,
+                        json_size,
+                        value_offset);
+
+                    index = value_end < json_size ? value_end + 1U : json_size;
+                } else {
+                    index = value_offset;
+                    while (index < json_size && json[index] != ',' &&
+                           json[index] != '}' && json[index] != ']') {
+                        index++;
+                    }
+                }
+                *redacted = TRUE;
+                continue;
+            }
+        }
+        complete = funasr_log_append_byte(
+            output,
+            output_capacity,
+            output_size,
+            json[index]);
+        index++;
+    }
+    if (index < json_size || !complete) {
+        *truncated = TRUE;
+    }
+}
+
+#ifdef FUNASR_WS_TRANSPORT_TESTING
+#define FUNASR_RESULT_LOG_VISIBILITY
+#else
+#define FUNASR_RESULT_LOG_VISIBILITY static
+#endif
+
+FUNASR_RESULT_LOG_VISIBILITY apr_size_t funasr_transport_format_result_json_log(
+    const char *session_id,
+    funasr_generation_t generation,
+    const char *host,
+    apr_port_t port,
+    const char *path,
+    const unsigned char *json,
+    apr_size_t json_size,
+    char *output,
+    apr_size_t output_capacity)
+{
+    char endpoint[FUNASR_LOG_ENDPOINT_MAX_BYTES + 1U];
+    apr_size_t output_size;
+    apt_bool_t complete;
+    apt_bool_t truncated;
+    apt_bool_t redacted;
+    apr_size_t json_output_capacity;
+
+    if (!output || output_capacity == 0) {
+        return 0;
+    }
+    output_size = 0;
+    complete = TRUE;
+    truncated = FALSE;
+    redacted = FALSE;
+    output[0] = '\0';
+    funasr_log_format_endpoint(host, port, path, endpoint, sizeof(endpoint));
+    funasr_log_append_string(
+        output,
+        output_capacity,
+        &output_size,
+        "asr_websocket: [session_id=",
+        sizeof("asr_websocket: [session_id=") - 1U,
+        &complete);
+    funasr_log_append_string(
+        output,
+        output_capacity,
+        &output_size,
+        session_id,
+        FUNASR_LOG_SESSION_MAX_BYTES,
+        &complete);
+    funasr_log_append_string(
+        output,
+        output_capacity,
+        &output_size,
+        "] ASR WebSocket result JSON generation=",
+        sizeof("] ASR WebSocket result JSON generation=") - 1U,
+        &complete);
+    funasr_log_append_unsigned(
+        output,
+        output_capacity,
+        &output_size,
+        generation,
+        &complete);
+    funasr_log_append_string(
+        output,
+        output_capacity,
+        &output_size,
+        " endpoint=",
+        sizeof(" endpoint=") - 1U,
+        &complete);
+    funasr_log_append_string(
+        output,
+        output_capacity,
+        &output_size,
+        endpoint,
+        sizeof(endpoint),
+        &complete);
+    funasr_log_append_string(
+        output,
+        output_capacity,
+        &output_size,
+        " size=",
+        sizeof(" size=") - 1U,
+        &complete);
+    funasr_log_append_unsigned(
+        output,
+        output_capacity,
+        &output_size,
+        (apr_uint64_t)json_size,
+        &complete);
+    funasr_log_append_string(
+        output,
+        output_capacity,
+        &output_size,
+        " json=",
+        sizeof(" json=") - 1U,
+        &complete);
+
+    if (output_capacity > FUNASR_LOG_RESULT_TRAILER_BYTES) {
+        json_output_capacity = output_capacity - FUNASR_LOG_RESULT_TRAILER_BYTES;
+    } else {
+        json_output_capacity = output_capacity;
+    }
+    if (json && complete && output_size + 1U < json_output_capacity) {
+        funasr_log_sanitize_json(
+            json,
+            json_size,
+            output,
+            json_output_capacity,
+            &output_size,
+            &truncated,
+            &redacted);
+    } else if (json_size != 0) {
+        truncated = TRUE;
+    }
+    funasr_log_append_string(
+        output,
+        output_capacity,
+        &output_size,
+        " truncated=",
+        sizeof(" truncated=") - 1U,
+        &complete);
+    funasr_log_append_unsigned(
+        output,
+        output_capacity,
+        &output_size,
+        truncated ? 1U : 0U,
+        &complete);
+    funasr_log_append_string(
+        output,
+        output_capacity,
+        &output_size,
+        " redacted=",
+        sizeof(" redacted=") - 1U,
+        &complete);
+    funasr_log_append_unsigned(
+        output,
+        output_capacity,
+        &output_size,
+        redacted ? 1U : 0U,
+        &complete);
+    return output_size;
+}
+
+#undef FUNASR_RESULT_LOG_VISIBILITY
+
+static void funasr_transport_log_error(
+    funasr_transport_t *transport,
+    funasr_generation_t generation,
+    const char *message,
+    apr_status_t status)
+{
+    char endpoint[FUNASR_LOG_ENDPOINT_MAX_BYTES + 1U];
+    char session_id[FUNASR_LOG_SESSION_MAX_BYTES + 1U];
+    apr_size_t session_size;
+    apt_bool_t complete;
+
+    session_size = 0;
+    complete = TRUE;
+    session_id[0] = '\0';
+    funasr_log_append_string(
+        session_id,
+        sizeof(session_id),
+        &session_size,
+        transport->call_id[0] ? transport->call_id : "N/A",
+        FUNASR_LOG_SESSION_MAX_BYTES,
+        &complete);
+    funasr_log_format_endpoint(
+        transport->host,
+        transport->config.port,
+        transport->path,
+        endpoint,
+        sizeof(endpoint));
+    apt_log(
+        APT_LOG_MARK,
+        APT_PRIO_ERROR,
+        "asr_websocket: [session_id=%s] %s generation=%lu endpoint=%s apr_status=%d",
+        session_id,
+        message,
+        (unsigned long)generation,
+        endpoint,
+        (int)status);
+}
+
+static void funasr_transport_log_result_json(
+    funasr_transport_t *transport,
+    funasr_generation_t generation,
+    const unsigned char *json,
+    apr_size_t json_size)
+{
+    char log_line[FUNASR_LOG_JSON_MAX_BYTES + 1U];
+
+    if (!json) {
+        return;
+    }
+    funasr_transport_format_result_json_log(
+        transport->call_id[0] ? transport->call_id : "N/A",
+        generation,
+        transport->host,
+        transport->config.port,
+        transport->path,
+        json,
+        json_size,
+        log_line,
+        sizeof(log_line));
+    apt_log(APT_LOG_MARK, APT_PRIO_INFO, "%s", log_line);
+}
+
+static void funasr_transport_log_result_rejected(
+    funasr_transport_t *transport,
+    funasr_generation_t generation,
+    int code,
+    apr_size_t json_size)
+{
+    char endpoint[FUNASR_LOG_ENDPOINT_MAX_BYTES + 1U];
+    char session_id[FUNASR_LOG_SESSION_MAX_BYTES + 1U];
+    apr_size_t session_size;
+    apt_bool_t complete;
+
+    session_size = 0;
+    complete = TRUE;
+    session_id[0] = '\0';
+    funasr_log_append_string(
+        session_id,
+        sizeof(session_id),
+        &session_size,
+        transport->call_id[0] ? transport->call_id : "N/A",
+        FUNASR_LOG_SESSION_MAX_BYTES,
+        &complete);
+    funasr_log_format_endpoint(
+        transport->host,
+        transport->config.port,
+        transport->path,
+        endpoint,
+        sizeof(endpoint));
+    apt_log(
+        APT_LOG_MARK,
+        APT_PRIO_ERROR,
+        "asr_websocket: [session_id=%s] ASR WebSocket result rejected generation=%lu endpoint=%s asr_code=%d json_size=%" APR_SIZE_T_FMT,
+        session_id,
+        (unsigned long)generation,
+        endpoint,
+        code,
+        json_size);
+}
+
 static apt_bool_t funasr_worker_write_pending(
     funasr_transport_t *transport,
+    funasr_generation_t generation,
+    apt_bool_t audio_frame,
     unsigned char *buffer,
     apr_size_t size,
     apr_size_t *offset,
@@ -1372,6 +2007,12 @@ static apt_bool_t funasr_worker_write_pending(
     if (funasr_status_retryable(status)) {
         return TRUE;
     }
+    funasr_transport_log_error(
+        transport,
+        generation,
+        audio_frame ? "ASR WebSocket audio write failed" :
+            "ASR WebSocket control write failed",
+        status);
     return FALSE;
 }
 
@@ -1420,6 +2061,11 @@ static apt_bool_t funasr_worker_handshake(
     }
     if (apr_base64_encode_binary(key, nonce, sizeof(nonce)) <= 0 ||
         !funasr_ws_accept_compute(key, accept, sizeof(accept))) {
+        funasr_transport_log_error(
+            transport,
+            generation,
+            "ASR WebSocket handshake failed",
+            APR_EGENERAL);
         return FALSE;
     }
     result = apr_snprintf(
@@ -1440,6 +2086,11 @@ static apt_bool_t funasr_worker_handshake(
         (unsigned int)transport->config.port,
         key);
     if (result <= 0 || (apr_size_t)result >= sizeof(request)) {
+        funasr_transport_log_error(
+            transport,
+            generation,
+            "ASR WebSocket handshake failed",
+            APR_EGENERAL);
         return FALSE;
     }
     request_size = (apr_size_t)result;
@@ -1485,6 +2136,11 @@ static apt_bool_t funasr_worker_handshake(
             request_offset < request_size,
             &events);
         if (status != APR_SUCCESS && !funasr_status_retryable(status)) {
+            funasr_transport_log_error(
+                transport,
+                generation,
+                "ASR WebSocket handshake failed",
+                status);
             return FALSE;
         }
         if ((events & FUNASR_IO_WRITABLE) != 0 &&
@@ -1497,6 +2153,11 @@ static apt_bool_t funasr_worker_handshake(
             if (status == APR_SUCCESS) {
                 request_offset += amount;
             } else if (!funasr_status_retryable(status)) {
+                funasr_transport_log_error(
+                    transport,
+                    generation,
+                    "ASR WebSocket handshake failed",
+                    status);
                 return FALSE;
             }
         }
@@ -1510,12 +2171,22 @@ static apt_bool_t funasr_worker_handshake(
                 input,
                 &amount);
             if (status == APR_EOF || (status == APR_SUCCESS && amount == 0)) {
+                funasr_transport_log_error(
+                    transport,
+                    generation,
+                    "ASR WebSocket handshake failed",
+                    APR_EOF);
                 return FALSE;
             }
             if (status != APR_SUCCESS) {
                 if (funasr_status_retryable(status)) {
                     continue;
                 }
+                funasr_transport_log_error(
+                    transport,
+                    generation,
+                    "ASR WebSocket handshake failed",
+                    status);
                 return FALSE;
             }
             http_status = funasr_http_decoder_feed(
@@ -1529,6 +2200,11 @@ static apt_bool_t funasr_worker_handshake(
                         http_decoder.size,
                         "sec-websocket-accept",
                         accept)) {
+                    funasr_transport_log_error(
+                        transport,
+                        generation,
+                        "ASR WebSocket handshake failed",
+                        APR_EGENERAL);
                     return FALSE;
                 }
                 if (consumed < amount) {
@@ -1542,16 +2218,31 @@ static apt_bool_t funasr_worker_handshake(
                         *sticky_ready = TRUE;
                     } else if (sticky_status == FUNASR_WS_PROTOCOL_ERROR ||
                                sticky_status == FUNASR_WS_LIMIT_EXCEEDED) {
+                        funasr_transport_log_error(
+                            transport,
+                            generation,
+                            "ASR WebSocket handshake failed",
+                            APR_EGENERAL);
                         return FALSE;
                     }
                 }
                 return TRUE;
             }
             if (http_status != FUNASR_HTTP_NEED_MORE) {
+                funasr_transport_log_error(
+                    transport,
+                    generation,
+                    "ASR WebSocket handshake failed",
+                    APR_EGENERAL);
                 return FALSE;
             }
         }
     }
+    funasr_transport_log_error(
+        transport,
+        generation,
+        "ASR WebSocket handshake failed",
+        APR_TIMEUP);
     return FALSE;
 }
 
@@ -1570,7 +2261,6 @@ static apt_bool_t funasr_worker_handle_ws_event(
     apr_size_t *final_text_size,
     apt_bool_t *final_received)
 {
-    (void)generation;
     if (ws_event->type == FUNASR_WS_EVENT_MESSAGE &&
         ws_event->opcode == FUNASR_WS_OPCODE_TEXT) {
         int code;
@@ -1580,11 +2270,29 @@ static apt_bool_t funasr_worker_handle_ws_event(
         apr_thread_mutex_lock(transport->mutex);
         transport->metrics.ws_rx_messages++;
         apr_thread_mutex_unlock(transport->mutex);
+        funasr_transport_log_result_json(
+            transport,
+            generation,
+            ws_event->data,
+            ws_event->size);
         if (funasr_json_get_int(
                 (const char *)ws_event->data,
                 ws_event->size,
                 "code",
-                &code) != FUNASR_JSON_OK || code != 0) {
+                &code) != FUNASR_JSON_OK) {
+            funasr_transport_log_error(
+                transport,
+                generation,
+                "ASR WebSocket result JSON parse failed",
+                APR_EGENERAL);
+            return FALSE;
+        }
+        if (code != 0) {
+            funasr_transport_log_result_rejected(
+                transport,
+                generation,
+                code,
+                ws_event->size);
             return FALSE;
         }
         text_value = NULL;
@@ -1596,6 +2304,11 @@ static apt_bool_t funasr_worker_handle_ws_event(
                 FUNASR_WS_MESSAGE_LIMIT,
                 &text_value,
                 &text_size) != FUNASR_JSON_OK) {
+            funasr_transport_log_error(
+                transport,
+                generation,
+                "ASR WebSocket result JSON parse failed",
+                APR_EGENERAL);
             return FALSE;
         }
         *final_text = text_value;
@@ -1624,6 +2337,11 @@ static apt_bool_t funasr_worker_handle_ws_event(
         return TRUE;
     }
     if (ws_event->type == FUNASR_WS_EVENT_CLOSE) {
+        funasr_transport_log_error(
+            transport,
+            generation,
+            "ASR WebSocket close frame received",
+            APR_EOF);
         return FALSE;
     }
     return TRUE;
@@ -2143,6 +2861,8 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                     apt_bool_t metrics_due = FALSE;
                     if (!funasr_worker_write_pending(
                             transport,
+                            generation,
+                            tx_audio,
                             tx_buffer,
                             tx_size,
                             &tx_offset,
