@@ -2,6 +2,7 @@
 #define TTS_WEBSOCKET_WS_H
 
 #include <apr.h>
+#include <apr_errno.h>
 #include <apt.h>
 
 #define TTS_WEBSOCKET_WS_PENDING_CAPACITY 8192
@@ -22,6 +23,10 @@ typedef struct tts_websocket_ws_decoder_t {
 	apr_size_t max_message_size;
 	apt_bool_t fragmented_message_open;
 	unsigned char fragmented_opcode;
+	/* Set when a valid peer Close control frame is decoded. */
+	apt_bool_t close_received;
+	/* Last receive failure, used to distinguish grace timeout from EOF/protocol errors. */
+	apr_status_t last_status;
 } tts_websocket_ws_decoder_t;
 
 void tts_websocket_ws_decoder_init(

@@ -31,6 +31,7 @@
 #include "tts_websocket_completion.h"
 #include "tts_websocket_json.h"
 #include "tts_websocket_pcm.h"
+#include "tts_websocket_drain.h"
 #include "tts_websocket_lifecycle.h"
 #include "tts_websocket_thread.h"
 #include "tts_websocket_ws.h"
@@ -125,6 +126,8 @@ struct tts_websocket_engine_t {
 struct websocket_connection_t {
 	apr_socket_t *sock;
 	tts_websocket_ws_decoder_t decoder;
+	/* Absolute monotonic deadline applied before every underlying recv. */
+	uint64_t read_deadline_us;
 };
 
 /** Declaration of TTS WebSocket channel */
@@ -288,7 +291,7 @@ static apt_bool_t websocket_send_close(apr_socket_t *sock, apr_pool_t *pool);
 static apr_socket_t *tts_websocket_detach_stream_socket(
 	tts_websocket_channel_t *synth_channel,
 	apr_socket_t *expected);
-static apr_ssize_t websocket_recv_message(websocket_connection_t *connection, char *buffer, apr_size_t buffer_size, apt_bool_t *is_text_frame);
+static apr_ssize_t websocket_recv_message(websocket_connection_t *connection, char *buffer, apr_size_t buffer_size, apt_bool_t *is_text_frame, uint64_t read_deadline_us);
 static apr_status_t websocket_socket_read(void *context, char *buffer, apr_size_t *size);
 static apt_bool_t websocket_socket_send_control(void *context, unsigned char opcode, const unsigned char *payload, apr_size_t payload_len);
 static char* base64_encode(const unsigned char *input, apr_size_t len, apr_pool_t *pool);
@@ -769,11 +772,15 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 	apr_time_t current_time;
 	apr_time_t last_data_time;  /* 上次收到数据的时间 */
 	apr_interval_time_t timeout = 30 * 1000000; /* 30秒超时，适应长文本TTS处理 */
+	uint64_t monotonic_now_us;
+	uint64_t read_deadline_us;
 	apt_bool_t session_done_received = FALSE;
+	tts_websocket_drain_t drain;
 	apr_pool_t *pool;       /* channel pool — 用于长生命周期分配（buffer/socket） */
 	apr_pool_t *frame_pool = NULL; /* 线程私有临时pool — 每帧处理后清空，避免内存泄漏 */
 
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Stream thread starting...");
+	tts_websocket_drain_init(&drain);
 
 	/* 立即复制socket指针，避免竞态条件 */
 	/* ========== 修复：检查channel有效性 ========== */
@@ -833,29 +840,85 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 
 	LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Stream thread started, waiting for server response (30s timeout or session.done)...");
 
-	/* 接收WebSocket消息 */
-	while(!synth_channel->stream_stop_requested && !session_done_received) {
+	/* 接收WebSocket消息。session.done 只开启有界 drain，不终止接收；
+	 * 这样同一 TCP/WebSocket 顺序中的晚到二进制帧仍会进入 PCM pipeline。 */
+	while(!synth_channel->stream_stop_requested) {
 		/* 清空上一轮迭代的临时分配（resample/ulaw/combined buffer），防止内存无限累积 */
 		apr_pool_clear(frame_pool);
 
-		/* 检查超时：从input.done发送后开始计算4秒 */
+		/* session.done 后把单次阻塞 recv 限制在剩余 grace 内；未收到
+		 * session.done 时沿用原有的 30 秒无数据超时。read_deadline_us
+		 * 会继续传递到每次底层 short read，避免帧内读操作重置500ms上限。 */
+		read_deadline_us = 0;
 		current_time = apr_time_now();
-		if(current_time - last_data_time > timeout) {
-			LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Timeout: No data received for 30 seconds, actively closing connection");
-			synth_channel->stream_error = 1;
-			break;
+		if(drain.session_done_received) {
+			monotonic_now_us = tts_websocket_monotonic_now_us();
+			if(monotonic_now_us == 0) {
+				LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+					"[WS] Monotonic clock unavailable during session.done drain, completing stream");
+				break;
+			}
+			uint64_t remaining_us = tts_websocket_drain_remaining_us(
+				&drain, monotonic_now_us);
+			if(remaining_us == 0) {
+				LOG_WITH_SID(synth_channel, APT_PRIO_INFO,
+					"[WS] session.done drain grace expired (500ms), completing stream");
+				break;
+			}
+			if(remaining_us < (uint64_t)timeout) {
+				(void)apr_socket_timeout_set(sock,
+					(apr_interval_time_t)remaining_us);
+			}
+			read_deadline_us = drain.deadline_us;
+		} else {
+			(void)apr_socket_timeout_set(sock, timeout);
+			if(current_time - last_data_time > timeout) {
+				LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Timeout: No data received for 30 seconds, actively closing connection");
+				synth_channel->stream_error = 1;
+				break;
+			}
 		}
 
 		LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] Calling websocket_recv_message...");
-		len = websocket_recv_message(synth_channel->stream_ws, buffer, 2097152, &is_text_frame);
+		len = websocket_recv_message(synth_channel->stream_ws, buffer, 2097152,
+			&is_text_frame, read_deadline_us);
 		LOG_WITH_SID(synth_channel, APT_PRIO_DEBUG, "[WS] websocket_recv_message returned: len=%d, is_text_frame=%d", (int)len, is_text_frame);
 
 		if(len < 0) {
-			/* 连接关闭或出错 */
-			LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Connection closed or error detected, len=%d, actively closing connection", (int)len);
-			if(!synth_channel->stream_stop_requested) {
-				synth_channel->stream_error = 1;
+			/* Close 或 grace 超时是 session.done drain 的正常出口；其余
+			 * 接收错误仍然保留错误完成原因。 */
+			if(drain.session_done_received &&
+				synth_channel->stream_ws &&
+				synth_channel->stream_ws->decoder.close_received) {
+				tts_websocket_drain_peer_closed(&drain);
+				LOG_WITH_SID(synth_channel, APT_PRIO_INFO,
+					"[WS] Peer WebSocket Close received after session.done drain");
+			} else if(drain.session_done_received &&
+				synth_channel->stream_ws &&
+				APR_STATUS_IS_TIMEUP(synth_channel->stream_ws->decoder.last_status)) {
+				LOG_WITH_SID(synth_channel, APT_PRIO_INFO,
+					"[WS] session.done drain socket timeout reached, completing stream");
+			} else if(drain.session_done_received &&
+				!tts_websocket_drain_active(&drain,
+					tts_websocket_monotonic_now_us())) {
+				LOG_WITH_SID(synth_channel, APT_PRIO_INFO,
+					"[WS] session.done drain receive timed out at 500ms, completing stream");
+			} else {
+				LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] Connection closed or error detected, len=%d, actively closing connection", (int)len);
+				if(!synth_channel->stream_stop_requested) {
+					synth_channel->stream_error = 1;
+				}
 			}
+			break;
+		}
+
+		/* A frame read after the absolute deadline is not part of the bounded
+		 * drain, even if the socket returned buffered data. */
+		if(drain.session_done_received &&
+			!tts_websocket_drain_active(&drain,
+				tts_websocket_monotonic_now_us())) {
+			LOG_WITH_SID(synth_channel, APT_PRIO_INFO,
+				"[WS] session.done drain deadline reached, discarding no further frames");
 			break;
 		}
 
@@ -1047,7 +1110,7 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 			receiving_audio = FALSE;
 		}
 			else if(strcmp(msg_type, "session.done") == 0) {
-				LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] ========== Session.done received, all audio complete, actively closing connection ==========");
+				LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] ========== Session.done received; entering 500ms WebSocket drain ==========");
 
 				/* 提取句子总数 */
 				char *p = strstr(buffer, "total_sentences");
@@ -1066,9 +1129,12 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 				 * stream_complete 必须在 pcm_accum flush（循环结束后）之后再设置。
 				 * 否则 reader 线程可能看到 stream_complete==1 且环形缓冲区为空，
 				 * 提前发送 SPEAK-COMPLETE，导致 flush 写入的残余数据被丢弃。
-				 * 现在仅设置 session_done_received，退出循环后再 flush → set stream_complete。 */
+				 * 现在进入 500ms drain，退出循环后再 flush → set stream_complete。 */
 				session_done_received = TRUE;
-				break;
+				tts_websocket_drain_session_done(
+					&drain, tts_websocket_monotonic_now_us());
+				LOG_WITH_SID(synth_channel, APT_PRIO_INFO,
+					"[WS] session.done received; draining until peer Close or 500ms grace timeout");
 			}
 			else if(strcmp(msg_type, "error") == 0 || strcmp(msg_type, "Error") == 0) {
 				LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Error message received: %s, actively closing connection", buffer);
@@ -1081,7 +1147,10 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 			}
 		} else {
 			/* 二进制音频数据 */
-			if(receiving_audio) {
+			if(tts_websocket_drain_accept_binary(
+					&drain, receiving_audio,
+					synth_channel->stream_audio_started ? TRUE : FALSE,
+					tts_websocket_monotonic_now_us())) {
 				/* ========== 时序诊断：记录帧间隔（排查TTS服务器流卡顿） ========== */
 				{
 					apr_time_t now = apr_time_now();
@@ -1161,7 +1230,8 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 					}
 				}
 			} else {
-				LOG_WITH_SID(synth_channel, APT_PRIO_WARNING, "[WS] Received binary data outside audio frame, ignoring");
+				LOG_WITH_SID(synth_channel, APT_PRIO_WARNING,
+					"[WS] Received binary data outside active audio/drain window, ignoring");
 			}
 		}
 	}
@@ -1211,7 +1281,9 @@ static void* APR_THREAD_FUNC tts_websocket_stream_thread(apr_thread_t *thd, void
 
 	/* 标记接收完成（stream_complete 在 pcm_accum flush 之后再设置，避免 reader 提前看到 EOF） */
 	if(session_done_received) {
-		LOG_WITH_SID(synth_channel, APT_PRIO_INFO, "[WS] ========== Streaming completed successfully (session.done received) ==========");
+		LOG_WITH_SID(synth_channel, APT_PRIO_INFO,
+			"[WS] ========== Streaming completed successfully (session.done drain: %s) ==========",
+			drain.peer_closed ? "peer Close" : "500ms grace timeout");
 		/* ========== 修复：在 mutex 保护下设置 stream_complete 并 broadcast ==========
 		 * 之前 stream_complete 在 mutex 之外设置（无 release barrier），
 		 * reader 的 EOF 检测也在 mutex 之外读取 stream_complete（无 acquire barrier），
@@ -3825,6 +3897,22 @@ static apr_status_t websocket_socket_read(void *context, char *buffer, apr_size_
 		}
 		return APR_EOF;
 	}
+	if(connection->read_deadline_us > 0) {
+		uint64_t now_us = tts_websocket_monotonic_now_us();
+		uint64_t remaining_us;
+
+		/* The deadline is absolute. Recalculate it before every underlying
+		 * recv so a short read cannot restart the grace period. */
+		if(now_us == 0 || now_us >= connection->read_deadline_us) {
+			if(size) {
+				*size = 0;
+			}
+			return APR_TIMEUP;
+		}
+		remaining_us = connection->read_deadline_us - now_us;
+		(void)apr_socket_timeout_set(connection->sock,
+			(apr_interval_time_t)remaining_us);
+	}
 	return apr_socket_recv(connection->sock, buffer, size);
 }
 
@@ -4068,11 +4156,12 @@ static apt_bool_t websocket_send_close(apr_socket_t *sock, apr_pool_t *pool)
  */
 static apr_ssize_t websocket_recv_message(
 	websocket_connection_t *connection, char *buffer, apr_size_t buffer_size,
-	apt_bool_t *is_text_frame)
+	apt_bool_t *is_text_frame, uint64_t read_deadline_us)
 {
 	if(!connection) {
 		return -1;
 	}
+	connection->read_deadline_us = read_deadline_us;
 	return tts_websocket_ws_decoder_recv_message(
 		&connection->decoder, buffer, buffer_size, is_text_frame);
 }
