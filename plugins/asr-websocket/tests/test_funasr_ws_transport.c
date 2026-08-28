@@ -2455,6 +2455,81 @@ static void test_worker_close_without_generation_has_fence(apr_pool_t *pool)
                collector.metrics == 0);
 }
 
+#ifdef FUNASR_WS_TRANSPORT_TESTING
+static void test_result_json_log_format(void)
+{
+    static const unsigned char sensitive_json[] =
+        "{\"code\":7,\"access_token\":\"json-secret\","
+        "\"text\":\"first\\nsecond\"}";
+    static const unsigned char escaped_key_json[] =
+        "{\"tok\\u0065n\":\"escaped-secret\",\"code\":8}";
+    unsigned char oversized_json[(FUNASR_LOG_LINE_MAX_BYTES * 2U) + 1U];
+    char line[FUNASR_LOG_LINE_MAX_BYTES + 1U];
+    apr_size_t line_size;
+
+    line_size = funasr_transport_format_result_json_log(
+        "session-1",
+        42,
+        "user:password@asr.example.test",
+        8888,
+        "/ws/audio?token=path-secret",
+        sensitive_json,
+        sizeof(sensitive_json) - 1U,
+        line,
+        sizeof(line));
+    CHECK_TRUE("result log respects maximum line length",
+               line_size <= FUNASR_LOG_LINE_MAX_BYTES);
+    CHECK_TRUE("result log remains single-line",
+               strchr(line, '\n') == NULL && strchr(line, '\r') == NULL);
+    CHECK_TRUE("result log redacts endpoint userinfo",
+               strstr(line, "user:password") == NULL);
+    CHECK_TRUE("result log redacts endpoint query",
+               strstr(line, "path-secret") == NULL);
+    CHECK_TRUE("result log redacts JSON credential",
+               strstr(line, "json-secret") == NULL);
+    CHECK_TRUE("result log retains ASR response code",
+               strstr(line, "\"code\":7") != NULL);
+    CHECK_TRUE("result log marks JSON redaction",
+               strstr(line, "redacted=1") != NULL);
+
+    line_size = funasr_transport_format_result_json_log(
+        "session-escaped",
+        44,
+        "asr.example.test?token=host-secret",
+        8888,
+        "/ws/audio",
+        escaped_key_json,
+        sizeof(escaped_key_json) - 1U,
+        line,
+        sizeof(line));
+    CHECK_TRUE("escaped-key result log respects maximum line length",
+               line_size <= FUNASR_LOG_LINE_MAX_BYTES);
+    CHECK_TRUE("result log redacts host query",
+               strstr(line, "host-secret") == NULL);
+    CHECK_TRUE("result log redacts escaped JSON credential key",
+               strstr(line, "escaped-secret") == NULL);
+    CHECK_TRUE("escaped-key result log marks redaction",
+               strstr(line, "redacted=1") != NULL);
+
+    memset(oversized_json, 'x', sizeof(oversized_json) - 1U);
+    oversized_json[sizeof(oversized_json) - 1U] = '\0';
+    line_size = funasr_transport_format_result_json_log(
+        "session-2",
+        43,
+        "asr.example.test",
+        8888,
+        "/ws/audio",
+        oversized_json,
+        sizeof(oversized_json) - 1U,
+        line,
+        sizeof(line));
+    CHECK_TRUE("oversized result log respects maximum line length",
+               line_size <= FUNASR_LOG_LINE_MAX_BYTES);
+    CHECK_TRUE("oversized result log marks truncation",
+               strstr(line, "truncated=1") != NULL);
+}
+#endif
+
 int main(void)
 {
     apr_pool_t *pool = NULL;
@@ -2494,6 +2569,9 @@ int main(void)
     test_stop_interrupts_stalled_handshake(pool);
     test_worker_rejected_close_fence_is_reported(pool);
     test_worker_close_without_generation_has_fence(pool);
+#ifdef FUNASR_WS_TRANSPORT_TESTING
+    test_result_json_log_format();
+#endif
 
     apr_pool_destroy(pool);
     if (failures != 0) {

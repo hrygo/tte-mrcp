@@ -23,3 +23,14 @@ string(FIND "${transport_source}"
 if(error_priority_position EQUAL -1)
     message(FATAL_ERROR "ASR WebSocket failures must use ERROR priority")
 endif()
+
+foreach(required_text
+        "funasr_transport_format_result_json_log"
+        "asr_code="
+        "?redacted=1"
+        "redacted=")
+    string(FIND "${transport_source}" "${required_text}" match_position)
+    if(match_position EQUAL -1)
+        message(FATAL_ERROR "Missing ASR WebSocket diagnostic safeguard: ${required_text}")
+    endif()
+endforeach()

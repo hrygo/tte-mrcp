@@ -33,7 +33,7 @@ test_funasr_ws_transport_SOURCES = \
 test_funasr_ws_transport_LDADD = \
                              $(top_builddir)/libs/apr-toolkit/libaprtoolkit.la \
                              $(UNIMRCP_APR_LIBS)
-test_funasr_ws_transport_CPPFLAGS = $(AM_CPPFLAGS)
+test_funasr_ws_transport_CPPFLAGS = $(AM_CPPFLAGS) -DFUNASR_WS_TRANSPORT_TESTING
 test_funasr_control_SOURCES = tests/test_funasr_control.c src/funasr_control.c
 test_funasr_control_CPPFLAGS = $(AM_CPPFLAGS)
 test_funasr_timeout_config_SOURCES = \

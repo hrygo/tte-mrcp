@@ -112,6 +112,8 @@ if(BUILD_ASR_WEBSOCKET_TESTS)
 		src/funasr_ws_transport.c
 		$<TARGET_OBJECTS:aprtoolkit>)
 	target_include_directories(test_funasr_ws_transport PRIVATE ${ASR_WEBSOCKET_TEST_INCLUDE_DIRS})
+	set_property(TARGET test_funasr_ws_transport APPEND PROPERTY
+		COMPILE_DEFINITIONS FUNASR_WS_TRANSPORT_TESTING)
 	target_link_libraries(test_funasr_ws_transport
 		${APU_LIBRARIES}
 		${APR_LIBRARIES})

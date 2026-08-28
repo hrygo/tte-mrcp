@@ -16,6 +16,7 @@ extern "C" {
 #define FUNASR_HTTP_HEADER_LIMIT (16U * 1024U)
 #define FUNASR_WS_FRAME_LIMIT (1U * 1024U * 1024U)
 #define FUNASR_WS_MESSAGE_LIMIT (1U * 1024U * 1024U)
+#define FUNASR_LOG_LINE_MAX_BYTES 2048U
 
 typedef apr_uint64_t funasr_generation_t;
 typedef apr_uint64_t funasr_transport_id_t;
@@ -317,6 +318,19 @@ apt_bool_t funasr_transport_wake(funasr_transport_t *transport);
 apt_bool_t funasr_transport_request_close(funasr_transport_t *transport);
 apr_status_t funasr_transport_join_closed(funasr_transport_t *transport);
 void funasr_transport_event_destroy(funasr_transport_event_t *event);
+
+#ifdef FUNASR_WS_TRANSPORT_TESTING
+apr_size_t funasr_transport_format_result_json_log(
+    const char *session_id,
+    funasr_generation_t generation,
+    const char *host,
+    apr_port_t port,
+    const char *path,
+    const unsigned char *json,
+    apr_size_t json_size,
+    char *output,
+    apr_size_t output_capacity);
+#endif
 
 #ifdef __cplusplus
 }

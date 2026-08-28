@@ -18,8 +18,11 @@
 - 最终内部 failure 枚举。
 
 按本次需求，所有服务端文本结果帧还要打印其 JSON。JSON 以单行形式输出，
-每行最多 2KB；超出上限时输出前缀并标记 `truncated=1`。这项日志可能包含
-识别文本，仅用于本次明确授权的内网诊断。
+包含元数据在内每行最多 2KB；超出上限时输出前缀并标记 `truncated=1`。日志会
+将控制字符替换为空格，移除 endpoint 的 userinfo、query 与 fragment，并将 JSON 中的
+`authorization`、`token`、`password`、`secret` 与 API key 等敏感字段替换为
+`***`；敏感 JSON 键中的 ASCII `\uXXXX` 转义也会先解码后再判断，同时标记
+`redacted=1`。这项日志可能包含识别文本，仅用于本次明确授权的内网诊断。
 
 ## 方案
 
@@ -29,15 +32,17 @@
 响应帧处产生，确保它在转化为 `FUNASR_FAILURE_PROTOCOL` 前保留下来。每个
 ASR 服务端文本帧以 `INFO` 级别打印受限且单行化的 JSON。
 
-不记录 HTTP/WebSocket 原始头、音频数据或任何凭据。现有完成语义、超时阈值
-和 MRCP `Completion-Cause` 不修改。
+不记录 HTTP/WebSocket 原始头、音频数据或未脱敏的凭据。现有完成语义、超时
+阈值和 MRCP `Completion-Cause` 不修改。
 
 ## 验证
 
 1. 先添加静态源代码测试，断言握手失败、音频发送失败均具有 `ERROR` 日志，且
    ASR 文本帧会以受限单行 JSON 形式输出。
 2. 确认该测试在当前实现上失败。
-3. 添加最小日志实现后运行 ASR WebSocket transport 单测和新增检查。
+3. 添加日志格式化单测，覆盖超长 JSON、换行、endpoint query/userinfo、JSON
+   凭据字段脱敏和非零 ASR `code` 可见性；再运行 ASR WebSocket transport 单测和
+   新增检查。
 4. 运行 `git diff --check`，然后重新索引代码图谱并检查关键调用链。
 
 ## 非目标
