@@ -21,6 +21,7 @@
 #define FUNASR_WS_FRAME_OVERHEAD 14U
 #define FUNASR_METRICS_LOG_INTERVAL_US APR_USEC_PER_SEC
 #define FUNASR_PCM_SPEECH_PEAK_THRESHOLD 256U
+#define FUNASR_LOG_JSON_MAX_BYTES 2048U
 
 typedef struct funasr_default_io_t {
     apr_pool_t *pool;
@@ -1349,8 +1350,68 @@ static apt_bool_t funasr_transport_commit_terminal(
     return cancel;
 }
 
+static void funasr_transport_log_error(
+    funasr_transport_t *transport,
+    funasr_generation_t generation,
+    const char *message,
+    apr_status_t status)
+{
+    apt_log(
+        APT_LOG_MARK,
+        APT_PRIO_ERROR,
+        "asr_websocket: [session_id=%s] %s generation=%lu endpoint=%s:%u%s apr_status=%d",
+        transport->call_id[0] ? transport->call_id : "N/A",
+        message,
+        (unsigned long)generation,
+        transport->host,
+        (unsigned int)transport->config.port,
+        transport->path,
+        (int)status);
+}
+
+static void funasr_transport_log_result_json(
+    funasr_transport_t *transport,
+    funasr_generation_t generation,
+    const unsigned char *json,
+    apr_size_t json_size)
+{
+    char logged_json[FUNASR_LOG_JSON_MAX_BYTES + 1U];
+    apr_size_t logged_size;
+    apr_size_t index;
+
+    if (!json) {
+        return;
+    }
+    logged_size = json_size;
+    if (logged_size > FUNASR_LOG_JSON_MAX_BYTES) {
+        logged_size = FUNASR_LOG_JSON_MAX_BYTES;
+    }
+    for (index = 0; index < logged_size; ++index) {
+        unsigned char current = json[index];
+
+        logged_json[index] = (current < 0x20U || current == 0x7fU) ?
+            ' ' : (char)current;
+    }
+    logged_json[logged_size] = '\0';
+    apt_log(
+        APT_LOG_MARK,
+        APT_PRIO_INFO,
+        "asr_websocket: [session_id=%s] ASR WebSocket result JSON generation=%lu endpoint=%s:%u%s size=%" APR_SIZE_T_FMT " logged_size=%" APR_SIZE_T_FMT " truncated=%d json=%s",
+        transport->call_id[0] ? transport->call_id : "N/A",
+        (unsigned long)generation,
+        transport->host,
+        (unsigned int)transport->config.port,
+        transport->path,
+        json_size,
+        logged_size,
+        json_size > logged_size,
+        logged_json);
+}
+
 static apt_bool_t funasr_worker_write_pending(
     funasr_transport_t *transport,
+    funasr_generation_t generation,
+    apt_bool_t audio_frame,
     unsigned char *buffer,
     apr_size_t size,
     apr_size_t *offset,
@@ -1372,6 +1433,12 @@ static apt_bool_t funasr_worker_write_pending(
     if (funasr_status_retryable(status)) {
         return TRUE;
     }
+    funasr_transport_log_error(
+        transport,
+        generation,
+        audio_frame ? "ASR WebSocket audio write failed" :
+            "ASR WebSocket control write failed",
+        status);
     return FALSE;
 }
 
@@ -1420,6 +1487,11 @@ static apt_bool_t funasr_worker_handshake(
     }
     if (apr_base64_encode_binary(key, nonce, sizeof(nonce)) <= 0 ||
         !funasr_ws_accept_compute(key, accept, sizeof(accept))) {
+        funasr_transport_log_error(
+            transport,
+            generation,
+            "ASR WebSocket handshake failed",
+            APR_EGENERAL);
         return FALSE;
     }
     result = apr_snprintf(
@@ -1440,6 +1512,11 @@ static apt_bool_t funasr_worker_handshake(
         (unsigned int)transport->config.port,
         key);
     if (result <= 0 || (apr_size_t)result >= sizeof(request)) {
+        funasr_transport_log_error(
+            transport,
+            generation,
+            "ASR WebSocket handshake failed",
+            APR_EGENERAL);
         return FALSE;
     }
     request_size = (apr_size_t)result;
@@ -1485,6 +1562,11 @@ static apt_bool_t funasr_worker_handshake(
             request_offset < request_size,
             &events);
         if (status != APR_SUCCESS && !funasr_status_retryable(status)) {
+            funasr_transport_log_error(
+                transport,
+                generation,
+                "ASR WebSocket handshake failed",
+                status);
             return FALSE;
         }
         if ((events & FUNASR_IO_WRITABLE) != 0 &&
@@ -1497,6 +1579,11 @@ static apt_bool_t funasr_worker_handshake(
             if (status == APR_SUCCESS) {
                 request_offset += amount;
             } else if (!funasr_status_retryable(status)) {
+                funasr_transport_log_error(
+                    transport,
+                    generation,
+                    "ASR WebSocket handshake failed",
+                    status);
                 return FALSE;
             }
         }
@@ -1510,12 +1597,22 @@ static apt_bool_t funasr_worker_handshake(
                 input,
                 &amount);
             if (status == APR_EOF || (status == APR_SUCCESS && amount == 0)) {
+                funasr_transport_log_error(
+                    transport,
+                    generation,
+                    "ASR WebSocket handshake failed",
+                    APR_EOF);
                 return FALSE;
             }
             if (status != APR_SUCCESS) {
                 if (funasr_status_retryable(status)) {
                     continue;
                 }
+                funasr_transport_log_error(
+                    transport,
+                    generation,
+                    "ASR WebSocket handshake failed",
+                    status);
                 return FALSE;
             }
             http_status = funasr_http_decoder_feed(
@@ -1529,6 +1626,11 @@ static apt_bool_t funasr_worker_handshake(
                         http_decoder.size,
                         "sec-websocket-accept",
                         accept)) {
+                    funasr_transport_log_error(
+                        transport,
+                        generation,
+                        "ASR WebSocket handshake failed",
+                        APR_EGENERAL);
                     return FALSE;
                 }
                 if (consumed < amount) {
@@ -1542,16 +1644,31 @@ static apt_bool_t funasr_worker_handshake(
                         *sticky_ready = TRUE;
                     } else if (sticky_status == FUNASR_WS_PROTOCOL_ERROR ||
                                sticky_status == FUNASR_WS_LIMIT_EXCEEDED) {
+                        funasr_transport_log_error(
+                            transport,
+                            generation,
+                            "ASR WebSocket handshake failed",
+                            APR_EGENERAL);
                         return FALSE;
                     }
                 }
                 return TRUE;
             }
             if (http_status != FUNASR_HTTP_NEED_MORE) {
+                funasr_transport_log_error(
+                    transport,
+                    generation,
+                    "ASR WebSocket handshake failed",
+                    APR_EGENERAL);
                 return FALSE;
             }
         }
     }
+    funasr_transport_log_error(
+        transport,
+        generation,
+        "ASR WebSocket handshake failed",
+        APR_TIMEUP);
     return FALSE;
 }
 
@@ -1570,7 +1687,6 @@ static apt_bool_t funasr_worker_handle_ws_event(
     apr_size_t *final_text_size,
     apt_bool_t *final_received)
 {
-    (void)generation;
     if (ws_event->type == FUNASR_WS_EVENT_MESSAGE &&
         ws_event->opcode == FUNASR_WS_OPCODE_TEXT) {
         int code;
@@ -1580,11 +1696,35 @@ static apt_bool_t funasr_worker_handle_ws_event(
         apr_thread_mutex_lock(transport->mutex);
         transport->metrics.ws_rx_messages++;
         apr_thread_mutex_unlock(transport->mutex);
+        funasr_transport_log_result_json(
+            transport,
+            generation,
+            ws_event->data,
+            ws_event->size);
         if (funasr_json_get_int(
                 (const char *)ws_event->data,
                 ws_event->size,
                 "code",
-                &code) != FUNASR_JSON_OK || code != 0) {
+                &code) != FUNASR_JSON_OK) {
+            funasr_transport_log_error(
+                transport,
+                generation,
+                "ASR WebSocket result JSON parse failed",
+                APR_EGENERAL);
+            return FALSE;
+        }
+        if (code != 0) {
+            apt_log(
+                APT_LOG_MARK,
+                APT_PRIO_ERROR,
+                "asr_websocket: [session_id=%s] ASR WebSocket result rejected generation=%lu endpoint=%s:%u%s asr_code=%d json_size=%" APR_SIZE_T_FMT,
+                transport->call_id[0] ? transport->call_id : "N/A",
+                (unsigned long)generation,
+                transport->host,
+                (unsigned int)transport->config.port,
+                transport->path,
+                code,
+                ws_event->size);
             return FALSE;
         }
         text_value = NULL;
@@ -1596,6 +1736,11 @@ static apt_bool_t funasr_worker_handle_ws_event(
                 FUNASR_WS_MESSAGE_LIMIT,
                 &text_value,
                 &text_size) != FUNASR_JSON_OK) {
+            funasr_transport_log_error(
+                transport,
+                generation,
+                "ASR WebSocket result JSON parse failed",
+                APR_EGENERAL);
             return FALSE;
         }
         *final_text = text_value;
@@ -1624,6 +1769,11 @@ static apt_bool_t funasr_worker_handle_ws_event(
         return TRUE;
     }
     if (ws_event->type == FUNASR_WS_EVENT_CLOSE) {
+        funasr_transport_log_error(
+            transport,
+            generation,
+            "ASR WebSocket close frame received",
+            APR_EOF);
         return FALSE;
     }
     return TRUE;
@@ -2143,6 +2293,8 @@ static void *APR_THREAD_FUNC funasr_transport_worker(
                     apt_bool_t metrics_due = FALSE;
                     if (!funasr_worker_write_pending(
                             transport,
+                            generation,
+                            tx_audio,
                             tx_buffer,
                             tx_size,
                             &tx_offset,

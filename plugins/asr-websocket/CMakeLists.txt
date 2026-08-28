@@ -146,4 +146,8 @@ if(BUILD_ASR_WEBSOCKET_TESTS)
 		COMMAND ${CMAKE_COMMAND}
 			-DASR_WEBSOCKET_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
 			-P ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_asr_frame_debug_logs.cmake)
+	add_test(NAME asr_websocket_error_logs
+		COMMAND ${CMAKE_COMMAND}
+			-DASR_WEBSOCKET_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+			-P ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_asr_error_logs.cmake)
 endif()
