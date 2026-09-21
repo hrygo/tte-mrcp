@@ -10,6 +10,7 @@
 #include "funasr_nlsml.h"
 
 #include <apr_strings.h>
+#include <apr_thread_mutex.h>
 #include <apr_uuid.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -68,6 +69,7 @@ struct funasr_channel_t {
     mrcp_engine_channel_t *channel;
     funasr_registry_entry_t *registry_entry;
     funasr_transport_t *transport;
+    apr_thread_mutex_t *lifecycle_mutex;
     funasr_control_t control;
     funasr_generation_t next_generation;
     mrcp_message_t *recog_request;
@@ -76,7 +78,8 @@ struct funasr_channel_t {
     apr_size_t scratch_capacity;
     funasr_resample_state_t resample;
     funasr_clock_t clock;
-    char *session_id;
+    char session_id[FUNASR_CALL_ID_LIMIT + 1U];
+    funasr_event_bridge_t *bridge;
     uint64_t successful_recognition_count;
     apt_bool_t close_response_pending;
 };
@@ -121,6 +124,7 @@ static funasr_registry_entry_t *funasr_registry_find(
 static void funasr_registry_remove(
     funasr_engine_t *engine,
     funasr_registry_entry_t *target);
+static void funasr_bridge_destroy(funasr_channel_t *channel);
 
 static const mrcp_engine_method_vtable_t engine_vtable = {
     funasr_engine_destroy,
@@ -196,8 +200,19 @@ static void funasr_close_fence_abort(
         "releasing joined transport without a STOP response",
         (unsigned long)event->generation,
         (unsigned int)event->close_fence_retry_count);
+    apr_thread_mutex_lock(channel->lifecycle_mutex);
+    if (channel->transport &&
+        !funasr_transport_destroy(&channel->transport)) {
+        apr_thread_mutex_unlock(channel->lifecycle_mutex);
+        apt_log(
+            APT_LOG_MARK,
+            APT_PRIO_ERROR,
+            "asr_websocket: refusing close-fence fallback before transport destruction is safe");
+        return;
+    }
+    apr_thread_mutex_unlock(channel->lifecycle_mutex);
     funasr_registry_remove(engine, entry);
-    channel->transport = NULL;
+    funasr_bridge_destroy(channel);
     channel->stop_response = NULL;
     channel->recog_request = NULL;
     channel->control.active = FALSE;
@@ -315,13 +330,31 @@ static void funasr_registry_remove(
     link = &engine->registry;
     while (*link) {
         if (*link == target) {
+            funasr_channel_t *channel = target->channel;
             *link = target->next;
             target->channel = NULL;
             target->next = NULL;
+            if (channel && channel->registry_entry == target) {
+                channel->registry_entry = NULL;
+            }
+            free(target);
             return;
         }
         link = &(*link)->next;
     }
+}
+
+static void funasr_bridge_destroy(funasr_channel_t *channel)
+{
+    if (!channel || !channel->bridge) {
+        return;
+    }
+    if (channel->bridge->close_fence_msg) {
+        apt_task_msg_release(channel->bridge->close_fence_msg);
+        channel->bridge->close_fence_msg = NULL;
+    }
+    free(channel->bridge);
+    channel->bridge = NULL;
 }
 
 static void funasr_engine_maybe_close_respond(funasr_engine_t *engine)
@@ -472,13 +505,18 @@ static mrcp_engine_channel_t *funasr_engine_channel_create(
     channel->pool = pool;
     channel->engine = engine->obj;
     channel->next_generation = 1;
+    if (apr_thread_mutex_create(
+            &channel->lifecycle_mutex,
+            APR_THREAD_MUTEX_DEFAULT,
+            pool) != APR_SUCCESS) {
+        return NULL;
+    }
     funasr_control_init(&channel->control);
     funasr_clock_default(&channel->clock);
     apr_uuid_get(&uuid);
-    channel->session_id = apr_palloc(pool, 64);
     apr_snprintf(
         channel->session_id,
-        64,
+        sizeof(channel->session_id),
         "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
         uuid.data[0], uuid.data[1], uuid.data[2], uuid.data[3],
         uuid.data[4], uuid.data[5], uuid.data[6], uuid.data[7],
@@ -680,10 +718,21 @@ static apt_bool_t funasr_control_send_close(void *obj)
         }
         channel->close_response_pending = FALSE;
     }
+    apr_thread_mutex_lock(channel->lifecycle_mutex);
+    if (channel->transport &&
+        !funasr_transport_destroy(&channel->transport)) {
+        apr_thread_mutex_unlock(channel->lifecycle_mutex);
+        LOG_WITH_SID(
+            channel,
+            APT_PRIO_ERROR,
+            "transport close fence joined but transport pool destruction failed");
+        return FALSE;
+    }
+    apr_thread_mutex_unlock(channel->lifecycle_mutex);
     if (channel->registry_entry) {
         funasr_registry_remove(engine, channel->registry_entry);
     }
-    channel->transport = NULL;
+    funasr_bridge_destroy(channel);
     funasr_engine_maybe_close_respond(engine);
     return TRUE;
 }
@@ -743,10 +792,15 @@ static apt_bool_t funasr_channel_recognize(
     }
     if (request->channel_id.session_id.buf &&
         request->channel_id.session_id.length != 0) {
-        channel->session_id = apr_pstrndup(
-            channel->pool,
+        if (request->channel_id.session_id.length > FUNASR_CALL_ID_LIMIT) {
+            response->start_line.status_code = MRCP_STATUS_CODE_METHOD_FAILED;
+            return FALSE;
+        }
+        memcpy(
+            channel->session_id,
             request->channel_id.session_id.buf,
             request->channel_id.session_id.length);
+        channel->session_id[request->channel_id.session_id.length] = '\0';
     }
     scratch_capacity = funasr_pcm_bytes_for_ms(
         FUNASR_OUTPUT_SAMPLE_RATE,
@@ -878,6 +932,7 @@ static apt_bool_t funasr_stream_write(
     const mpf_frame_t *frame)
 {
     funasr_channel_t *channel;
+    funasr_transport_t *transport;
     funasr_media_snapshot_t media;
     const void *data;
     apr_size_t size;
@@ -889,10 +944,17 @@ static apt_bool_t funasr_stream_write(
         return TRUE;
     }
     channel = stream->obj;
-    if (!channel || !channel->transport ||
-        !funasr_transport_media_snapshot(channel->transport, &media)) {
+    if (!channel || !channel->lifecycle_mutex) {
         return TRUE;
     }
+    apr_thread_mutex_lock(channel->lifecycle_mutex);
+    transport = channel->transport;
+    if (!transport ||
+        !funasr_transport_media_snapshot(transport, &media)) {
+        apr_thread_mutex_unlock(channel->lifecycle_mutex);
+        return TRUE;
+    }
+    apr_thread_mutex_unlock(channel->lifecycle_mutex);
     data = frame->codec_frame.buffer;
     size = frame->codec_frame.size;
     LOG_WITH_SID(channel, APT_PRIO_DEBUG,
@@ -908,20 +970,22 @@ static apt_bool_t funasr_stream_write(
                 channel->scratch_capacity,
                 &size)) {
             funasr_transport_latch_media_failure(
-                channel->transport,
+                transport,
                 media.generation,
                 FUNASR_FAILURE_INTERNAL);
+            funasr_transport_media_release(transport);
             return TRUE;
         }
         data = channel->scratch;
     }
     now_us = funasr_clock_now_us(&channel->clock);
     funasr_transport_enqueue_pcm(
-        channel->transport,
+        transport,
         media.generation,
         data,
         size,
         now_us);
+    funasr_transport_media_release(transport);
     return TRUE;
 }
 
@@ -942,10 +1006,20 @@ static apt_bool_t funasr_open_channel_on_task(funasr_channel_t *channel)
     }
     funasr_transport_config_init(&config);
     task = apt_consumer_task_base_get(channel->engine->task);
-    bridge = apr_pcalloc(channel->engine->pool, sizeof(*bridge));
+    bridge = calloc(1, sizeof(*bridge));
+    if (!bridge) {
+        return mrcp_engine_channel_open_respond(channel->channel, FALSE);
+    }
+    channel->bridge = bridge;
     bridge->engine = channel->engine;
     bridge->close_fence_msg = apt_task_msg_get(task);
     if (!bridge->close_fence_msg) {
+        funasr_bridge_destroy(channel);
+        return mrcp_engine_channel_open_respond(channel->channel, FALSE);
+    }
+    entry = calloc(1, sizeof(*entry));
+    if (!entry) {
+        funasr_bridge_destroy(channel);
         return mrcp_engine_channel_open_respond(channel->channel, FALSE);
     }
     config.host = channel->engine->server_host;
@@ -963,9 +1037,10 @@ static apt_bool_t funasr_open_channel_on_task(funasr_channel_t *channel)
         id,
         &config);
     if (!channel->transport) {
+        free(entry);
+        funasr_bridge_destroy(channel);
         return mrcp_engine_channel_open_respond(channel->channel, FALSE);
     }
-    entry = apr_pcalloc(channel->engine->pool, sizeof(*entry));
     entry->id = id;
     entry->transport = channel->transport;
     entry->channel = channel;

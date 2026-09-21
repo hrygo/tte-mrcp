@@ -16,6 +16,7 @@ extern "C" {
 #define FUNASR_HTTP_HEADER_LIMIT (16U * 1024U)
 #define FUNASR_WS_FRAME_LIMIT (1U * 1024U * 1024U)
 #define FUNASR_WS_MESSAGE_LIMIT (1U * 1024U * 1024U)
+#define FUNASR_CALL_ID_LIMIT 255U
 
 typedef apr_uint64_t funasr_generation_t;
 typedef apr_uint64_t funasr_transport_id_t;
@@ -288,14 +289,20 @@ funasr_transport_t *funasr_transport_create(
     funasr_transport_id_t id,
     const funasr_transport_config_t *config);
 
+/* Destroy a transport only after its worker has been joined and its close
+ * fence has completed.  On success, *transport is set to NULL. */
+apt_bool_t funasr_transport_destroy(funasr_transport_t **transport);
+
 apt_bool_t funasr_transport_begin_generation(
     funasr_transport_t *transport,
     funasr_generation_t generation,
     const funasr_audio_format_t *format);
 
+/* A successful snapshot pins the transport until media_release. */
 apt_bool_t funasr_transport_media_snapshot(
     funasr_transport_t *transport,
     funasr_media_snapshot_t *snapshot);
+void funasr_transport_media_release(funasr_transport_t *transport);
 
 funasr_enqueue_status_e funasr_transport_enqueue_pcm(
     funasr_transport_t *transport,

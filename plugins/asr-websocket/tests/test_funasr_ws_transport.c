@@ -1036,6 +1036,7 @@ static void test_worker_keeps_media_enqueue_independent_of_partial_rx(
                    transport,
                    &snapshot) == TRUE);
     CHECK_TRUE("snapshot generation", snapshot.generation == 11);
+    funasr_transport_media_release(transport);
 
     for (index = 0; index < 50; ++index) {
         int byte_index;
@@ -2453,6 +2454,10 @@ static void test_worker_close_without_generation_has_fence(apr_pool_t *pool)
     CHECK_TRUE("idle transport never opens socket", io.opened == FALSE);
     CHECK_TRUE("idle close does not invent generation metrics",
                collector.metrics == 0);
+    CHECK_TRUE("idle transport pool is destroyed after join",
+               funasr_transport_destroy(&transport));
+    CHECK_TRUE("destroying an already released transport is safe",
+               funasr_transport_destroy(&transport));
 }
 
 int main(void)
