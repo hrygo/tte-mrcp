@@ -293,6 +293,12 @@ funasr_transport_t *funasr_transport_create(
  * fence has completed.  On success, *transport is set to NULL. */
 apt_bool_t funasr_transport_destroy(funasr_transport_t **transport);
 
+/* Register a lifecycle observer without exposing the owned APR pool. */
+apt_bool_t funasr_transport_cleanup_observer_register(
+    funasr_transport_t *transport,
+    apr_status_t (*cleanup)(void *obj),
+    void *obj);
+
 apt_bool_t funasr_transport_begin_generation(
     funasr_transport_t *transport,
     funasr_generation_t generation,

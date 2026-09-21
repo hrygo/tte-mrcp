@@ -2519,6 +2519,28 @@ apt_bool_t funasr_transport_destroy(funasr_transport_t **transport_ptr)
     return TRUE;
 }
 
+apt_bool_t funasr_transport_cleanup_observer_register(
+    funasr_transport_t *transport,
+    apr_status_t (*cleanup)(void *obj),
+    void *obj)
+{
+    if (!transport || !cleanup) {
+        return FALSE;
+    }
+    apr_thread_mutex_lock(transport->mutex);
+    if (transport->destroying || !transport->pool) {
+        apr_thread_mutex_unlock(transport->mutex);
+        return FALSE;
+    }
+    apr_pool_cleanup_register(
+        transport->pool,
+        obj,
+        cleanup,
+        apr_pool_cleanup_null);
+    apr_thread_mutex_unlock(transport->mutex);
+    return TRUE;
+}
+
 apt_bool_t funasr_transport_begin_generation(
     funasr_transport_t *transport,
     funasr_generation_t generation,

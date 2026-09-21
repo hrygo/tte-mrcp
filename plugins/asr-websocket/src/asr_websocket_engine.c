@@ -121,6 +121,13 @@ static void funasr_engine_maybe_close_respond(funasr_engine_t *engine);
 static funasr_registry_entry_t *funasr_registry_find(
     funasr_engine_t *engine,
     funasr_transport_id_t id);
+static funasr_registry_entry_t *funasr_registry_detach(
+    funasr_engine_t *engine,
+    funasr_registry_entry_t *target);
+static void funasr_registry_restore(
+    funasr_engine_t *engine,
+    funasr_registry_entry_t *entry,
+    funasr_channel_t *channel);
 static void funasr_registry_remove(
     funasr_engine_t *engine,
     funasr_registry_entry_t *target);
@@ -223,7 +230,9 @@ static void funasr_close_fence_abort(
     channel->control.worker_closed = TRUE;
     if (channel->close_response_pending) {
         channel->close_response_pending = FALSE;
+        channel->control.close_responded = TRUE;
         if (!mrcp_engine_channel_close_respond(channel->channel)) {
+            channel->control.close_responded = FALSE;
             LOG_WITH_SID(
                 channel,
                 APT_PRIO_ERROR,
@@ -321,7 +330,7 @@ static funasr_registry_entry_t *funasr_registry_find(
     return NULL;
 }
 
-static void funasr_registry_remove(
+static funasr_registry_entry_t *funasr_registry_detach(
     funasr_engine_t *engine,
     funasr_registry_entry_t *target)
 {
@@ -333,14 +342,42 @@ static void funasr_registry_remove(
             funasr_channel_t *channel = target->channel;
             *link = target->next;
             target->channel = NULL;
+            target->transport = NULL;
             target->next = NULL;
             if (channel && channel->registry_entry == target) {
                 channel->registry_entry = NULL;
             }
-            free(target);
-            return;
+            return target;
         }
         link = &(*link)->next;
+    }
+    return NULL;
+}
+
+static void funasr_registry_restore(
+    funasr_engine_t *engine,
+    funasr_registry_entry_t *entry,
+    funasr_channel_t *channel)
+{
+    if (!engine || !entry || !channel) {
+        return;
+    }
+    entry->transport = channel->transport;
+    entry->channel = channel;
+    entry->next = engine->registry;
+    engine->registry = entry;
+    channel->registry_entry = entry;
+}
+
+static void funasr_registry_remove(
+    funasr_engine_t *engine,
+    funasr_registry_entry_t *target)
+{
+    funasr_registry_entry_t *entry;
+
+    entry = funasr_registry_detach(engine, target);
+    if (entry) {
+        free(entry);
     }
 }
 
@@ -711,13 +748,10 @@ static apt_bool_t funasr_control_send_close(void *obj)
 {
     funasr_channel_t *channel = obj;
     funasr_engine_t *engine = channel->engine;
+    funasr_registry_entry_t *entry;
+    mrcp_engine_channel_t *base_channel;
+    apt_bool_t respond;
 
-    if (channel->close_response_pending) {
-        if (!mrcp_engine_channel_close_respond(channel->channel)) {
-            return FALSE;
-        }
-        channel->close_response_pending = FALSE;
-    }
     apr_thread_mutex_lock(channel->lifecycle_mutex);
     if (channel->transport &&
         !funasr_transport_destroy(&channel->transport)) {
@@ -729,10 +763,19 @@ static apt_bool_t funasr_control_send_close(void *obj)
         return FALSE;
     }
     apr_thread_mutex_unlock(channel->lifecycle_mutex);
-    if (channel->registry_entry) {
-        funasr_registry_remove(engine, channel->registry_entry);
-    }
+    entry = funasr_registry_detach(engine, channel->registry_entry);
     funasr_bridge_destroy(channel);
+
+    respond = channel->close_response_pending;
+    channel->close_response_pending = FALSE;
+    base_channel = channel->channel;
+    if (respond && !mrcp_engine_channel_close_respond(base_channel)) {
+        channel->close_response_pending = TRUE;
+        funasr_registry_restore(engine, entry, channel);
+        return FALSE;
+    }
+
+    free(entry);
     funasr_engine_maybe_close_respond(engine);
     return TRUE;
 }
@@ -1047,7 +1090,23 @@ static apt_bool_t funasr_open_channel_on_task(funasr_channel_t *channel)
     entry->next = channel->engine->registry;
     channel->engine->registry = entry;
     channel->registry_entry = entry;
-    return mrcp_engine_channel_open_respond(channel->channel, TRUE);
+    if (!mrcp_engine_channel_open_respond(channel->channel, TRUE)) {
+        apr_thread_mutex_lock(channel->lifecycle_mutex);
+        if (funasr_transport_join_closed(channel->transport) != APR_SUCCESS ||
+            !funasr_transport_destroy(&channel->transport)) {
+            apr_thread_mutex_unlock(channel->lifecycle_mutex);
+            LOG_WITH_SID(
+                channel,
+                APT_PRIO_ERROR,
+                "failed to roll back transport after OPEN response delivery failure");
+            return FALSE;
+        }
+        apr_thread_mutex_unlock(channel->lifecycle_mutex);
+        funasr_registry_remove(channel->engine, entry);
+        funasr_bridge_destroy(channel);
+        return FALSE;
+    }
+    return TRUE;
 }
 
 static void funasr_close_channel_on_task(funasr_channel_t *channel)
