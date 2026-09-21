@@ -15,7 +15,6 @@
 #include <string.h>
 
 #define FUNASR_WS_GUID "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-#define FUNASR_CALL_ID_LIMIT 255U
 #define FUNASR_HANDSHAKE_BUFFER_SIZE 4096U
 #define FUNASR_WORKER_READ_BUFFER_SIZE 4096U
 #define FUNASR_WS_FRAME_OVERHEAD 14U
@@ -24,6 +23,7 @@
 
 typedef struct funasr_default_io_t {
     apr_pool_t *pool;
+    apr_pool_t *connection_pool;
     const char *session_id;
     apr_thread_mutex_t *mutex;
     apr_socket_t *socket;
@@ -66,6 +66,8 @@ struct funasr_transport_t {
     apt_bool_t worker_closed;
     apt_bool_t close_fence_failed;
     apt_bool_t joined;
+    apr_size_t media_inflight;
+    apt_bool_t destroying;
 };
 
 static apr_status_t funasr_transport_pool_cleanup(void *obj)
@@ -893,12 +895,23 @@ static apr_status_t funasr_default_io_open(
     apr_status_t status;
     apr_uint32_t poll_flags;
     apt_bool_t wakeable;
+    apr_pool_t *connection_pool;
 
     io = (funasr_default_io_t *)obj;
     socket = NULL;
     pollset = NULL;
     wakeable = FALSE;
+    connection_pool = NULL;
+    status = apr_pool_create(&connection_pool, io->pool);
+    if (status != APR_SUCCESS) {
+        return status;
+    }
     apr_thread_mutex_lock(io->mutex);
+    if (io->connection_pool || io->socket || io->pollset) {
+        apr_thread_mutex_unlock(io->mutex);
+        apr_pool_destroy(connection_pool);
+        return APR_EBUSY;
+    }
     io->socket = NULL;
     io->pollset = NULL;
     io->registered_events = 0;
@@ -910,8 +923,9 @@ static apr_status_t funasr_default_io_open(
         APR_UNSPEC,
         port,
         0,
-        io->pool);
+        connection_pool);
     if (status != APR_SUCCESS) {
+        apr_pool_destroy(connection_pool);
         return status;
     }
     status = apr_socket_create(
@@ -919,14 +933,16 @@ static apr_status_t funasr_default_io_open(
         address->family,
         SOCK_STREAM,
         APR_PROTO_TCP,
-        io->pool);
+        connection_pool);
     if (status != APR_SUCCESS) {
+        apr_pool_destroy(connection_pool);
         return status;
     }
     apr_socket_timeout_set(socket, timeout);
     status = apr_socket_connect(socket, address);
     if (status != APR_SUCCESS) {
         apr_socket_close(socket);
+        apr_pool_destroy(connection_pool);
         return status;
     }
     apr_socket_timeout_set(socket, 0);
@@ -935,23 +951,25 @@ static apr_status_t funasr_default_io_open(
 #ifdef APR_POLLSET_WAKEABLE
     poll_flags = APR_POLLSET_WAKEABLE;
 #endif
-    status = apr_pollset_create(&pollset, 1, io->pool, poll_flags);
+    status = apr_pollset_create(&pollset, 1, connection_pool, poll_flags);
     if (status == APR_ENOTIMPL && poll_flags != 0) {
-        status = apr_pollset_create(&pollset, 1, io->pool, 0);
+        status = apr_pollset_create(&pollset, 1, connection_pool, 0);
     } else if (status == APR_SUCCESS && poll_flags != 0) {
         wakeable = TRUE;
     }
     if (status != APR_SUCCESS) {
         apr_socket_close(socket);
+        apr_pool_destroy(connection_pool);
         return status;
     }
     memset(&pollfd, 0, sizeof(pollfd));
-    pollfd.p = io->pool;
+    pollfd.p = connection_pool;
     pollfd.desc_type = APR_POLL_SOCKET;
     pollfd.desc.s = socket;
     apr_thread_mutex_lock(io->mutex);
     io->socket = socket;
     io->pollset = pollset;
+    io->connection_pool = connection_pool;
     io->pollfd = pollfd;
     io->registered_events = 0;
     io->wakeable = wakeable;
@@ -1042,6 +1060,8 @@ static apr_status_t funasr_default_io_write(
 static void funasr_default_io_close(void *obj)
 {
     funasr_default_io_t *io = (funasr_default_io_t *)obj;
+    apr_pool_t *connection_pool;
+
     apr_thread_mutex_lock(io->mutex);
     if (io->pollset) {
         apr_pollset_destroy(io->pollset);
@@ -1051,9 +1071,14 @@ static void funasr_default_io_close(void *obj)
         apr_socket_close(io->socket);
         io->socket = NULL;
     }
+    connection_pool = io->connection_pool;
+    io->connection_pool = NULL;
     io->registered_events = 0;
     io->wakeable = FALSE;
     apr_thread_mutex_unlock(io->mutex);
+    if (connection_pool) {
+        apr_pool_destroy(connection_pool);
+    }
 }
 
 static apr_status_t funasr_default_io_wake(void *obj)
@@ -2466,6 +2491,56 @@ funasr_transport_t *funasr_transport_create(
     return transport;
 }
 
+apt_bool_t funasr_transport_destroy(funasr_transport_t **transport_ptr)
+{
+    funasr_transport_t *transport;
+    apr_pool_t *pool;
+
+    if (!transport_ptr || !*transport_ptr) {
+        return TRUE;
+    }
+    transport = *transport_ptr;
+    apr_thread_mutex_lock(transport->mutex);
+    if (!transport->joined || !transport->worker_closed) {
+        apr_thread_mutex_unlock(transport->mutex);
+        return FALSE;
+    }
+    transport->destroying = TRUE;
+    while (transport->media_inflight != 0) {
+        apr_thread_cond_wait(transport->condition, transport->mutex);
+    }
+    pool = transport->pool;
+    transport->pool = NULL;
+    *transport_ptr = NULL;
+    apr_thread_mutex_unlock(transport->mutex);
+    if (pool) {
+        apr_pool_destroy(pool);
+    }
+    return TRUE;
+}
+
+apt_bool_t funasr_transport_cleanup_observer_register(
+    funasr_transport_t *transport,
+    apr_status_t (*cleanup)(void *obj),
+    void *obj)
+{
+    if (!transport || !cleanup) {
+        return FALSE;
+    }
+    apr_thread_mutex_lock(transport->mutex);
+    if (transport->destroying || !transport->pool) {
+        apr_thread_mutex_unlock(transport->mutex);
+        return FALSE;
+    }
+    apr_pool_cleanup_register(
+        transport->pool,
+        obj,
+        cleanup,
+        apr_pool_cleanup_null);
+    apr_thread_mutex_unlock(transport->mutex);
+    return TRUE;
+}
+
 apt_bool_t funasr_transport_begin_generation(
     funasr_transport_t *transport,
     funasr_generation_t generation,
@@ -2550,15 +2625,32 @@ apt_bool_t funasr_transport_media_snapshot(
         return FALSE;
     }
     apr_thread_mutex_lock(transport->mutex);
-    if (!transport->active || transport->cancel_requested) {
+    if (!transport->active || transport->cancel_requested ||
+        transport->destroying) {
         apr_thread_mutex_unlock(transport->mutex);
         return FALSE;
     }
+    transport->media_inflight++;
     snapshot->generation = transport->generation;
     snapshot->input_sample_rate = transport->format.input_sample_rate;
     snapshot->channel_count = transport->format.channel_count;
     apr_thread_mutex_unlock(transport->mutex);
     return TRUE;
+}
+
+void funasr_transport_media_release(funasr_transport_t *transport)
+{
+    if (!transport) {
+        return;
+    }
+    apr_thread_mutex_lock(transport->mutex);
+    if (transport->media_inflight != 0) {
+        transport->media_inflight--;
+        if (transport->destroying && transport->media_inflight == 0) {
+            apr_thread_cond_broadcast(transport->condition);
+        }
+    }
+    apr_thread_mutex_unlock(transport->mutex);
 }
 
 funasr_enqueue_status_e funasr_transport_enqueue_pcm(

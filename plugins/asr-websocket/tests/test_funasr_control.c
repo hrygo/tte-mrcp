@@ -8,6 +8,7 @@
 #endif
 
 typedef struct fake_sink_t {
+    funasr_control_t *control;
     int starts;
     int completions;
     int stop_responses;
@@ -19,6 +20,7 @@ typedef struct fake_sink_t {
     apt_bool_t reject_join;
     apt_bool_t reject_stop;
     apt_bool_t reject_close;
+    apt_bool_t close_saw_final_state;
     apt_bool_t last_text_was_null;
     mrcp_recog_completion_cause_e last_cause;
     char last_text[64];
@@ -82,6 +84,12 @@ static apt_bool_t fake_close_response(void *obj)
 {
     fake_sink_t *sink = obj;
     sink->close_responses++;
+    if (sink->control && sink->control->worker_closed &&
+        sink->control->worker_joined &&
+        !sink->control->close_pending &&
+        sink->control->close_responded) {
+        sink->close_saw_final_state = TRUE;
+    }
     fake_sink_record_call(sink, 'C');
     return sink->reject_close ? FALSE : TRUE;
 }
@@ -306,6 +314,7 @@ static void test_worker_close_settles_pending_stop(void)
 
     memset(&sink, 0, sizeof(sink));
     funasr_control_init(&control);
+    sink.control = &control;
     funasr_control_begin_generation(&control, 9);
     CHECK_TRUE("STOP requests transport cancel",
                funasr_control_request_stop(&control, &fake_vtable, &sink));
@@ -318,6 +327,8 @@ static void test_worker_close_settles_pending_stop(void)
     CHECK_TRUE("worker close responses are ordered after join",
                strcmp(sink.call_order, "JSC") == 0);
     CHECK_TRUE("worker close commits closed state", control.worker_closed);
+    CHECK_TRUE("close callback observes finalized control state",
+               sink.close_saw_final_state);
     CHECK_TRUE("worker close records joined worker", control.worker_joined);
     CHECK_TRUE("worker close settles STOP state", !control.stop_pending);
     CHECK_TRUE("worker close commits terminal state", control.terminal);
@@ -399,17 +410,22 @@ static void test_worker_close_retries_close_without_resending_stop(void)
     CHECK_TRUE("first fence sends STOP once", sink.stop_responses == 1);
     CHECK_TRUE("first fence attempts close once", sink.close_responses == 1);
     CHECK_TRUE("first fence preserves STOP settlement", control.stop_responded);
-    CHECK_TRUE("first fence keeps close uncommitted", !control.worker_closed);
-    CHECK_TRUE("first fence keeps STOP pending", control.stop_pending);
+    CHECK_TRUE("first fence commits worker shutdown before response",
+               control.worker_closed);
+    CHECK_TRUE("first fence leaves close response pending",
+               !control.close_responded);
+    CHECK_TRUE("first fence settles STOP before response", !control.stop_pending);
 
     sink.reject_close = FALSE;
     CHECK_TRUE("same fence retries close",
                funasr_control_handle_event(&control, &event, &fake_vtable, &sink));
-    CHECK_TRUE("retry joins only as needed", sink.joins == 2);
+    CHECK_TRUE("retry does not rejoin released transport", sink.joins == 1);
     CHECK_TRUE("retry does not resend STOP", sink.stop_responses == 1);
     CHECK_TRUE("retry sends close response", sink.close_responses == 2);
-    CHECK_TRUE("retry order skips STOP", strcmp(sink.call_order, "JSCJC") == 0);
+    CHECK_TRUE("retry order skips join and STOP",
+               strcmp(sink.call_order, "JSCC") == 0);
     CHECK_TRUE("retry commits worker close", control.worker_closed);
+    CHECK_TRUE("retry commits close response", control.close_responded);
     CHECK_TRUE("retry settles STOP", !control.stop_pending && control.stop_responded);
     CHECK_TRUE("retry commits terminal", control.terminal);
 }

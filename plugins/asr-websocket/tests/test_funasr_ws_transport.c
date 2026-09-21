@@ -4,6 +4,7 @@
 #include <apr_general.h>
 #include <apr_pools.h>
 #include <apr_thread_mutex.h>
+#include <apr_thread_proc.h>
 #include <apr_time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1036,6 +1037,7 @@ static void test_worker_keeps_media_enqueue_independent_of_partial_rx(
                    transport,
                    &snapshot) == TRUE);
     CHECK_TRUE("snapshot generation", snapshot.generation == 11);
+    funasr_transport_media_release(transport);
 
     for (index = 0; index < 50; ++index) {
         int byte_index;
@@ -2453,6 +2455,181 @@ static void test_worker_close_without_generation_has_fence(apr_pool_t *pool)
     CHECK_TRUE("idle transport never opens socket", io.opened == FALSE);
     CHECK_TRUE("idle close does not invent generation metrics",
                collector.metrics == 0);
+    CHECK_TRUE("idle transport pool is destroyed after join",
+               funasr_transport_destroy(&transport));
+    CHECK_TRUE("destroying an already released transport is safe",
+               funasr_transport_destroy(&transport));
+}
+
+typedef struct transport_destroy_context_t {
+    funasr_transport_t *transport;
+    apr_thread_mutex_t *mutex;
+    apt_bool_t done;
+    apt_bool_t result;
+} transport_destroy_context_t;
+
+static apr_status_t count_transport_pool_cleanup(void *obj);
+
+static void *APR_THREAD_FUNC destroy_transport_on_thread(
+    apr_thread_t *thread,
+    void *obj)
+{
+    transport_destroy_context_t *context = obj;
+    (void)thread;
+
+    context->result = funasr_transport_destroy(&context->transport);
+    apr_thread_mutex_lock(context->mutex);
+    context->done = TRUE;
+    apr_thread_mutex_unlock(context->mutex);
+    return NULL;
+}
+
+static void test_transport_destroy_waits_for_media_pin(apr_pool_t *pool)
+{
+    static const funasr_transport_io_vtable_t fake_vtable = {
+        fake_io_open,
+        fake_io_poll,
+        fake_io_read,
+        fake_io_write,
+        fake_io_close,
+        fake_io_wake
+    };
+    funasr_transport_config_t config;
+    funasr_audio_format_t format;
+    funasr_media_snapshot_t snapshot;
+    funasr_transport_t *transport;
+    fake_io_t io;
+    event_collector_t collector;
+    transport_destroy_context_t context;
+    apr_thread_t *destroy_thread = NULL;
+    apr_status_t thread_status = APR_EGENERAL;
+    apt_bool_t done_before_release;
+    apr_size_t cleanup_count = 0;
+
+    memset(&io, 0, sizeof(io));
+    memset(&collector, 0, sizeof(collector));
+    memset(&context, 0, sizeof(context));
+    CHECK_TRUE("pinned destroy fake I/O mutex",
+               apr_thread_mutex_create(
+                   &io.mutex,
+                   APR_THREAD_MUTEX_DEFAULT,
+                   pool) == APR_SUCCESS);
+    CHECK_TRUE("pinned destroy collector mutex",
+               apr_thread_mutex_create(
+                   &collector.mutex,
+                   APR_THREAD_MUTEX_DEFAULT,
+                   pool) == APR_SUCCESS);
+    CHECK_TRUE("pinned destroy state mutex",
+               apr_thread_mutex_create(
+                   &context.mutex,
+                   APR_THREAD_MUTEX_DEFAULT,
+                   pool) == APR_SUCCESS);
+
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+    config.io_vtable = &fake_vtable;
+    config.io_obj = &io;
+    transport = funasr_transport_create(pool, 49, &config);
+    CHECK_TRUE("pinned transport created", transport != NULL);
+
+    memset(&format, 0, sizeof(format));
+    format.input_sample_rate = 16000;
+    format.output_sample_rate = 16000;
+    format.channel_count = 1;
+    format.sample_width = 2;
+    format.call_id = "pinned-destroy";
+    CHECK_TRUE("pinned generation begins",
+               funasr_transport_begin_generation(transport, 61, &format));
+    CHECK_TRUE("media snapshot pins transport",
+               funasr_transport_media_snapshot(transport, &snapshot));
+    CHECK_TRUE("pinned cleanup observer registered",
+               funasr_transport_cleanup_observer_register(
+                   transport,
+                   count_transport_pool_cleanup,
+                   &cleanup_count));
+    CHECK_TRUE("pinned transport close requested",
+               funasr_transport_request_close(transport));
+    CHECK_TRUE("pinned transport close fence arrives",
+               wait_for_collector(&collector, 2, 1));
+    CHECK_TRUE("pinned transport joins",
+               funasr_transport_join_closed(transport) == APR_SUCCESS);
+
+    context.transport = transport;
+    CHECK_TRUE("destroy waiter starts",
+               apr_thread_create(
+                   &destroy_thread,
+                   NULL,
+                   destroy_transport_on_thread,
+                   &context,
+                   pool) == APR_SUCCESS);
+    apr_sleep(20000);
+    apr_thread_mutex_lock(context.mutex);
+    done_before_release = context.done;
+    apr_thread_mutex_unlock(context.mutex);
+    CHECK_TRUE("destroy waits while media is pinned", !done_before_release);
+
+    funasr_transport_media_release(transport);
+    CHECK_TRUE("destroy waiter joins",
+               apr_thread_join(&thread_status, destroy_thread) == APR_SUCCESS);
+    CHECK_TRUE("destroy waiter exits successfully", thread_status == APR_SUCCESS);
+    CHECK_TRUE("destroy succeeds after media release", context.result);
+    CHECK_TRUE("destroy clears the shared pointer", context.transport == NULL);
+    CHECK_SIZE("pinned transport pool cleanup runs", cleanup_count, 1);
+}
+
+#define FUNASR_TRANSPORT_CLEANUP_STRESS_COUNT 10000U
+
+static apr_status_t count_transport_pool_cleanup(void *obj)
+{
+    apr_size_t *count = obj;
+    (*count)++;
+    return APR_SUCCESS;
+}
+
+static void test_transport_pool_cleanup_is_balanced(apr_pool_t *pool)
+{
+    funasr_transport_config_t config;
+    event_collector_t collector;
+    apr_size_t cleanup_count = 0;
+    apr_size_t index;
+
+    memset(&collector, 0, sizeof(collector));
+    funasr_transport_config_init(&config);
+    config.host = "127.0.0.1";
+    config.port = 8888;
+    config.path = "/ws/audio";
+    config.event_sink = collect_transport_event;
+    config.event_sink_obj = &collector;
+
+    for (index = 0; index < FUNASR_TRANSPORT_CLEANUP_STRESS_COUNT; ++index) {
+        funasr_transport_t *transport = funasr_transport_create(
+            pool,
+            (funasr_transport_id_t)index + 1000U,
+            &config);
+
+        if (!transport) {
+            CHECK_TRUE("stress transport created", FALSE);
+            break;
+        }
+        CHECK_TRUE("stress cleanup observer registered",
+                   funasr_transport_cleanup_observer_register(
+                       transport,
+                       count_transport_pool_cleanup,
+                       &cleanup_count));
+        CHECK_TRUE("unstarted transport joins without a worker",
+                   funasr_transport_join_closed(transport) == APR_SUCCESS);
+        CHECK_TRUE("stress transport pool destroyed",
+                   funasr_transport_destroy(&transport));
+        CHECK_TRUE("stress transport pointer cleared", transport == NULL);
+    }
+    CHECK_SIZE(
+        "every stress transport runs its pool cleanup",
+        cleanup_count,
+        FUNASR_TRANSPORT_CLEANUP_STRESS_COUNT);
 }
 
 int main(void)
@@ -2494,6 +2671,8 @@ int main(void)
     test_stop_interrupts_stalled_handshake(pool);
     test_worker_rejected_close_fence_is_reported(pool);
     test_worker_close_without_generation_has_fence(pool);
+    test_transport_destroy_waits_for_media_pin(pool);
+    test_transport_pool_cleanup_is_balanced(pool);
 
     apr_pool_destroy(pool);
     if (failures != 0) {

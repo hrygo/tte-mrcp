@@ -107,7 +107,19 @@ apt_bool_t funasr_control_handle_event(
 
     if (event->type == FUNASR_EVENT_WORKER_CLOSED) {
         if (control->worker_closed) {
-            return TRUE;
+            apt_bool_t result;
+
+            if (control->close_responded) {
+                return TRUE;
+            }
+            /* Commit the state before the callback.  A successful close
+             * response may release the channel pool on another task. */
+            control->close_responded = TRUE;
+            result = vtable->send_close_response(obj);
+            if (!result) {
+                control->close_responded = FALSE;
+            }
+            return result;
         }
         if (vtable->join_closed(obj) != APR_SUCCESS) {
             return FALSE;
@@ -119,9 +131,6 @@ apt_bool_t funasr_control_handle_event(
             }
             control->stop_responded = TRUE;
         }
-        if (!vtable->send_close_response(obj)) {
-            return FALSE;
-        }
         control->worker_closed = TRUE;
         control->close_pending = FALSE;
         control->active = FALSE;
@@ -129,6 +138,12 @@ apt_bool_t funasr_control_handle_event(
             control->stop_pending = FALSE;
             control->terminal = TRUE;
             control->accepting_media = FALSE;
+        }
+        /* This callback must be the final channel operation on success. */
+        control->close_responded = TRUE;
+        if (!vtable->send_close_response(obj)) {
+            control->close_responded = FALSE;
+            return FALSE;
         }
         return TRUE;
     }
