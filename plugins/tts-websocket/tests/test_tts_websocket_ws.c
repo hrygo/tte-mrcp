@@ -115,6 +115,54 @@ static int test_fragmentation_and_ping(void)
 		connection.sender.payload_len == 1 && connection.sender.payload[0] == 'x';
 }
 
+static int test_close_is_reported(void)
+{
+	static const unsigned char frame[] = {0x88, 0x02, 0x03, 0xE8};
+	test_connection_t connection = {{frame, sizeof(frame), 0, 1}, {0, {0}, 0, 0}};
+	tts_websocket_ws_decoder_t decoder;
+	char message[8];
+	apt_bool_t is_text = TRUE;
+
+	tts_websocket_ws_decoder_init(&decoder, test_read, test_send, &connection, 7);
+	return tts_websocket_ws_decoder_recv_message(
+		&decoder, message, sizeof(message), &is_text) < 0 &&
+		decoder.close_received && connection.sender.calls == 1 &&
+		connection.sender.opcode == 0x08 && connection.sender.payload_len == 2;
+}
+
+static int test_malformed_close_is_rejected(void)
+{
+	static const unsigned char short_frame[] = {0x88, 0x01, 0x03};
+	static const unsigned char reserved_code_frame[] = {0x88, 0x02, 0x03, 0xED};
+	static const unsigned char invalid_utf8_frame[] = {0x88, 0x03, 0x03, 0xE8, 0xFF};
+	test_connection_t short_connection = {{short_frame, sizeof(short_frame), 0, 1}, {0, {0}, 0, 0}};
+	test_connection_t reserved_connection = {{reserved_code_frame, sizeof(reserved_code_frame), 0, 1}, {0, {0}, 0, 0}};
+	test_connection_t invalid_utf8_connection = {{invalid_utf8_frame, sizeof(invalid_utf8_frame), 0, 1}, {0, {0}, 0, 0}};
+	tts_websocket_ws_decoder_t short_decoder;
+	tts_websocket_ws_decoder_t reserved_decoder;
+	tts_websocket_ws_decoder_t invalid_utf8_decoder;
+	char message[8];
+	apt_bool_t is_text = FALSE;
+
+	tts_websocket_ws_decoder_init(&short_decoder, test_read, test_send,
+		&short_connection, 7);
+	tts_websocket_ws_decoder_init(&reserved_decoder, test_read, test_send,
+		&reserved_connection, 7);
+	tts_websocket_ws_decoder_init(&invalid_utf8_decoder, test_read, test_send,
+		&invalid_utf8_connection, 7);
+	if(tts_websocket_ws_decoder_recv_message(&short_decoder, message,
+		sizeof(message), &is_text) >= 0 || short_decoder.close_received) {
+		return 0;
+	}
+	if(tts_websocket_ws_decoder_recv_message(&reserved_decoder, message,
+		sizeof(message), &is_text) >= 0 || reserved_decoder.close_received) {
+		return 0;
+	}
+	return tts_websocket_ws_decoder_recv_message(&invalid_utf8_decoder,
+		message, sizeof(message), &is_text) < 0 &&
+		!invalid_utf8_decoder.close_received;
+}
+
 int main(void)
 {
 	int passed = 0;
@@ -133,6 +181,16 @@ int main(void)
 	} else {
 		fprintf(stderr, "fragmentation/control-frame test failed\n");
 	}
-	printf("%d/3 WebSocket decoder tests passed\n", passed);
-	return passed == 3 ? 0 : 1;
+	if(test_close_is_reported()) {
+		passed++;
+	} else {
+		fprintf(stderr, "peer Close reporting test failed\n");
+	}
+	if(test_malformed_close_is_rejected()) {
+		passed++;
+	} else {
+		fprintf(stderr, "malformed Close validation test failed\n");
+	}
+	printf("%d/5 WebSocket decoder tests passed\n", passed);
+	return passed == 5 ? 0 : 1;
 }

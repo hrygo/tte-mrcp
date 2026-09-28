@@ -3,6 +3,90 @@
 #include <apr_errno.h>
 #include <string.h>
 
+static apt_bool_t tts_websocket_ws_utf8_valid(
+	const unsigned char *data, apr_size_t size)
+{
+	apr_size_t i = 0;
+
+	while(i < size) {
+		unsigned char c = data[i];
+		if(c <= 0x7F) {
+			i++;
+		} else if(c >= 0xC2 && c <= 0xDF) {
+			if(i + 1 >= size || (data[i + 1] & 0xC0) != 0x80) {
+				return FALSE;
+			}
+			i += 2;
+		} else if(c == 0xE0) {
+			if(i + 2 >= size || data[i + 1] < 0xA0 ||
+				data[i + 1] > 0xBF || (data[i + 2] & 0xC0) != 0x80) {
+				return FALSE;
+			}
+			i += 3;
+		} else if((c >= 0xE1 && c <= 0xEC) ||
+			(c >= 0xEE && c <= 0xEF)) {
+			if(i + 2 >= size || (data[i + 1] & 0xC0) != 0x80 ||
+				(data[i + 2] & 0xC0) != 0x80) {
+				return FALSE;
+			}
+			i += 3;
+		} else if(c == 0xED) {
+			if(i + 2 >= size || data[i + 1] < 0x80 ||
+				data[i + 1] > 0x9F || (data[i + 2] & 0xC0) != 0x80) {
+				return FALSE;
+			}
+			i += 3;
+		} else if(c == 0xF0) {
+			if(i + 3 >= size || data[i + 1] < 0x90 ||
+				data[i + 1] > 0xBF || (data[i + 2] & 0xC0) != 0x80 ||
+				(data[i + 3] & 0xC0) != 0x80) {
+				return FALSE;
+			}
+			i += 4;
+		} else if(c >= 0xF1 && c <= 0xF3) {
+			if(i + 3 >= size || (data[i + 1] & 0xC0) != 0x80 ||
+				(data[i + 2] & 0xC0) != 0x80 ||
+				(data[i + 3] & 0xC0) != 0x80) {
+				return FALSE;
+			}
+			i += 4;
+		} else if(c == 0xF4) {
+			if(i + 3 >= size || data[i + 1] < 0x80 ||
+				data[i + 1] > 0x8F || (data[i + 2] & 0xC0) != 0x80 ||
+				(data[i + 3] & 0xC0) != 0x80) {
+				return FALSE;
+			}
+			i += 4;
+		} else {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+static apt_bool_t tts_websocket_ws_close_payload_valid(
+	const unsigned char *payload, apr_size_t payload_len)
+{
+	unsigned int status_code;
+
+	if(payload_len == 0) {
+		return TRUE;
+	}
+	/* RFC 6455: a non-empty Close payload must contain a 2-byte status code. */
+	if(payload_len == 1 || !payload) {
+		return FALSE;
+	}
+	status_code = ((unsigned int)payload[0] << 8) | payload[1];
+	/* Accept normal, registered, and private-use codes only. */
+	if(!(status_code == 1000 ||
+		(status_code >= 1001 && status_code <= 1003) ||
+		(status_code >= 1007 && status_code <= 1014) ||
+		(status_code >= 3000 && status_code <= 4999))) {
+		return FALSE;
+	}
+	return tts_websocket_ws_utf8_valid(payload + 2, payload_len - 2);
+}
+
 static apt_bool_t tts_websocket_ws_read_exact(
 	tts_websocket_ws_decoder_t *decoder, unsigned char *buffer,
 	apr_size_t size)
@@ -36,9 +120,11 @@ static apt_bool_t tts_websocket_ws_read_exact(
 				if(APR_STATUS_IS_EINTR(rv)) {
 					continue;
 				}
+				decoder->last_status = rv;
 				return FALSE;
 			}
 			if(received == 0) {
+				decoder->last_status = APR_EOF;
 				return FALSE;
 			}
 		}
@@ -92,6 +178,9 @@ apr_ssize_t tts_websocket_ws_decoder_recv_message(
 	if(!decoder || !buffer || buffer_size == 0 || !is_text_frame) {
 		return -1;
 	}
+	/* Structural parse failures retain APR_EGENERAL; read failures replace it
+	 * with the socket status so callers can identify an intentional timeout. */
+	decoder->last_status = APR_EGENERAL;
 	if(decoder->max_message_size == 0 ||
 	   decoder->max_message_size > buffer_size) {
 		decoder->max_message_size = buffer_size;
@@ -164,6 +253,11 @@ apr_ssize_t tts_websocket_ws_decoder_recv_message(
 				continue;
 			}
 			if(opcode == 0x08) {
+				if(!tts_websocket_ws_close_payload_valid(
+					control, (apr_size_t)payload_len)) {
+					return -1;
+				}
+				decoder->close_received = TRUE;
 				if(decoder->send_control_fn) {
 					(void)decoder->send_control_fn(decoder->io_context, 0x08,
 						control, (apr_size_t)payload_len);

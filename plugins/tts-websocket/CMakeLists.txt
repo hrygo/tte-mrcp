@@ -7,6 +7,7 @@ set (TTS_WEBSOCKET_SOURCES
 	src/tts_websocket_completion.c
 	src/tts_websocket_json.c
 	src/tts_websocket_pcm.c
+	src/tts_websocket_drain.c
 	src/tts_websocket_lifecycle.c
 	src/tts_websocket_thread.c
 	src/tts_websocket_ws.c
@@ -73,6 +74,13 @@ if(BUILD_TTS_WEBSOCKET_TESTS)
 		src/tts_websocket_pcm.c)
 	set_target_properties(test_tts_websocket_pcm PROPERTIES FOLDER "tests")
 	add_test(NAME tts_websocket_pcm COMMAND test_tts_websocket_pcm)
+	add_executable(test_tts_websocket_drain
+		tests/test_tts_websocket_drain.c
+		src/tts_websocket_drain.c)
+	target_include_directories(test_tts_websocket_drain PRIVATE
+		${PROJECT_SOURCE_DIR}/src)
+	set_target_properties(test_tts_websocket_drain PROPERTIES FOLDER "tests")
+	add_test(NAME tts_websocket_drain COMMAND test_tts_websocket_drain)
 	add_executable(test_tts_websocket_json
 		tests/test_tts_websocket_json.c
 		src/tts_websocket_json.c)
